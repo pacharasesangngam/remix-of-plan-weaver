@@ -5,7 +5,7 @@ import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/component
 import {
     Upload, X, ScanLine, CheckCircle2, AlertCircle, ChevronDown,
     Code, Settings2, Zap, Download, Package, ChevronLeft, ChevronRight,
-    Image as ImageIcon,
+    Image as ImageIcon, Loader2,
 } from "lucide-react";
 import type { Room, FloorPlanData, AppMode, DimensionUnit } from "@/types/floorplan";
 import { MATERIALS, UNITS } from "@/types/floorplan";
@@ -16,6 +16,7 @@ interface SidebarProps {
     imageUrl: string | null;
     rooms: Room[];
     detected: boolean;
+    detecting?: boolean;
     scale: number;
     onImageUpload: (file: File) => void;
     onClear: () => void;
@@ -28,7 +29,7 @@ interface SidebarProps {
 }
 
 const Sidebar = ({
-    mode, unit, imageUrl, rooms, detected, scale,
+    mode, unit, imageUrl, rooms, detected, detecting = false, scale,
     onImageUpload, onClear, onDetect, onRoomUpdate,
     onScaleChange, onUnitChange, onGenerate, floorPlanData,
 }: SidebarProps) => {
@@ -86,10 +87,10 @@ const Sidebar = ({
     const stepDot = (n: number, done: boolean, active: boolean) => (
         <span
             className={`flex items-center justify-center w-5 h-5 rounded-full text-[10px] font-bold font-mono shrink-0 transition-all duration-300 ${done
-                    ? "bg-success/20 text-success border border-success/30"
-                    : active
-                        ? "bg-primary/20 text-primary border border-primary/30"
-                        : "bg-muted/30 text-muted-foreground border border-border"
+                ? "bg-success/20 text-success border border-success/30"
+                : active
+                    ? "bg-primary/20 text-primary border border-primary/30"
+                    : "bg-muted/30 text-muted-foreground border border-border"
                 }`}
         >
             {done ? "✓" : n}
@@ -143,8 +144,8 @@ const Sidebar = ({
                                     onDrop={handleDrop}
                                     onClick={() => inputRef.current?.click()}
                                     className={`flex flex-col items-center justify-center rounded-xl border-2 border-dashed cursor-pointer transition-all duration-200 h-32 group ${isDragging
-                                            ? "border-primary bg-primary/8 scale-[1.02]"
-                                            : "border-border/60 hover:border-primary/50 hover:bg-primary/5"
+                                        ? "border-primary bg-primary/8 scale-[1.02]"
+                                        : "border-border/60 hover:border-primary/50 hover:bg-primary/5"
                                         }`}
                                 >
                                     <div className={`p-2.5 rounded-full mb-2 transition-all duration-200 ${isDragging ? "bg-primary/15" : "bg-muted/40 group-hover:bg-primary/10"
@@ -190,11 +191,15 @@ const Sidebar = ({
                                 {!detected ? (
                                     <Button
                                         onClick={onDetect}
+                                        disabled={detecting}
                                         variant="outline"
-                                        className="w-full justify-center gap-2 h-9 text-xs border-primary/30 hover:bg-primary/10 hover:border-primary/60 hover:text-primary transition-all"
+                                        className="w-full justify-center gap-2 h-9 text-xs border-primary/30 hover:bg-primary/10 hover:border-primary/60 hover:text-primary transition-all disabled:opacity-60"
                                     >
-                                        <ScanLine className="w-3.5 h-3.5" />
-                                        Detect Rooms &amp; Dimensions
+                                        {detecting ? (
+                                            <><Loader2 className="w-3.5 h-3.5 animate-spin" />AI กำลังวิเคราะห์…</>
+                                        ) : (
+                                            <><ScanLine className="w-3.5 h-3.5" />Detect Rooms &amp; Dimensions</>
+                                        )}
                                     </Button>
                                 ) : (
                                     <div className="space-y-3">
@@ -213,8 +218,8 @@ const Sidebar = ({
                                                             key={u.value}
                                                             onClick={() => onUnitChange(u.value)}
                                                             className={`px-2.5 py-1 rounded-md text-[11px] font-mono border transition-all ${unit === u.value
-                                                                    ? "bg-primary text-primary-foreground border-primary"
-                                                                    : "border-border text-muted-foreground hover:text-foreground hover:border-border/80"
+                                                                ? "bg-primary text-primary-foreground border-primary"
+                                                                : "border-border text-muted-foreground hover:text-foreground hover:border-border/80"
                                                                 }`}
                                                         >
                                                             {u.value.toUpperCase()}
