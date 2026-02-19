@@ -1,6 +1,7 @@
 import { useState, useCallback } from "react";
 import LeftPanel from "@/components/LeftPanel";
 import RightPanel from "@/components/RightPanel";
+import SplashScreen from "@/components/SplashScreen";
 import type { Room, FloorPlanData } from "@/types/floorplan";
 
 const MOCK_ROOMS: Room[] = [
@@ -12,6 +13,7 @@ const MOCK_ROOMS: Room[] = [
 ];
 
 const Index = () => {
+  const [showSplash, setShowSplash] = useState(true);
   const [imageUrl, setImageUrl] = useState<string | null>(null);
   const [rooms, setRooms] = useState<Room[]>([]);
   const [detected, setDetected] = useState(false);
@@ -55,7 +57,9 @@ const Index = () => {
   };
 
   return (
-    <div className="h-screen flex flex-col bg-background overflow-hidden">
+    <>
+      {showSplash && <SplashScreen onComplete={() => setShowSplash(false)} />}
+      <div className="h-screen flex flex-col bg-background overflow-hidden">
       {/* Header */}
       <header className="shrink-0 border-b border-border bg-card/50 backdrop-blur-sm">
         <div className="px-6 py-3 flex items-center justify-between">
@@ -90,6 +94,7 @@ const Index = () => {
         <RightPanel rooms={rooms} generated={generated} scale={scale} />
       </div>
     </div>
+    </>
   );
 };
 
