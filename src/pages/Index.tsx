@@ -1,5 +1,6 @@
 import { useState, useCallback } from "react";
-import LeftPanel from "@/components/LeftPanel";
+import { User, HardHat } from "lucide-react";
+import Sidebar from "@/components/Sidebar";
 import RightPanel from "@/components/RightPanel";
 import SplashScreen from "@/components/SplashScreen";
 import type { Room, FloorPlanData, AppMode, DimensionUnit } from "@/types/floorplan";
@@ -76,31 +77,56 @@ const Index = () => {
             </div>
 
             {/* Mode Toggle */}
-            <div className="flex items-center gap-2">
-              <div className="flex items-center rounded-lg border border-border bg-surface p-0.5 gap-0.5">
+            <div className="flex items-center gap-3">
+              <div className="relative flex items-center rounded-xl bg-black/50 border border-white/[0.08] p-1 gap-0.5 shadow-[0_4px_24px_rgba(0,0,0,0.4)] backdrop-blur-xl">
+                {/* Sliding background pill */}
+                <div
+                  className={`absolute top-1 bottom-1 rounded-lg transition-all duration-500 ease-[cubic-bezier(0.34,1.56,0.64,1)] pointer-events-none ${mode === "simple"
+                    ? "left-1 w-[62px] bg-gradient-to-br from-slate-600/80 to-slate-700/60 border border-white/10 shadow-[0_2px_12px_rgba(0,0,0,0.4),inset_0_1px_0_rgba(255,255,255,0.08)]"
+                    : "left-[67px] w-[62px] bg-gradient-to-br from-amber-500/80 to-orange-600/70 border border-amber-400/30 shadow-[0_2px_16px_rgba(245,158,11,0.35),0_0_32px_rgba(245,158,11,0.15),inset_0_1px_0_rgba(255,255,255,0.15)]"
+                    }`}
+                />
+
+                {/* Simple (Person) */}
                 <button
                   onClick={() => setMode("simple")}
-                  className={`px-3 py-1 rounded-md text-xs font-medium transition-all font-sans ${
-                    mode === "simple"
-                      ? "bg-card text-foreground shadow-sm"
-                      : "text-muted-foreground hover:text-foreground"
-                  }`}
+                  className="relative z-10 flex flex-col items-center gap-0.5 w-[62px] py-1.5 rounded-lg select-none transition-all duration-300 group"
                 >
-                  Simple
+                  <User
+                    className={`w-3.5 h-3.5 transition-all duration-300 ${mode === "simple"
+                      ? "text-white drop-shadow-[0_0_8px_rgba(255,255,255,0.4)]"
+                      : "text-white/30 group-hover:text-white/50"
+                      }`}
+                  />
+                  <span
+                    className={`text-[9px] font-semibold tracking-wider uppercase transition-all duration-300 ${mode === "simple" ? "text-white" : "text-white/25 group-hover:text-white/45"
+                      }`}
+                  >
+                    Normal
+                  </span>
                 </button>
+
+                {/* Pro (HardHat) */}
                 <button
                   onClick={() => setMode("pro")}
-                  className={`px-3 py-1 rounded-md text-xs font-medium transition-all font-sans flex items-center gap-1.5 ${
-                    mode === "pro"
-                      ? "bg-primary text-primary-foreground shadow-sm"
-                      : "text-muted-foreground hover:text-foreground"
-                  }`}
+                  className="relative z-10 flex flex-col items-center gap-0.5 w-[62px] py-1.5 rounded-lg select-none transition-all duration-300 group"
                 >
-                  <span className="text-[9px] font-bold tracking-wide">⚙</span>
-                  Pro
+                  <HardHat
+                    className={`w-3.5 h-3.5 transition-all duration-300 ${mode === "pro"
+                      ? "text-white drop-shadow-[0_0_8px_rgba(245,158,11,0.7)]"
+                      : "text-white/30 group-hover:text-white/50"
+                      }`}
+                  />
+                  <span
+                    className={`text-[9px] font-semibold tracking-wider uppercase transition-all duration-300 ${mode === "pro" ? "text-white" : "text-white/25 group-hover:text-white/45"
+                      }`}
+                  >
+                    Pro
+                  </span>
                 </button>
               </div>
-              <span className="text-[10px] text-muted-foreground font-mono">v2.0</span>
+
+              <span className="text-[10px] text-white/20 font-mono tracking-widest">v2.0</span>
             </div>
           </div>
         </header>
@@ -115,7 +141,7 @@ const Index = () => {
 
         {/* Main content */}
         <div className="flex-1 flex min-h-0">
-          <LeftPanel
+          <Sidebar
             mode={mode}
             unit={unit}
             imageUrl={imageUrl}
