@@ -85,6 +85,12 @@ const Index = () => {
     );
   }, []);
 
+  const handleWallUpdate = useCallback((id: string, field: keyof DetectedWallSegment, value: number | string) => {
+    setWalls((prev) =>
+      prev.map((w) => (w.id === id ? { ...w, [field]: value } : w))
+    );
+  }, []);
+
   const handleGenerate = useCallback(() => {
     setGenerated(true);
   }, []);
@@ -269,6 +275,7 @@ const Index = () => {
               doors={doors}
               windows={windows}
               onRoomUpdate={handleRoomUpdate}
+              onWallUpdate={handleWallUpdate}
               onGenerate={handleGenerate}
             />
           ) : imageUrl && !generated ? (
@@ -299,7 +306,7 @@ const Index = () => {
               </p>
             </div>
           ) : (
-            <RightPanel rooms={rooms} generated={generated} scale={scale} onBack={() => setGenerated(false)} />
+            <RightPanel rooms={rooms} generated={generated} scale={scale} walls={walls} doors={doors} windows={windows} onBack={() => setGenerated(false)} />
           )}
         </div>
       </div>

@@ -33,6 +33,10 @@ export interface DetectedWallSegment {
     x2: number;
     y2: number;
     type: "exterior" | "interior";
+    /** Wall thickness in meters (default: exterior=0.25, interior=0.15) */
+    thickness?: number;
+    /** Wall height in meters (default: 2.8) */
+    wallHeight?: number;
 }
 
 export interface DetectionResult {

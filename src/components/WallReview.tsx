@@ -2,7 +2,8 @@ import { useState, useRef, useEffect } from "react";
 import {
     CheckCircle2, AlertCircle, Pencil, Check, X,
     ArrowRight, Zap, ChevronLeft, ChevronRight,
-    DoorOpen, AppWindow, Layers,
+    DoorOpen, AppWindow, Layers, Image, ImageOff,
+    Eye, EyeOff, Ruler,
 } from "lucide-react";
 import type { Room, DimensionUnit } from "@/types/floorplan";
 import type { DetectedWallSegment, DetectedDoor, DetectedWindow } from "@/types/detection";
@@ -18,6 +19,7 @@ interface WallReviewProps {
     doors?: DetectedDoor[];
     windows?: DetectedWindow[];
     onRoomUpdate: (id: string, field: keyof Room, value: number | string) => void;
+    onWallUpdate?: (id: string, field: keyof DetectedWallSegment, value: number | string) => void;
     onGenerate: () => void;
 }
 
@@ -27,7 +29,15 @@ interface EditState {
     value: string;
 }
 
-type OverlayLayer = "rooms" | "walls" | "doors" | "windows";
+interface WallEditState {
+    wallId: string;
+    field: "thickness" | "wallHeight";
+    value: string;
+}
+
+type SelectionType = "room" | "wall";
+
+type OverlayLayer = "rooms" | "walls" | "doors" | "windows" | "image";
 
 // Palette for room overlays
 const ROOM_PALETTE = [
@@ -47,13 +57,16 @@ const CONF_STYLE: Record<Room["confidence"], { stroke: string; label: string; la
 const WallReview = ({
     rooms, unit, imageUrl,
     walls = [], doors = [], windows = [],
-    onRoomUpdate, onGenerate,
+    onRoomUpdate, onWallUpdate, onGenerate,
 }: WallReviewProps) => {
     const [editState, setEditState] = useState<EditState | null>(null);
+    const [wallEditState, setWallEditState] = useState<WallEditState | null>(null);
     const [selectedId, setSelectedId] = useState<string | null>(rooms[0]?.id ?? null);
+    const [selectionType, setSelectionType] = useState<SelectionType>("room");
+    const [selectedWallId, setSelectedWallId] = useState<string | null>(null);
     const [imgSize, setImgSize] = useState({ w: 1, h: 1 });
     const [layers, setLayers] = useState<Set<OverlayLayer>>(
-        new Set(["rooms", "walls", "doors", "windows"])
+        new Set(["rooms", "walls", "doors", "windows", "image"])
     );
     const imgRef = useRef<HTMLImageElement>(null);
 
@@ -103,6 +116,50 @@ const WallReview = ({
 
     const isEditing = (roomId: string, field: EditState["field"]) =>
         editState?.roomId === roomId && editState?.field === field;
+
+    /* ── wall editing helpers ── */
+    const getWallLength = (wall: DetectedWallSegment) => {
+        const dx = (wall.x2 - wall.x1) * 20; // PLAN_SIZE = 20
+        const dz = (wall.y2 - wall.y1) * 20;
+        return Math.sqrt(dx * dx + dz * dz);
+    };
+
+    const getWallThickness = (wall: DetectedWallSegment) =>
+        wall.thickness ?? (wall.type === "exterior" ? 0.25 : 0.15);
+
+    const getWallHeight = (wall: DetectedWallSegment) =>
+        wall.wallHeight ?? 2.8;
+
+    const startWallEdit = (wallId: string, field: WallEditState["field"], val: number) =>
+        setWallEditState({ wallId, field, value: String(val) });
+
+    const commitWallEdit = () => {
+        if (!wallEditState || !onWallUpdate) return;
+        const v = parseFloat(wallEditState.value);
+        if (!isNaN(v) && v > 0) {
+            if (wallEditState.field === "thickness") {
+                onWallUpdate(wallEditState.wallId, "thickness", v / 100); // cm → m
+            } else {
+                onWallUpdate(wallEditState.wallId, "wallHeight", v);
+            }
+        }
+        setWallEditState(null);
+    };
+
+    const isWallEditing = (wallId: string, field: WallEditState["field"]) =>
+        wallEditState?.wallId === wallId && wallEditState?.field === field;
+
+    const selectRoom = (id: string) => {
+        setSelectedId(id);
+        setSelectionType("room");
+        setSelectedWallId(null);
+    };
+
+    const selectWall = (id: string) => {
+        setSelectedWallId(id);
+        setSelectionType("wall");
+        setSelectedId(null);
+    };
 
     /* ── sub-components ── */
     const EditableCell = ({
@@ -179,7 +236,22 @@ const WallReview = ({
 
                 <div className="flex items-center gap-3">
                     {/* Layer toggles */}
-                    <div className="hidden lg:flex items-center gap-1 bg-black/20 rounded-lg p-1 border border-white/[0.06]">
+                    <div className="flex items-center gap-1 bg-black/20 rounded-lg p-1 border border-white/[0.06]">
+                        {/* Image toggle */}
+                        <button
+                            onClick={() => toggleLayer("image")}
+                            className={`flex items-center gap-1.5 px-2 py-1 rounded-md text-[10px] font-medium transition-all duration-150 border ${layers.has("image")
+                                ? "bg-white/10 text-foreground border-white/10"
+                                : "text-muted-foreground/40 hover:text-muted-foreground border-transparent"
+                                }`}
+                            title={layers.has("image") ? "ซ่อนรูปแปลนบ้าน" : "แสดงรูปแปลนบ้าน"}
+                        >
+                            {layers.has("image")
+                                ? <Eye className="w-3 h-3 text-emerald-400" />
+                                : <EyeOff className="w-3 h-3" />}
+                            <span className="hidden sm:inline">Image</span>
+                        </button>
+                        <div className="w-px h-4 bg-white/10 mx-0.5" />
                         {([
                             { id: "rooms", label: "Rooms", color: "#60a5fa" },
                             { id: "walls", label: "Walls", color: "#94a3b8" },
@@ -193,7 +265,7 @@ const WallReview = ({
                                     }`}
                             >
                                 <span className="w-2 h-2 rounded-full shrink-0" style={{ background: layers.has(id) ? color : "#374151" }} />
-                                {label}
+                                <span className="hidden sm:inline">{label}</span>
                             </button>
                         ))}
                     </div>
@@ -221,8 +293,11 @@ const WallReview = ({
                                     ref={imgRef}
                                     src={imageUrl}
                                     alt="Floor plan"
-                                    className="max-w-full max-h-full object-contain rounded-lg shadow-2xl"
-                                    style={{ filter: "brightness(0.75) contrast(1.1)" }}
+                                    className="max-w-full max-h-full object-contain rounded-lg shadow-2xl transition-opacity duration-300"
+                                    style={{
+                                        filter: "brightness(0.75) contrast(1.1)",
+                                        opacity: layers.has("image") ? 1 : 0,
+                                    }}
                                     onLoad={() => {
                                         if (imgRef.current) {
                                             setImgSize({ w: imgRef.current.clientWidth, h: imgRef.current.clientHeight });
@@ -238,17 +313,51 @@ const WallReview = ({
                                     viewBox={`0 0 ${imgSize.w} ${imgSize.h}`}
                                 >
                                     {/* ── WALLS ── */}
-                                    {layers.has("walls") && walls.map((wall) => (
-                                        <line
-                                            key={wall.id}
-                                            x1={bx(wall.x1)} y1={by(wall.y1)}
-                                            x2={bx(wall.x2)} y2={by(wall.y2)}
-                                            stroke={wall.type === "exterior" ? "#e2e8f0" : "#94a3b8"}
-                                            strokeWidth={wall.type === "exterior" ? 2.5 : 1.5}
-                                            strokeLinecap="round"
-                                            opacity={0.7}
-                                        />
-                                    ))}
+                                    {layers.has("walls") && walls.map((wall) => {
+                                        const isWallSelected = selectedWallId === wall.id;
+                                        const wx1 = bx(wall.x1), wy1 = by(wall.y1);
+                                        const wx2 = bx(wall.x2), wy2 = by(wall.y2);
+                                        const wmx = (wx1 + wx2) / 2, wmy = (wy1 + wy2) / 2;
+                                        const wLen = getWallLength(wall);
+                                        const wThick = getWallThickness(wall);
+                                        return (
+                                            <g key={wall.id} style={{ cursor: "pointer" }} onClick={(e) => { e.stopPropagation(); selectWall(wall.id); }}>
+                                                {/* Hit area (wider invisible line for easy clicking) */}
+                                                <line
+                                                    x1={wx1} y1={wy1} x2={wx2} y2={wy2}
+                                                    stroke="transparent"
+                                                    strokeWidth={12}
+                                                    pointerEvents="stroke"
+                                                />
+                                                {/* Visible wall line */}
+                                                <line
+                                                    x1={wx1} y1={wy1} x2={wx2} y2={wy2}
+                                                    stroke={isWallSelected ? "#fbbf24" : (wall.type === "exterior" ? "#e2e8f0" : "#94a3b8")}
+                                                    strokeWidth={isWallSelected ? 3.5 : (wall.type === "exterior" ? 2.5 : 1.5)}
+                                                    strokeLinecap="round"
+                                                    opacity={isWallSelected ? 1 : 0.7}
+                                                />
+                                                {/* Length label on wall */}
+                                                {isWallSelected && (
+                                                    <>
+                                                        <rect
+                                                            x={wmx - 28} y={wmy - 20}
+                                                            width={56} height={16}
+                                                            rx={4}
+                                                            fill="rgba(251,191,36,0.9)"
+                                                        />
+                                                        <text
+                                                            x={wmx} y={wmy - 9}
+                                                            textAnchor="middle" fontSize={9} fontWeight="600"
+                                                            fill="#000" fontFamily="monospace"
+                                                        >
+                                                            {wLen.toFixed(1)}m · {(wThick * 100).toFixed(0)}cm
+                                                        </text>
+                                                    </>
+                                                )}
+                                            </g>
+                                        );
+                                    })}
 
                                     {/* ── ROOMS ── */}
                                     {layers.has("rooms") && rooms.map((room, idx) => {
@@ -378,12 +487,12 @@ const WallReview = ({
                         {rooms.map((room, idx) => {
                             const cs = CONF_STYLE[room.confidence];
                             const pal = ROOM_PALETTE[idx % ROOM_PALETTE.length];
-                            const isSelected = selectedId === room.id;
+                            const isSelected = selectedId === room.id && selectionType === "room";
                             const Icon = room.confidence === "high" ? CheckCircle2 : AlertCircle;
                             return (
                                 <button
                                     key={room.id}
-                                    onClick={() => setSelectedId(room.id)}
+                                    onClick={() => selectRoom(room.id)}
                                     className={`w-full text-left rounded-lg px-3 py-2.5 border transition-all duration-200 ${isSelected ? "border-white/20 shadow-sm" : "border-border/50 hover:border-border hover:bg-white/4"
                                         }`}
                                     style={isSelected ? { borderColor: `${pal.stroke}60`, background: pal.fill } : {}}
@@ -401,6 +510,50 @@ const WallReview = ({
                                 </button>
                             );
                         })}
+
+                        {/* Walls list */}
+                        {walls.length > 0 && (
+                            <div className="pt-3">
+                                <p className="text-[10px] uppercase tracking-widest text-muted-foreground px-1 mb-2 flex items-center gap-1.5">
+                                    <Ruler className="w-3 h-3" /> Walls ({walls.length})
+                                </p>
+                                {walls.map((wall, idx) => {
+                                    const isWallSel = selectedWallId === wall.id && selectionType === "wall";
+                                    const wLen = getWallLength(wall);
+                                    const wThick = getWallThickness(wall);
+                                    const wH = getWallHeight(wall);
+                                    const isExt = wall.type === "exterior";
+                                    return (
+                                        <button
+                                            key={wall.id}
+                                            onClick={() => selectWall(wall.id)}
+                                            className={`w-full text-left rounded-lg px-3 py-2 border transition-all duration-200 mb-1 ${isWallSel
+                                                    ? "border-amber-500/40 bg-amber-500/10 shadow-sm"
+                                                    : "border-border/50 hover:border-border hover:bg-white/4"
+                                                }`}
+                                        >
+                                            <div className="flex items-center justify-between">
+                                                <div className="flex items-center gap-2">
+                                                    <span className={`w-2 h-0.5 rounded shrink-0 ${isExt ? "bg-slate-300" : "bg-slate-500"}`} />
+                                                    <span className="text-[11px] font-medium text-foreground">
+                                                        Wall {idx + 1}
+                                                    </span>
+                                                    <span className={`text-[9px] px-1.5 py-0.5 rounded font-mono ${isExt ? "bg-slate-500/20 text-slate-300" : "bg-slate-600/20 text-slate-400"
+                                                        }`}>
+                                                        {isExt ? "EXT" : "INT"}
+                                                    </span>
+                                                </div>
+                                            </div>
+                                            <div className="mt-1 text-[10px] font-mono text-muted-foreground flex gap-3">
+                                                <span>L: {wLen.toFixed(1)}m</span>
+                                                <span>T: {(wThick * 100).toFixed(0)}cm</span>
+                                                <span>H: {wH.toFixed(1)}m</span>
+                                            </div>
+                                        </button>
+                                    );
+                                })}
+                            </div>
+                        )}
 
                         {/* Doors summary */}
                         {doors.length > 0 && (
@@ -435,7 +588,7 @@ const WallReview = ({
                     <div className="shrink-0 border-t border-border" />
 
                     {/* Selected room editor */}
-                    {selectedRoom && (
+                    {selectionType === "room" && selectedRoom && (
                         <div className="shrink-0 p-4 space-y-3">
                             <div className="flex items-center justify-between">
                                 <span className="text-xs font-semibold" style={{ color: palette.stroke }}>
@@ -468,13 +621,145 @@ const WallReview = ({
                             </div>
                         </div>
                     )}
+
+                    {/* Selected wall editor */}
+                    {selectionType === "wall" && selectedWallId && (() => {
+                        const sw = walls.find((w) => w.id === selectedWallId);
+                        if (!sw) return null;
+                        const swIdx = walls.findIndex((w) => w.id === selectedWallId);
+                        const swLen = getWallLength(sw);
+                        const swThick = getWallThickness(sw);
+                        const swH = getWallHeight(sw);
+
+                        return (
+                            <div className="shrink-0 p-4 space-y-3">
+                                <div className="flex items-center justify-between">
+                                    <div className="flex items-center gap-2">
+                                        <Ruler className="w-3.5 h-3.5 text-amber-400" />
+                                        <span className="text-xs font-semibold text-amber-300">
+                                            Wall {swIdx + 1}
+                                        </span>
+                                        <button
+                                            onClick={() => {
+                                                if (onWallUpdate) {
+                                                    onWallUpdate(sw.id, "type", sw.type === "exterior" ? "interior" : "exterior");
+                                                }
+                                            }}
+                                            className={`text-[9px] px-1.5 py-0.5 rounded font-mono cursor-pointer transition-colors ${sw.type === "exterior"
+                                                    ? "bg-slate-500/20 text-slate-300 hover:bg-slate-500/30"
+                                                    : "bg-slate-600/20 text-slate-400 hover:bg-slate-600/30"
+                                                }`}
+                                            title="คลิกเพื่อสลับ EXT/INT"
+                                        >
+                                            {sw.type === "exterior" ? "EXT" : "INT"}
+                                        </button>
+                                    </div>
+                                    <div className="flex items-center gap-1">
+                                        <button
+                                            onClick={() => {
+                                                const prev = swIdx - 1;
+                                                if (prev >= 0) selectWall(walls[prev].id);
+                                            }}
+                                            disabled={swIdx === 0}
+                                            className="p-1 rounded hover:bg-white/8 text-muted-foreground disabled:opacity-30 transition-colors"
+                                        >
+                                            <ChevronLeft className="w-3.5 h-3.5" />
+                                        </button>
+                                        <span className="text-[10px] text-muted-foreground font-mono">
+                                            {swIdx + 1}/{walls.length}
+                                        </span>
+                                        <button
+                                            onClick={() => {
+                                                const next = swIdx + 1;
+                                                if (next < walls.length) selectWall(walls[next].id);
+                                            }}
+                                            disabled={swIdx === walls.length - 1}
+                                            className="p-1 rounded hover:bg-white/8 text-muted-foreground disabled:opacity-30 transition-colors"
+                                        >
+                                            <ChevronRight className="w-3.5 h-3.5" />
+                                        </button>
+                                    </div>
+                                </div>
+
+                                {/* Read-only length */}
+                                <div className="text-[10px] text-muted-foreground font-mono flex justify-between">
+                                    <span>Length</span>
+                                    <span className="text-foreground font-medium">{swLen.toFixed(2)} m</span>
+                                </div>
+
+                                {/* Editable thickness */}
+                                <div>
+                                    <div className="text-[9px] text-muted-foreground uppercase tracking-wider mb-1">Thickness (cm)</div>
+                                    {isWallEditing(sw.id, "thickness") ? (
+                                        <div className="flex items-center gap-0.5">
+                                            <Input
+                                                type="number"
+                                                autoFocus
+                                                value={wallEditState!.value}
+                                                onChange={(e) => setWallEditState((s) => s ? { ...s, value: e.target.value } : s)}
+                                                onKeyDown={(e) => { if (e.key === "Enter") commitWallEdit(); if (e.key === "Escape") setWallEditState(null); }}
+                                                className="h-7 text-xs font-mono px-2 border-amber-500/60"
+                                            />
+                                            <button onClick={commitWallEdit} className="p-1 rounded hover:bg-emerald-500/20 text-emerald-400 shrink-0">
+                                                <Check className="w-3 h-3" />
+                                            </button>
+                                            <button onClick={() => setWallEditState(null)} className="p-1 rounded hover:bg-red-500/20 text-red-400 shrink-0">
+                                                <X className="w-3 h-3" />
+                                            </button>
+                                        </div>
+                                    ) : (
+                                        <button
+                                            onClick={() => startWallEdit(sw.id, "thickness", +(swThick * 100).toFixed(0))}
+                                            className="group flex items-center gap-1 w-full text-left px-1 py-0.5 -mx-1 rounded hover:bg-white/5 transition-colors"
+                                        >
+                                            <span className="text-sm font-mono font-semibold text-foreground">{(swThick * 100).toFixed(0)}</span>
+                                            <span className="text-[10px] text-muted-foreground">cm</span>
+                                            <Pencil className="w-2.5 h-2.5 text-muted-foreground/0 group-hover:text-muted-foreground/50 ml-auto shrink-0 transition-colors" />
+                                        </button>
+                                    )}
+                                </div>
+
+                                {/* Editable wall height */}
+                                <div>
+                                    <div className="text-[9px] text-muted-foreground uppercase tracking-wider mb-1">Height (m)</div>
+                                    {isWallEditing(sw.id, "wallHeight") ? (
+                                        <div className="flex items-center gap-0.5">
+                                            <Input
+                                                type="number"
+                                                autoFocus
+                                                value={wallEditState!.value}
+                                                onChange={(e) => setWallEditState((s) => s ? { ...s, value: e.target.value } : s)}
+                                                onKeyDown={(e) => { if (e.key === "Enter") commitWallEdit(); if (e.key === "Escape") setWallEditState(null); }}
+                                                className="h-7 text-xs font-mono px-2 border-amber-500/60"
+                                            />
+                                            <button onClick={commitWallEdit} className="p-1 rounded hover:bg-emerald-500/20 text-emerald-400 shrink-0">
+                                                <Check className="w-3 h-3" />
+                                            </button>
+                                            <button onClick={() => setWallEditState(null)} className="p-1 rounded hover:bg-red-500/20 text-red-400 shrink-0">
+                                                <X className="w-3 h-3" />
+                                            </button>
+                                        </div>
+                                    ) : (
+                                        <button
+                                            onClick={() => startWallEdit(sw.id, "wallHeight", +swH.toFixed(2))}
+                                            className="group flex items-center gap-1 w-full text-left px-1 py-0.5 -mx-1 rounded hover:bg-white/5 transition-colors"
+                                        >
+                                            <span className="text-sm font-mono font-semibold text-foreground">{swH.toFixed(2)}</span>
+                                            <span className="text-[10px] text-muted-foreground">m</span>
+                                            <Pencil className="w-2.5 h-2.5 text-muted-foreground/0 group-hover:text-muted-foreground/50 ml-auto shrink-0 transition-colors" />
+                                        </button>
+                                    )}
+                                </div>
+                            </div>
+                        );
+                    })()}
                 </div>
             </div>
 
             {/* Bottom hint */}
             <div className="shrink-0 px-5 py-1.5 border-t border-border bg-card/20 flex items-center gap-1.5 text-[10px] text-muted-foreground/50">
                 <Pencil className="w-3 h-3" />
-                คลิกที่ห้องใน list เพื่อ highlight · คลิกตัวเลขเพื่อแก้ · Enter บันทึก · Esc ยกเลิก
+                คลิกห้อง/กำแพงเพื่อเลือก · คลิกตัวเลขเพื่อแก้ไข · Enter บันทึก · Esc ยกเลิก
             </div>
         </div>
     );

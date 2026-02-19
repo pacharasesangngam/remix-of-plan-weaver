@@ -4,11 +4,15 @@ import { OrbitControls, Grid, Text } from "@react-three/drei";
 import * as THREE from "three";
 import { Box, ChevronLeft, Info } from "lucide-react";
 import type { Room } from "@/types/floorplan";
+import type { DetectedWallSegment, DetectedDoor, DetectedWindow } from "@/types/detection";
 
 interface RightPanelProps {
   rooms: Room[];
   generated: boolean;
   scale: number;
+  walls?: DetectedWallSegment[];
+  doors?: DetectedDoor[];
+  windows?: DetectedWindow[];
   onBack?: () => void;
 }
 
@@ -27,6 +31,9 @@ const ROOM_PALETTE = [
   { wall: "#3d2a15", floor: "#201508" },
   { wall: "#1a3550", floor: "#0d1e30" },
 ];
+
+// Plan size constant — maps normalised 0-1 bbox to world units
+const PLAN_SIZE = 20;
 
 // ── Animated room mesh ────────────────────────────────────────────────────────
 function RoomMesh({
@@ -151,6 +158,235 @@ function RoomMesh({
   );
 }
 
+// ── Detected Wall Segment as 3D box ──────────────────────────────────────────
+function WallSegmentMesh({
+  wall,
+  wallHeight: defaultWallHeight,
+}: {
+  wall: DetectedWallSegment;
+  wallHeight: number;
+}) {
+  // Convert normalised coords to world coords
+  const x1 = wall.x1 * PLAN_SIZE - PLAN_SIZE / 2;
+  const z1 = wall.y1 * PLAN_SIZE - PLAN_SIZE / 2;
+  const x2 = wall.x2 * PLAN_SIZE - PLAN_SIZE / 2;
+  const z2 = wall.y2 * PLAN_SIZE - PLAN_SIZE / 2;
+
+  const dx = x2 - x1;
+  const dz = z2 - z1;
+  const length = Math.sqrt(dx * dx + dz * dz);
+  const angle = Math.atan2(dz, dx);
+
+  // Use wall's own values, fallback to defaults
+  const wallHeight = wall.wallHeight ?? defaultWallHeight;
+  const thickness = wall.thickness ?? (wall.type === "exterior" ? 0.25 : 0.15);
+  const color = wall.type === "exterior" ? "#4a5568" : "#6b7280";
+  const emissive = wall.type === "exterior" ? "#1a2332" : "#1f2937";
+
+  const cx = (x1 + x2) / 2;
+  const cz = (z1 + z2) / 2;
+
+  const typeLabel = wall.type === "exterior" ? "EXT" : "INT";
+  const typeColor = wall.type === "exterior" ? "#e2e8f0" : "#94a3b8";
+
+  return (
+    <group position={[cx, 0, cz]} rotation={[0, -angle, 0]}>
+      {/* Wall body */}
+      <mesh
+        position={[0, wallHeight / 2, 0]}
+        castShadow
+        receiveShadow
+      >
+        <boxGeometry args={[length, wallHeight, thickness]} />
+        <meshStandardMaterial
+          color={color}
+          emissive={emissive}
+          emissiveIntensity={0.3}
+          roughness={0.7}
+          metalness={0.05}
+        />
+      </mesh>
+
+      {/* Length label — on top of wall */}
+      <Text
+        position={[0, wallHeight + 0.2, 0]}
+        fontSize={0.16}
+        color={typeColor}
+        anchorX="center"
+        anchorY="middle"
+      >
+        {`${length.toFixed(1)}m`}
+      </Text>
+
+      {/* Height label — side of wall */}
+      <Text
+        position={[length / 2 + 0.15, wallHeight / 2, thickness / 2 + 0.05]}
+        fontSize={0.12}
+        color="#94a3b8"
+        anchorX="left"
+        anchorY="middle"
+        rotation={[0, 0, Math.PI / 2]}
+      >
+        {`H ${wallHeight.toFixed(1)}m`}
+      </Text>
+
+      {/* Type + thickness label — below length */}
+      <Text
+        position={[0, wallHeight + 0.4, 0]}
+        fontSize={0.11}
+        color={wall.type === "exterior" ? "#cbd5e1" : "#9ca3af"}
+        anchorX="center"
+        anchorY="middle"
+      >
+        {`${typeLabel} · ${(thickness * 100).toFixed(0)}cm`}
+      </Text>
+    </group>
+  );
+}
+
+// ── Detected Door as 3D opening ──────────────────────────────────────────────
+function DoorMesh({
+  door,
+  wallHeight,
+}: {
+  door: DetectedDoor;
+  wallHeight: number;
+}) {
+  // Door position from bbox (normalised)
+  const cx = (door.bbox.x + door.bbox.w / 2) * PLAN_SIZE - PLAN_SIZE / 2;
+  const cz = (door.bbox.y + door.bbox.h / 2) * PLAN_SIZE - PLAN_SIZE / 2;
+  const doorW = Math.max(door.widthM, 0.8);
+  const doorH = Math.min(wallHeight * 0.85, 2.1);
+  const doorD = 0.12;
+
+  // Determine door orientation from bbox aspect ratio
+  const bboxW = door.bbox.w * PLAN_SIZE;
+  const bboxH = door.bbox.h * PLAN_SIZE;
+  const isHorizontal = bboxW > bboxH;
+  const rotY = isHorizontal ? 0 : Math.PI / 2;
+
+  return (
+    <group position={[cx, 0, cz]} rotation={[0, rotY, 0]}>
+      {/* Door frame — left */}
+      <mesh position={[-doorW / 2 - 0.04, doorH / 2, 0]} castShadow>
+        <boxGeometry args={[0.08, doorH, doorD + 0.06]} />
+        <meshStandardMaterial color="#92400e" roughness={0.5} metalness={0.1} />
+      </mesh>
+      {/* Door frame — right */}
+      <mesh position={[doorW / 2 + 0.04, doorH / 2, 0]} castShadow>
+        <boxGeometry args={[0.08, doorH, doorD + 0.06]} />
+        <meshStandardMaterial color="#92400e" roughness={0.5} metalness={0.1} />
+      </mesh>
+      {/* Door frame — top */}
+      <mesh position={[0, doorH + 0.04, 0]} castShadow>
+        <boxGeometry args={[doorW + 0.16, 0.08, doorD + 0.06]} />
+        <meshStandardMaterial color="#92400e" roughness={0.5} metalness={0.1} />
+      </mesh>
+      {/* Door panel (slightly open) */}
+      <mesh position={[doorW / 4, doorH / 2, doorD / 2 + 0.02]} castShadow>
+        <boxGeometry args={[doorW * 0.48, doorH - 0.05, 0.05]} />
+        <meshStandardMaterial
+          color="#b45309"
+          emissive="#451a03"
+          emissiveIntensity={0.2}
+          roughness={0.4}
+          metalness={0.08}
+          transparent
+          opacity={0.9}
+        />
+      </mesh>
+      {/* Door label */}
+      <Text
+        position={[0, doorH + 0.3, 0]}
+        fontSize={0.15}
+        color="#f59e0b"
+        anchorX="center"
+        anchorY="middle"
+      >
+        {`D ${doorW.toFixed(1)}m`}
+      </Text>
+    </group>
+  );
+}
+
+// ── Detected Window as 3D glass pane ─────────────────────────────────────────
+function WindowMesh({
+  win,
+  wallHeight,
+}: {
+  win: DetectedWindow;
+  wallHeight: number;
+}) {
+  const cx = (win.bbox.x + win.bbox.w / 2) * PLAN_SIZE - PLAN_SIZE / 2;
+  const cz = (win.bbox.y + win.bbox.h / 2) * PLAN_SIZE - PLAN_SIZE / 2;
+  const winW = Math.max(win.widthM, 0.6);
+  const winH = Math.min(wallHeight * 0.45, 1.2);
+  const winD = 0.08;
+  const sillY = wallHeight * 0.35; // window sill height
+
+  // Determine orientation
+  const bboxW = win.bbox.w * PLAN_SIZE;
+  const bboxH = win.bbox.h * PLAN_SIZE;
+  const isHorizontal = bboxW > bboxH;
+  const rotY = isHorizontal ? 0 : Math.PI / 2;
+
+  return (
+    <group position={[cx, sillY, cz]} rotation={[0, rotY, 0]}>
+      {/* Window frame */}
+      <mesh castShadow>
+        <boxGeometry args={[winW + 0.1, winH + 0.1, winD + 0.04]} />
+        <meshStandardMaterial color="#64748b" roughness={0.4} metalness={0.3} />
+      </mesh>
+      {/* Glass pane — left */}
+      <mesh position={[-winW / 4, 0, 0]}>
+        <boxGeometry args={[winW / 2 - 0.04, winH - 0.06, winD - 0.02]} />
+        <meshStandardMaterial
+          color="#67e8f9"
+          emissive="#06b6d4"
+          emissiveIntensity={0.15}
+          roughness={0.1}
+          metalness={0.5}
+          transparent
+          opacity={0.35}
+        />
+      </mesh>
+      {/* Glass pane — right */}
+      <mesh position={[winW / 4, 0, 0]}>
+        <boxGeometry args={[winW / 2 - 0.04, winH - 0.06, winD - 0.02]} />
+        <meshStandardMaterial
+          color="#67e8f9"
+          emissive="#06b6d4"
+          emissiveIntensity={0.15}
+          roughness={0.1}
+          metalness={0.5}
+          transparent
+          opacity={0.35}
+        />
+      </mesh>
+      {/* Cross bar (vertical divider) */}
+      <mesh position={[0, 0, 0]}>
+        <boxGeometry args={[0.04, winH - 0.06, winD]} />
+        <meshStandardMaterial color="#94a3b8" roughness={0.4} metalness={0.3} />
+      </mesh>
+      {/* Cross bar (horizontal divider) */}
+      <mesh position={[0, 0, 0]}>
+        <boxGeometry args={[winW - 0.06, 0.04, winD]} />
+        <meshStandardMaterial color="#94a3b8" roughness={0.4} metalness={0.3} />
+      </mesh>
+      {/* Window label */}
+      <Text
+        position={[0, winH / 2 + 0.25, 0]}
+        fontSize={0.13}
+        color="#06b6d4"
+        anchorX="center"
+        anchorY="middle"
+      >
+        {`W ${winW.toFixed(1)}m`}
+      </Text>
+    </group>
+  );
+}
+
 // ── Compute positions from bbox if available, else auto-layout ────────────────
 function computePositions(
   rooms: Room[],
@@ -161,8 +397,6 @@ function computePositions(
 
   if (hasBbox) {
     // Use bbox x/y → 3D x/z, scaled to meters
-    // bbox is 0-1, we map onto a ~20m × 20m plan area
-    const PLAN_SIZE = 20;
     return rooms.map((r) => {
       const bbox = (r as Room & { bbox: { x: number; y: number; w: number; h: number } }).bbox;
       const cx = (bbox.x + bbox.w / 2) * PLAN_SIZE - PLAN_SIZE / 2;
@@ -176,11 +410,6 @@ function computePositions(
   return rooms.map((room, i) => {
     const col = i % cols;
     const row = Math.floor(i / cols);
-    const xOffset = rooms
-      .slice(0, col)
-      .filter((_, j) => j % cols === col || true)
-      .reduce((acc, _, j2) => acc + (j2 % cols === col ? rooms[j2].width * scale + 0.8 : 0), 0);
-    // Simpler grid
     let x = 0, z = 0;
     let ox = 0;
     for (let j = 0; j < rooms.length; j++) {
@@ -215,13 +444,19 @@ function RoomInfoCard({ room }: { room: Room }) {
 }
 
 // ── Scene ─────────────────────────────────────────────────────────────────────
-function Scene({ rooms, scale, onHoverChange }: {
+function Scene({ rooms, scale, walls, doors, windows, onHoverChange }: {
   rooms: Room[];
   scale: number;
+  walls: DetectedWallSegment[];
+  doors: DetectedDoor[];
+  windows: DetectedWindow[];
   onHoverChange: (id: string | null) => void;
 }) {
   const [hoveredId, setHoveredId] = useState<string | null>(null);
   const positions = computePositions(rooms, scale);
+
+  // Default wall height — max from rooms or 2.8
+  const defaultWallHeight = Math.max(...rooms.map((r) => r.wallHeight ?? 2.8), 2.8);
 
   const handleHover = (id: string | null) => {
     setHoveredId(id);
@@ -249,6 +484,7 @@ function Scene({ rooms, scale, onHoverChange }: {
         fadeDistance={40}
       />
 
+      {/* Room meshes */}
       {rooms.map((room, i) => (
         <RoomMesh
           key={room.id}
@@ -257,6 +493,33 @@ function Scene({ rooms, scale, onHoverChange }: {
           index={i}
           hovered={hoveredId === room.id}
           onHover={handleHover}
+        />
+      ))}
+
+      {/* Detected wall segments */}
+      {walls.map((wall) => (
+        <WallSegmentMesh
+          key={wall.id}
+          wall={wall}
+          wallHeight={defaultWallHeight}
+        />
+      ))}
+
+      {/* Detected doors */}
+      {doors.map((door) => (
+        <DoorMesh
+          key={door.id}
+          door={door}
+          wallHeight={defaultWallHeight}
+        />
+      ))}
+
+      {/* Detected windows */}
+      {windows.map((win) => (
+        <WindowMesh
+          key={win.id}
+          win={win}
+          wallHeight={defaultWallHeight}
         />
       ))}
 
@@ -274,7 +537,7 @@ function Scene({ rooms, scale, onHoverChange }: {
 }
 
 // ── Main component ────────────────────────────────────────────────────────────
-const RightPanel = ({ rooms, generated, scale, onBack }: RightPanelProps) => {
+const RightPanel = ({ rooms, generated, scale, walls = [], doors = [], windows = [], onBack }: RightPanelProps) => {
   const [hoveredId, setHoveredId] = useState<string | null>(null);
   const hoveredRoom = rooms.find((r) => r.id === hoveredId) ?? null;
 
@@ -304,7 +567,14 @@ const RightPanel = ({ rooms, generated, scale, onBack }: RightPanelProps) => {
             style={{ width: "100%", height: "100%" }}
             shadows
           >
-            <Scene rooms={rooms} scale={scale} onHoverChange={setHoveredId} />
+            <Scene
+              rooms={rooms}
+              scale={scale}
+              walls={walls}
+              doors={doors}
+              windows={windows}
+              onHoverChange={setHoveredId}
+            />
           </Canvas>
 
           {/* Floating back button */}
@@ -328,6 +598,15 @@ const RightPanel = ({ rooms, generated, scale, onBack }: RightPanelProps) => {
             <Info className="w-3.5 h-3.5 text-muted-foreground shrink-0" />
             <div className="flex items-center gap-3 text-[10px] font-mono divide-x divide-white/10">
               <span className="text-muted-foreground">{rooms.length} rooms</span>
+              {walls.length > 0 && (
+                <span className="pl-3 text-slate-400">{walls.length} walls</span>
+              )}
+              {doors.length > 0 && (
+                <span className="pl-3 text-amber-400">{doors.length} doors</span>
+              )}
+              {windows.length > 0 && (
+                <span className="pl-3 text-cyan-400">{windows.length} windows</span>
+              )}
               <span className="pl-3 text-muted-foreground">
                 {rooms.reduce((s, r) => s + r.width * r.height, 0).toFixed(1)} m²
               </span>
