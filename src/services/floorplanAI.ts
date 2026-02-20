@@ -192,5 +192,11 @@ export async function detectFloorPlan(
         return { ...MOCK_RESULT, usedMock: true };
     }
 
+    // 403 forbidden (leaked/invalid key) → use mock data + flag it
+    if (lastStatus === 403) {
+        console.warn("[floorplanAI] API key invalid or blocked (403) — using mock data");
+        return { ...MOCK_RESULT, usedMock: true };
+    }
+
     throw new Error(`API_ERROR_${lastStatus}`);
 }
