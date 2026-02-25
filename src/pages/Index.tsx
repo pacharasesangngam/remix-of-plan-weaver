@@ -1,35 +1,31 @@
 import { useState, useCallback } from "react";
-import { ChevronLeft, Key, Loader2, X } from "lucide-react";
+import { ChevronLeft, User, HardHat, Key, Loader2, X } from "lucide-react";
 import Sidebar from "@/components/Sidebar";
 import RightPanel from "@/components/RightPanel";
 import WallReview from "@/components/WallReview";
 import SplashScreen from "@/components/SplashScreen";
 import { detectFloorPlan } from "@/services/floorplanAI";
 import type { DetectedWallSegment, DetectedDoor, DetectedWindow } from "@/types/detection";
-import type { Room, FloorPlanData, DimensionUnit } from "@/types/floorplan";
+import type { Room, FloorPlanData, AppMode, DimensionUnit } from "@/types/floorplan";
 
 const HAS_API_KEY = !!(import.meta.env.VITE_GEMINI_API_KEY as string);
 
 const Index = () => {
   const [showSplash, setShowSplash] = useState(true);
+  const [mode, setMode] = useState<AppMode>("simple");
   const [imageUrl, setImageUrl] = useState<string | null>(null);
   const [imageFile, setImageFile] = useState<File | null>(null);
-
   const [rooms, setRooms] = useState<Room[]>([]);
   const [walls, setWalls] = useState<DetectedWallSegment[]>([]);
   const [doors, setDoors] = useState<DetectedDoor[]>([]);
   const [windows, setWindows] = useState<DetectedWindow[]>([]);
-
   const [detected, setDetected] = useState(false);
   const [detecting, setDetecting] = useState(false);
   const [detectError, setDetectError] = useState<string | null>(null);
   const [usedMock, setUsedMock] = useState(false);
-
   const [generated, setGenerated] = useState(false);
   const [scale, setScale] = useState(1.0);
   const [unit, setUnit] = useState<DimensionUnit>("m");
-
-  // ─────────────────────────────────────────────────────────────
 
   const handleImageUpload = useCallback((file: File) => {
     const url = URL.createObjectURL(file);
@@ -59,11 +55,9 @@ const Index = () => {
 
   const handleDetect = useCallback(async () => {
     if (!imageUrl && !imageFile) return;
-
     setDetecting(true);
     setDetectError(null);
     setUsedMock(false);
-
     try {
       const result = await detectFloorPlan(imageFile ?? imageUrl!);
       setRooms(result.rooms);
@@ -85,30 +79,17 @@ const Index = () => {
     }
   }, [imageUrl, imageFile]);
 
-  const handleRoomUpdate = useCallback(
-    (id: string, field: keyof Room, value: number | string) => {
-      setRooms((prev) =>
-        prev.map((r) =>
-          r.id === id
-            ? {
-                ...r,
-                [field]: value,
-                confidence:
-                  field === "width" || field === "height" ? "manual" : r.confidence,
-              }
-            : r
-        )
-      );
-    },
-    []
-  );
+  const handleRoomUpdate = useCallback((id: string, field: keyof Room, value: number | string) => {
+    setRooms((prev) =>
+      prev.map((r) => (r.id === id ? { ...r, [field]: value, confidence: field === "width" || field === "height" ? ("manual" as const) : r.confidence } : r))
+    );
+  }, []);
 
-  const handleWallUpdate = useCallback(
-    (id: string, field: keyof DetectedWallSegment, value: number | string) => {
-      setWalls((prev) => prev.map((w) => (w.id === id ? { ...w, [field]: value } : w)));
-    },
-    []
-  );
+  const handleWallUpdate = useCallback((id: string, field: keyof DetectedWallSegment, value: number | string) => {
+    setWalls((prev) =>
+      prev.map((w) => (w.id === id ? { ...w, [field]: value } : w))
+    );
+  }, []);
 
   const handleGenerate = useCallback(() => {
     setGenerated(true);
@@ -119,12 +100,9 @@ const Index = () => {
     rooms,
   };
 
-  // ─────────────────────────────────────────────────────────────
-
   return (
     <>
       {showSplash && <SplashScreen onComplete={() => setShowSplash(false)} />}
-
       <div className="h-screen flex flex-col bg-background overflow-hidden">
         {/* Header */}
         <header className="shrink-0 border-b border-border bg-card/50 backdrop-blur-sm">
@@ -140,18 +118,67 @@ const Index = () => {
                 </button>
               )}
               {generated && <div className="h-4 w-px bg-border" />}
-              <h1 className="text-sm font-semibold text-foreground tracking-tight">
+              <h1 className="text-sm font-semibold text-foreground tracking-tight font-sans">
                 Floor Plan → 3D
               </h1>
               <div className="h-4 w-px bg-border" />
               <span className="text-xs text-muted-foreground font-mono hidden sm:block">
-                {generated ? "3D Preview" : "Upload → Detect → Adjust → Generate"}
+                {generated ? "3D Preview" : "Upload → Detect & Calibrate → Generate"}
               </span>
             </div>
 
-            <span className="text-[10px] text-white/20 font-mono tracking-widest">
-              v2.0
-            </span>
+            {/* Mode Toggle */}
+            <div className="flex items-center gap-3">
+              <div className="relative flex items-center rounded-xl bg-black/50 border border-white/[0.08] p-1 gap-0.5 shadow-[0_4px_24px_rgba(0,0,0,0.4)] backdrop-blur-xl">
+                {/* Sliding background pill */}
+                <div
+                  className={`absolute top-1 bottom-1 rounded-lg transition-all duration-500 ease-[cubic-bezier(0.34,1.56,0.64,1)] pointer-events-none ${mode === "simple"
+                    ? "left-1 w-[62px] bg-gradient-to-br from-slate-600/80 to-slate-700/60 border border-white/10 shadow-[0_2px_12px_rgba(0,0,0,0.4),inset_0_1px_0_rgba(255,255,255,0.08)]"
+                    : "left-[67px] w-[62px] bg-gradient-to-br from-amber-500/80 to-orange-600/70 border border-amber-400/30 shadow-[0_2px_16px_rgba(245,158,11,0.35),0_0_32px_rgba(245,158,11,0.15),inset_0_1px_0_rgba(255,255,255,0.15)]"
+                    }`}
+                />
+
+                {/* Simple (Person) */}
+                <button
+                  onClick={() => setMode("simple")}
+                  className="relative z-10 flex flex-col items-center gap-0.5 w-[62px] py-1.5 rounded-lg select-none transition-all duration-300 group"
+                >
+                  <User
+                    className={`w-3.5 h-3.5 transition-all duration-300 ${mode === "simple"
+                      ? "text-white drop-shadow-[0_0_8px_rgba(255,255,255,0.4)]"
+                      : "text-white/30 group-hover:text-white/50"
+                      }`}
+                  />
+                  <span
+                    className={`text-[9px] font-semibold tracking-wider uppercase transition-all duration-300 ${mode === "simple" ? "text-white" : "text-white/25 group-hover:text-white/45"
+                      }`}
+                  >
+                    Normal
+                  </span>
+                </button>
+
+                {/* Pro (HardHat) */}
+                <button
+                  onClick={() => setMode("pro")}
+                  className="relative z-10 flex flex-col items-center gap-0.5 w-[62px] py-1.5 rounded-lg select-none transition-all duration-300 group"
+                >
+                  <HardHat
+                    className={`w-3.5 h-3.5 transition-all duration-300 ${mode === "pro"
+                      ? "text-white drop-shadow-[0_0_8px_rgba(245,158,11,0.7)]"
+                      : "text-white/30 group-hover:text-white/50"
+                      }`}
+                  />
+                  <span
+                    className={`text-[9px] font-semibold tracking-wider uppercase transition-all duration-300 ${mode === "pro" ? "text-white" : "text-white/25 group-hover:text-white/45"
+                      }`}
+                  >
+                    Pro
+                  </span>
+                </button>
+              </div>
+
+              <span className="text-[10px] text-white/20 font-mono tracking-widest">v2.0</span>
+            </div>
           </div>
         </header>
 
@@ -160,45 +187,84 @@ const Index = () => {
           <div className="shrink-0 px-4 py-2 bg-amber-500/10 border-b border-amber-500/20 flex items-center gap-2">
             <Key className="w-3.5 h-3.5 text-amber-400 shrink-0" />
             <span className="text-[11px] text-amber-300">
-              <strong>VITE_GEMINI_API_KEY</strong> ยังไม่ได้ตั้งค่า — ใส่ key ใน{" "}
-              <code className="bg-white/10 px-1 rounded">.env</code> แล้ว restart server
+              <strong>VITE_GEMINI_API_KEY</strong> ยังไม่ได้ตั้งค่า — ใส่ key ใน <code className="bg-white/10 px-1 rounded">.env</code> แล้ว restart server เพื่อใช้ AI Detection จริง
             </span>
           </div>
         )}
-
-        {/* Mock banner */}
+        {/* Mock data banner */}
         {usedMock && (
           <div className="shrink-0 px-4 py-2 bg-blue-500/10 border-b border-blue-500/20 flex items-center justify-between gap-2">
-            <span className="text-[11px] text-blue-300">
-              API quota เต็ม — แสดงข้อมูล demo แทน
-            </span>
-            <button onClick={() => setUsedMock(false)}>
-              <X className="w-3.5 h-3.5 text-blue-400" />
+            <div className="flex items-center gap-2">
+              <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-blue-500/20 text-blue-400">DEMO</span>
+              <span className="text-[11px] text-blue-300">
+                API quota เต็ม — แสดงข้อมูล demo แทน · เติม billing ที่ <a href="https://ai.dev" target="_blank" rel="noreferrer" className="underline hover:text-blue-200">ai.dev</a> หรือรอ quota reset
+              </span>
+            </div>
+            <button onClick={() => setUsedMock(false)} className="text-blue-400/60 hover:text-blue-400 transition-colors shrink-0">
+              <X className="w-3.5 h-3.5" />
             </button>
           </div>
         )}
+        {mode === "pro" && (
+          <div className="shrink-0 px-6 py-1.5 bg-primary/10 border-b border-primary/20 flex items-center gap-2">
+            <span className="text-[10px] font-mono text-primary">PRO MODE</span>
+            <span className="text-[10px] text-muted-foreground">— dimension ละเอียด · วัสดุ &amp; ราคา · Export · JSON</span>
+          </div>
+        )}
 
-        {/* Main */}
+        {/* Main content */}
         <div className="flex-1 flex min-h-0">
           <Sidebar
+            mode={mode}
+            unit={unit}
             imageUrl={imageUrl}
             rooms={rooms}
             detected={detected}
             detecting={detecting}
+            scale={scale}
             onImageUpload={handleImageUpload}
             onClear={handleClear}
             onDetect={handleDetect}
+            onRoomUpdate={handleRoomUpdate}
+            onScaleChange={setScale}
+            onUnitChange={setUnit}
             onGenerate={handleGenerate}
             floorPlanData={floorPlanData}
           />
-
           {detecting ? (
-            <div className="flex-1 flex items-center justify-center">
-              <Loader2 className="w-10 h-10 text-primary animate-spin" />
+            /* Detecting state — loading overlay on image */
+            <div className="flex-1 flex flex-col items-center justify-center bg-background relative overflow-hidden gap-5">
+              <div className="absolute inset-0 opacity-[0.03]" style={{
+                backgroundImage: "linear-gradient(hsl(215,20%,40%) 1px,transparent 1px),linear-gradient(90deg,hsl(215,20%,40%) 1px,transparent 1px)",
+                backgroundSize: "40px 40px",
+              }} />
+              {imageUrl && (
+                <div className="relative max-w-xl w-full mx-4 rounded-2xl overflow-hidden border border-white/10 shadow-2xl">
+                  <img src={imageUrl} alt="Analyzing" className="w-full object-contain" style={{ filter: "brightness(0.4) blur(1px)" }} />
+                  <div className="absolute inset-0 flex flex-col items-center justify-center gap-3">
+                    <Loader2 className="w-10 h-10 text-primary animate-spin" />
+                    <p className="text-sm font-medium text-white">AI กำลังวิเคราะห์แปลนผัง…</p>
+                    <p className="text-[11px] text-white/50">ตรวจหาห้อง ผนัง ประตู หน้าต่าง</p>
+                  </div>
+                </div>
+              )}
             </div>
           ) : detectError ? (
-            <div className="flex-1 flex items-center justify-center text-sm text-red-400">
-              {detectError}
+            /* Error state */
+            <div className="flex-1 flex flex-col items-center justify-center gap-4 p-8">
+              <div className="w-12 h-12 rounded-2xl bg-red-500/10 border border-red-500/20 flex items-center justify-center">
+                <Key className="w-6 h-6 text-red-400" />
+              </div>
+              <div className="text-center space-y-2 max-w-sm">
+                <p className="text-sm font-semibold text-foreground">Detection ล้มเหลว</p>
+                <p className="text-xs text-muted-foreground">{detectError}</p>
+              </div>
+              <button
+                onClick={() => setDetectError(null)}
+                className="text-xs text-primary hover:underline"
+              >
+                ลองอีกครั้ง
+              </button>
             </div>
           ) : detected && !generated ? (
             <WallReview
@@ -212,16 +278,35 @@ const Index = () => {
               onWallUpdate={handleWallUpdate}
               onGenerate={handleGenerate}
             />
+          ) : imageUrl && !generated ? (
+            /* Floor plan image preview — shown after upload, before detect */
+            <div className="flex-1 flex flex-col items-center justify-center bg-background relative overflow-hidden p-6 gap-4">
+              {/* Subtle grid bg */}
+              <div className="absolute inset-0 opacity-[0.03]" style={{
+                backgroundImage: "linear-gradient(hsl(215,20%,40%) 1px, transparent 1px), linear-gradient(90deg, hsl(215,20%,40%) 1px, transparent 1px)",
+                backgroundSize: "40px 40px",
+              }} />
+              {/* Label */}
+              <div className="relative z-10 flex items-center gap-2 text-[11px] text-muted-foreground uppercase tracking-widest font-medium">
+                <span className="w-1.5 h-1.5 rounded-full bg-primary/60 animate-pulse" />
+                Floor Plan Preview
+              </div>
+              {/* Image */}
+              <div className="relative z-10 flex-1 w-full max-w-3xl max-h-[calc(100%-80px)] rounded-2xl border border-white/10 overflow-hidden bg-black/30 shadow-[0_8px_64px_rgba(0,0,0,0.6)] backdrop-blur-sm flex items-center justify-center">
+                <img
+                  src={imageUrl}
+                  alt="Floor plan preview"
+                  className="max-w-full max-h-full object-contain p-4"
+                  style={{ filter: "brightness(1.05) contrast(1.05)" }}
+                />
+              </div>
+              {/* Hint */}
+              <p className="relative z-10 text-[11px] text-muted-foreground/50">
+                กดปุ่ม <span className="text-primary/70 font-medium">Detect Rooms</span> ใน sidebar เพื่อวิเคราะห์ผนังและห้อง
+              </p>
+            </div>
           ) : (
-            <RightPanel
-              rooms={rooms}
-              generated={generated}
-              scale={scale}
-              walls={walls}
-              doors={doors}
-              windows={windows}
-              onBack={() => setGenerated(false)}
-            />
+            <RightPanel rooms={rooms} generated={generated} scale={scale} walls={walls} doors={doors} windows={windows} onBack={() => setGenerated(false)} />
           )}
         </div>
       </div>

@@ -509,12 +509,12 @@ const WallReview = ({
                     )}
 
                     {/* Legend */}
-                    {/* <div className="absolute bottom-4 left-4 flex items-center gap-3 bg-black/50 border border-white/10 backdrop-blur-md rounded-lg px-3 py-2 text-[10px] text-muted-foreground">
+                    <div className="absolute bottom-4 left-4 flex items-center gap-3 bg-black/50 border border-white/10 backdrop-blur-md rounded-lg px-3 py-2 text-[10px] text-muted-foreground">
                         <span className="flex items-center gap-1.5"><span className="w-3 h-0.5 bg-slate-400 rounded inline-block" />Walls</span>
                         <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded border-2 border-blue-400 inline-block" />Rooms</span>
                         <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded border-2 border-amber-400 inline-block" />Doors</span>
                         <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded border-2 border-cyan-400 inline-block" />Windows</span>
-                    </div> */}
+                    </div>
                 </div>
 
                 {/* RIGHT — room list + selected room editor */}
