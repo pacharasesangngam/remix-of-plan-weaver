@@ -174,36 +174,46 @@ function WallSegmentMesh({
 
   const dx = x2 - x1;
   const dz = z2 - z1;
-  const length = Math.sqrt(dx * dx + dz * dz);
+  const rawLength = Math.sqrt(dx * dx + dz * dz);
   const angle = Math.atan2(dz, dx);
 
-  // Use wall's own values, fallback to defaults
   const wallHeight = wall.wallHeight ?? defaultWallHeight;
   const thickness = wall.thickness ?? (wall.type === "exterior" ? 0.25 : 0.15);
-  const color = wall.type === "exterior" ? "#4a5568" : "#6b7280";
-  const emissive = wall.type === "exterior" ? "#1a2332" : "#1f2937";
 
+  // ── Miter compensation ──────────────────────────────────────────────────────
+  // Shorten each wall by half its own thickness on both ends so adjacent
+  // walls that meet at a T-junction or corner no longer overlap.
+  // The half-thickness "ear" is donated to the wall running perpendicular.
+  const halfT = thickness / 2;
+  const effectiveLength = Math.max(0.01, rawLength - halfT * 2);
+
+  // Midpoint of the trimmed segment (same as original mid — trimming is symmetric)
   const cx = (x1 + x2) / 2;
   const cz = (z1 + z2) / 2;
 
-  const typeLabel = wall.type === "exterior" ? "EXT" : "INT";
-  const typeColor = wall.type === "exterior" ? "#e2e8f0" : "#94a3b8";
+  const isExterior = wall.type === "exterior";
+  const color = isExterior ? "#4a5568" : "#6b7280";
+  const emissive = isExterior ? "#1a2332" : "#1f2937";
+  const typeColor = isExterior ? "#e2e8f0" : "#94a3b8";
 
   return (
     <group position={[cx, 0, cz]} rotation={[0, -angle, 0]}>
-      {/* Wall body */}
+      {/* Wall body — shortened by half-thickness on each end */}
       <mesh
         position={[0, wallHeight / 2, 0]}
         castShadow
         receiveShadow
       >
-        <boxGeometry args={[length, wallHeight, thickness]} />
+        <boxGeometry args={[effectiveLength, wallHeight, thickness]} />
         <meshStandardMaterial
           color={color}
           emissive={emissive}
           emissiveIntensity={0.3}
           roughness={0.7}
           metalness={0.05}
+          polygonOffset
+          polygonOffsetFactor={-1}
+          polygonOffsetUnits={-1}
         />
       </mesh>
 
@@ -215,12 +225,12 @@ function WallSegmentMesh({
         anchorX="center"
         anchorY="middle"
       >
-        {`${length.toFixed(1)}m`}
+        {`${rawLength.toFixed(1)}m`}
       </Text>
 
       {/* Height label — side of wall */}
       <Text
-        position={[length / 2 + 0.15, wallHeight / 2, thickness / 2 + 0.05]}
+        position={[effectiveLength / 2 + 0.15, wallHeight / 2, thickness / 2 + 0.05]}
         fontSize={0.12}
         color="#94a3b8"
         anchorX="left"
@@ -238,7 +248,7 @@ function WallSegmentMesh({
         anchorX="center"
         anchorY="middle"
       >
-        {`${typeLabel} · ${(thickness * 100).toFixed(0)}cm`}
+        {`${isExterior ? "EXT" : "INT"} · ${(thickness * 100).toFixed(0)}cm`}
       </Text>
     </group>
   );

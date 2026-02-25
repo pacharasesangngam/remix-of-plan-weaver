@@ -35,6 +35,8 @@ export interface DetectedWallSegment {
     type: "exterior" | "interior";
     /** Wall thickness in meters (default: exterior=0.25, interior=0.15) */
     thickness?: number;
+    /** Raw thickness ratio relative to image size (from AI) */
+    thicknessRatio?: number;
     /** Wall height in meters (default: 2.8) */
     wallHeight?: number;
 }

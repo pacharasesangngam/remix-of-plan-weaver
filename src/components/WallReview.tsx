@@ -72,16 +72,18 @@ const WallReview = ({
 
     const currentUnit = UNITS.find((u) => u.value === unit) ?? UNITS[0];
 
-    // Track rendered image size for SVG overlay
+    // Track rendered image size via ResizeObserver (correct for any window size)
     useEffect(() => {
+        const el = imgRef.current;
+        if (!el) return;
         const measure = () => {
-            if (imgRef.current) {
-                setImgSize({ w: imgRef.current.clientWidth, h: imgRef.current.clientHeight });
-            }
+            setImgSize({ w: el.clientWidth, h: el.clientHeight });
         };
-        measure();
-        window.addEventListener("resize", measure);
-        return () => window.removeEventListener("resize", measure);
+        // Measure immediately after load
+        if (el.complete) measure();
+        const ro = new ResizeObserver(measure);
+        ro.observe(el);
+        return () => ro.disconnect();
     }, [imageUrl]);
 
     const toggleLayer = (layer: OverlayLayer) =>
@@ -211,6 +213,7 @@ const WallReview = ({
     };
 
     /* ── bbox → pixel helpers ── */
+    // imgSize tracks the true rendered px size of the <img> element (updated by ResizeObserver)
     const bx = (v: number) => v * imgSize.w;
     const by = (v: number) => v * imgSize.h;
 
@@ -288,14 +291,15 @@ const WallReview = ({
                 <div className="flex-1 relative bg-black/20 flex items-center justify-center overflow-hidden">
                     {imageUrl ? (
                         <div className="relative w-full h-full flex items-center justify-center p-4">
-                            <div className="relative inline-flex max-w-full max-h-full">
+                            {/* inline-block shrinks to exactly the rendered image size */}
+                            <div className="relative inline-block" style={{ lineHeight: 0 }}>
                                 <img
                                     ref={imgRef}
                                     src={imageUrl}
                                     alt="Floor plan"
-                                    className="max-w-full max-h-full object-contain rounded-lg shadow-2xl transition-opacity duration-300"
+                                    className="block max-w-full max-h-[calc(100vh-160px)] rounded-lg shadow-2xl transition-opacity duration-300"
                                     style={{
-                                        filter: "brightness(0.75) contrast(1.1)",
+                                        filter: "brightness(0.92) contrast(1.05)",
                                         opacity: layers.has("image") ? 1 : 0,
                                     }}
                                     onLoad={() => {
@@ -305,55 +309,87 @@ const WallReview = ({
                                     }}
                                 />
 
-                                {/* SVG overlay */}
+                                {/* SVG overlay — viewBox 0 0 1 1 so all wall/room coords (0-1) map directly.
+                                    preserveAspectRatio=none + inset-0 makes it stretch exactly over <img>. */}
                                 <svg
                                     className="absolute inset-0 pointer-events-none"
-                                    width={imgSize.w}
-                                    height={imgSize.h}
-                                    viewBox={`0 0 ${imgSize.w} ${imgSize.h}`}
+                                    width="100%"
+                                    height="100%"
+                                    viewBox="0 0 1 1"
+                                    preserveAspectRatio="none"
                                 >
                                     {/* ── WALLS ── */}
                                     {layers.has("walls") && walls.map((wall) => {
                                         const isWallSelected = selectedWallId === wall.id;
-                                        const wx1 = bx(wall.x1), wy1 = by(wall.y1);
-                                        const wx2 = bx(wall.x2), wy2 = by(wall.y2);
+                                        // Coords are already 0-1 normalised — use directly
+                                        const wx1 = wall.x1, wy1 = wall.y1;
+                                        const wx2 = wall.x2, wy2 = wall.y2;
                                         const wmx = (wx1 + wx2) / 2, wmy = (wy1 + wy2) / 2;
                                         const wLen = getWallLength(wall);
                                         const wThick = getWallThickness(wall);
+
+                                        // strokeWidth in normalised units. thicknessRatio is already image-relative (0-1).
+                                        const strokeNorm = wall.thicknessRatio != null
+                                            ? Math.max(0.004, wall.thicknessRatio)
+                                            : wall.type === "exterior" ? 0.013 : 0.007;
+
+                                        const wallColor = isWallSelected
+                                            ? "#fbbf24"
+                                            : wall.type === "exterior"
+                                                ? "#1a1a1a"
+                                                : "#3a3a3a";
+
                                         return (
-                                            <g key={wall.id} style={{ cursor: "pointer" }} onClick={(e) => { e.stopPropagation(); selectWall(wall.id); }}>
-                                                {/* Hit area (wider invisible line for easy clicking) */}
+                                            <g
+                                                key={wall.id}
+                                                style={{ cursor: "pointer", pointerEvents: "all" }}
+                                                onClick={(e) => { e.stopPropagation(); selectWall(wall.id); }}
+                                            >
+                                                {/* Transparent hit area */}
                                                 <line
                                                     x1={wx1} y1={wy1} x2={wx2} y2={wy2}
                                                     stroke="transparent"
-                                                    strokeWidth={12}
+                                                    strokeWidth={strokeNorm + 0.025}
                                                     pointerEvents="stroke"
                                                 />
-                                                {/* Visible wall line */}
+                                                {/* Amber glow when selected */}
+                                                {isWallSelected && (
+                                                    <line
+                                                        x1={wx1} y1={wy1} x2={wx2} y2={wy2}
+                                                        stroke="#fbbf24"
+                                                        strokeWidth={strokeNorm + 0.008}
+                                                        strokeLinecap="square"
+                                                        opacity={0.45}
+                                                    />
+                                                )}
+                                                {/* Thick wall line */}
                                                 <line
                                                     x1={wx1} y1={wy1} x2={wx2} y2={wy2}
-                                                    stroke={isWallSelected ? "#fbbf24" : (wall.type === "exterior" ? "#e2e8f0" : "#94a3b8")}
-                                                    strokeWidth={isWallSelected ? 3.5 : (wall.type === "exterior" ? 2.5 : 1.5)}
-                                                    strokeLinecap="round"
-                                                    opacity={isWallSelected ? 1 : 0.7}
+                                                    stroke={wallColor}
+                                                    strokeWidth={isWallSelected ? strokeNorm + 0.002 : strokeNorm}
+                                                    strokeLinecap="square"
+                                                    opacity={isWallSelected ? 1 : 0.85}
                                                 />
-                                                {/* Length label on wall */}
+                                                {/* Dimension label */}
                                                 {isWallSelected && (
-                                                    <>
+                                                    <g style={{ pointerEvents: "none" }}>
                                                         <rect
-                                                            x={wmx - 28} y={wmy - 20}
-                                                            width={56} height={16}
-                                                            rx={4}
-                                                            fill="rgba(251,191,36,0.9)"
+                                                            x={wmx - 0.065} y={wmy - 0.045}
+                                                            width={0.13} height={0.032}
+                                                            rx={0.005}
+                                                            fill="rgba(251,191,36,0.95)"
                                                         />
                                                         <text
-                                                            x={wmx} y={wmy - 9}
-                                                            textAnchor="middle" fontSize={9} fontWeight="600"
-                                                            fill="#000" fontFamily="monospace"
+                                                            x={wmx} y={wmy - 0.018}
+                                                            textAnchor="middle"
+                                                            fontSize={0.02}
+                                                            fontWeight="700"
+                                                            fill="#000"
+                                                            fontFamily="monospace"
                                                         >
                                                             {wLen.toFixed(1)}m · {(wThick * 100).toFixed(0)}cm
                                                         </text>
-                                                    </>
+                                                    </g>
                                                 )}
                                             </g>
                                         );
@@ -365,50 +401,58 @@ const WallReview = ({
                                         if (!bbox) return null;
                                         const cs = CONF_STYLE[room.confidence];
                                         const pal = ROOM_PALETTE[idx % ROOM_PALETTE.length];
-                                        const px = bx(bbox.x), py = by(bbox.y);
-                                        const pw = bx(bbox.w), ph = by(bbox.h);
+                                        // Use normalised coords directly
+                                        const rx0 = bbox.x, ry0 = bbox.y;
+                                        const rw = bbox.w, rh = bbox.h;
                                         const isSelected = selectedId === room.id;
+                                        const nameLen = room.name.length;
+                                        const badgeW = Math.max(0, Math.min(rw - 0.008, nameLen * 0.009 + 0.015));
 
                                         return (
                                             <g key={room.id}>
-                                                <rect x={px} y={py} width={pw} height={ph}
-                                                    fill={isSelected ? pal.fill : `${cs.stroke}18`} rx={4} />
-                                                <rect x={px} y={py} width={pw} height={ph}
+                                                <rect x={rx0} y={ry0} width={rw} height={rh}
+                                                    fill={isSelected ? pal.fill : `${cs.stroke}18`} rx={0.004} />
+                                                <rect x={rx0} y={ry0} width={rw} height={rh}
                                                     fill="none"
                                                     stroke={isSelected ? pal.stroke : cs.stroke}
-                                                    strokeWidth={isSelected ? 2.5 : 1.5}
-                                                    strokeDasharray={isSelected ? "none" : "6 3"}
-                                                    rx={4} opacity={isSelected ? 1 : 0.55} />
+                                                    strokeWidth={isSelected ? 0.004 : 0.002}
+                                                    strokeDasharray={isSelected ? "none" : "0.01 0.005"}
+                                                    rx={0.004} opacity={isSelected ? 1 : 0.6} />
 
-                                                {/* Corner ticks for selected */}
+                                                {/* Corner ticks */}
                                                 {isSelected && [
-                                                    [[px, py + 10], [px, py], [px + 10, py]],
-                                                    [[px + pw - 10, py], [px + pw, py], [px + pw, py + 10]],
-                                                    [[px, py + ph - 10], [px, py + ph], [px + 10, py + ph]],
-                                                    [[px + pw - 10, py + ph], [px + pw, py + ph], [px + pw, py + ph - 10]],
+                                                    [[rx0, ry0 + 0.015], [rx0, ry0], [rx0 + 0.015, ry0]],
+                                                    [[rx0 + rw - 0.015, ry0], [rx0 + rw, ry0], [rx0 + rw, ry0 + 0.015]],
+                                                    [[rx0, ry0 + rh - 0.015], [rx0, ry0 + rh], [rx0 + 0.015, ry0 + rh]],
+                                                    [[rx0 + rw - 0.015, ry0 + rh], [rx0 + rw, ry0 + rh], [rx0 + rw, ry0 + rh - 0.015]],
                                                 ].map((pts, i) => (
                                                     <polyline key={i}
                                                         points={pts.map(([x, y]) => `${x},${y}`).join(" ")}
-                                                        fill="none" stroke={pal.stroke} strokeWidth={3} strokeLinecap="round" />
+                                                        fill="none" stroke={pal.stroke} strokeWidth={0.005} strokeLinecap="round" />
                                                 ))}
 
-                                                {/* Room name badge */}
-                                                <rect x={px + 4} y={py + 4}
-                                                    width={Math.min(pw - 8, room.name.length * 6.5 + 10)} height={18}
-                                                    rx={4} fill={isSelected ? pal.stroke : cs.labelBg} opacity={0.92} />
-                                                <text x={px + 9} y={py + 17} fontSize={10} fontWeight="600"
-                                                    fill="#000" fontFamily="sans-serif">
-                                                    {room.name}
-                                                </text>
+                                                {/* Room name badge — only if fits */}
+                                                {badgeW > 0.01 && (
+                                                    <>
+                                                        <rect x={rx0 + 0.006} y={ry0 + 0.006}
+                                                            width={badgeW} height={0.025}
+                                                            rx={0.005} fill={isSelected ? pal.stroke : cs.labelBg} opacity={0.92} />
+                                                        <text x={rx0 + 0.012} y={ry0 + 0.023}
+                                                            fontSize={0.016} fontWeight="600"
+                                                            fill="#000" fontFamily="sans-serif">
+                                                            {room.name}
+                                                        </text>
+                                                    </>
+                                                )}
 
                                                 {/* Dimension labels */}
-                                                <text x={px + pw / 2} y={py + ph + 15} textAnchor="middle"
-                                                    fontSize={10} fill={isSelected ? pal.text : cs.stroke}
+                                                <text x={rx0 + rw / 2} y={ry0 + rh + 0.022} textAnchor="middle"
+                                                    fontSize={0.014} fill={isSelected ? pal.text : cs.stroke}
                                                     fontFamily="monospace" opacity={isSelected ? 1 : 0.7}>
                                                     {+(room.width / currentUnit.toMeter).toFixed(1)}{unit}
                                                 </text>
-                                                <text x={px + pw + 5} y={py + ph / 2 + 4} textAnchor="start"
-                                                    fontSize={10} fill={isSelected ? pal.text : cs.stroke}
+                                                <text x={rx0 + rw + 0.008} y={ry0 + rh / 2 + 0.007} textAnchor="start"
+                                                    fontSize={0.014} fill={isSelected ? pal.text : cs.stroke}
                                                     fontFamily="monospace" opacity={isSelected ? 1 : 0.7}>
                                                     {+(room.height / currentUnit.toMeter).toFixed(1)}{unit}
                                                 </text>
@@ -418,23 +462,20 @@ const WallReview = ({
 
                                     {/* ── DOORS ── */}
                                     {layers.has("doors") && doors.map((door) => {
-                                        const px = bx(door.bbox.x), py = by(door.bbox.y);
-                                        const pw = bx(door.bbox.w), ph = Math.max(by(door.bbox.h), 12);
-                                        const cx = px + pw / 2, cy = py + ph / 2;
-                                        const r = Math.max(pw, ph) * 0.9;
+                                        const dx = door.bbox.x, dy = door.bbox.y;
+                                        const dw = door.bbox.w, dh = Math.max(door.bbox.h, 0.012);
+                                        const cx = dx + dw / 2, cy = dy + dh / 2;
                                         return (
                                             <g key={door.id}>
-                                                {/* Door swing arc */}
                                                 <path
-                                                    d={`M ${cx} ${cy} L ${cx + pw / 2} ${cy} A ${pw / 2} ${pw / 2} 0 0 0 ${cx} ${cy - pw / 2} Z`}
+                                                    d={`M ${cx} ${cy} L ${cx + dw / 2} ${cy} A ${dw / 2} ${dw / 2} 0 0 0 ${cx} ${cy - dw / 2} Z`}
                                                     fill="rgba(245,158,11,0.15)"
                                                     stroke="#f59e0b"
-                                                    strokeWidth={1.5}
+                                                    strokeWidth={0.003}
                                                     opacity={0.85}
                                                 />
-                                                {/* Door width label */}
-                                                <text x={cx} y={cy + ph / 2 + 13} textAnchor="middle"
-                                                    fontSize={9} fill="#f59e0b" fontFamily="monospace" opacity={0.9}>
+                                                <text x={cx} y={cy + dh / 2 + 0.018} textAnchor="middle"
+                                                    fontSize={0.013} fill="#f59e0b" fontFamily="monospace" opacity={0.9}>
                                                     D {door.widthM}m
                                                 </text>
                                             </g>
@@ -443,20 +484,18 @@ const WallReview = ({
 
                                     {/* ── WINDOWS ── */}
                                     {layers.has("windows") && windows.map((win) => {
-                                        const px = bx(win.bbox.x), py = by(win.bbox.y);
-                                        const pw = bx(win.bbox.w), ph = Math.max(by(win.bbox.h), 6);
+                                        const wx = win.bbox.x, wy = win.bbox.y;
+                                        const ww = win.bbox.w, wh = Math.max(win.bbox.h, 0.008);
                                         return (
                                             <g key={win.id}>
-                                                {/* Window — three parallel lines */}
-                                                <rect x={px} y={py} width={pw} height={ph}
-                                                    fill="rgba(6,182,212,0.12)" stroke="#06b6d4" strokeWidth={1.5} rx={1} opacity={0.85} />
-                                                <line x1={px + pw * 0.33} y1={py} x2={px + pw * 0.33} y2={py + ph}
-                                                    stroke="#06b6d4" strokeWidth={1} opacity={0.6} />
-                                                <line x1={px + pw * 0.67} y1={py} x2={px + pw * 0.67} y2={py + ph}
-                                                    stroke="#06b6d4" strokeWidth={1} opacity={0.6} />
-                                                {/* Window width label */}
-                                                <text x={px + pw / 2} y={py + ph + 13} textAnchor="middle"
-                                                    fontSize={9} fill="#06b6d4" fontFamily="monospace" opacity={0.9}>
+                                                <rect x={wx} y={wy} width={ww} height={wh}
+                                                    fill="rgba(6,182,212,0.12)" stroke="#06b6d4" strokeWidth={0.003} rx={0.002} opacity={0.85} />
+                                                <line x1={wx + ww * 0.33} y1={wy} x2={wx + ww * 0.33} y2={wy + wh}
+                                                    stroke="#06b6d4" strokeWidth={0.002} opacity={0.6} />
+                                                <line x1={wx + ww * 0.67} y1={wy} x2={wx + ww * 0.67} y2={wy + wh}
+                                                    stroke="#06b6d4" strokeWidth={0.002} opacity={0.6} />
+                                                <text x={wx + ww / 2} y={wy + wh + 0.018} textAnchor="middle"
+                                                    fontSize={0.013} fill="#06b6d4" fontFamily="monospace" opacity={0.9}>
                                                     W {win.widthM}m
                                                 </text>
                                             </g>
@@ -528,8 +567,8 @@ const WallReview = ({
                                             key={wall.id}
                                             onClick={() => selectWall(wall.id)}
                                             className={`w-full text-left rounded-lg px-3 py-2 border transition-all duration-200 mb-1 ${isWallSel
-                                                    ? "border-amber-500/40 bg-amber-500/10 shadow-sm"
-                                                    : "border-border/50 hover:border-border hover:bg-white/4"
+                                                ? "border-amber-500/40 bg-amber-500/10 shadow-sm"
+                                                : "border-border/50 hover:border-border hover:bg-white/4"
                                                 }`}
                                         >
                                             <div className="flex items-center justify-between">
@@ -646,8 +685,8 @@ const WallReview = ({
                                                 }
                                             }}
                                             className={`text-[9px] px-1.5 py-0.5 rounded font-mono cursor-pointer transition-colors ${sw.type === "exterior"
-                                                    ? "bg-slate-500/20 text-slate-300 hover:bg-slate-500/30"
-                                                    : "bg-slate-600/20 text-slate-400 hover:bg-slate-600/30"
+                                                ? "bg-slate-500/20 text-slate-300 hover:bg-slate-500/30"
+                                                : "bg-slate-600/20 text-slate-400 hover:bg-slate-600/30"
                                                 }`}
                                             title="คลิกเพื่อสลับ EXT/INT"
                                         >
