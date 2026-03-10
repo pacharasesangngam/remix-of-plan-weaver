@@ -257,7 +257,7 @@ const WallReview = ({
                         <div className="w-px h-4 bg-white/10 mx-0.5" />
                         {([
                             { id: "rooms", label: "Rooms", color: "#60a5fa" },
-                            { id: "walls", label: "Walls", color: "#94a3b8" },
+                            { id: "walls", label: "Walls (เส้น)", color: "#94a3b8" },
                             { id: "doors", label: "Doors", color: "#f59e0b" },
                             { id: "windows", label: "Windows", color: "#06b6d4" },
                         ] as { id: OverlayLayer; label: string; color: string }[]).map(({ id, label, color }) => (

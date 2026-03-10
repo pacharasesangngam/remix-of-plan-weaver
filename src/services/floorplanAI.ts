@@ -291,37 +291,43 @@ export type DetectFloorPlanResult = DetectionResult & { usedMock?: boolean; used
 export async function detectFloorPlan(
     imageUrlOrFile: string | File,
 ): Promise<DetectFloorPlanResult> {
-    if (!API_KEY) throw new Error("NO_API_KEY");
+    const url = "http://localhost:8000/api/detect-floorplan";
 
-    const { base64, mimeType } =
-        typeof imageUrlOrFile === "string"
-            ? await objectUrlToBase64(imageUrlOrFile)
-            : await fileToBase64(imageUrlOrFile);
+    let fileToUpload: File;
+    if (typeof imageUrlOrFile === "string") {
+        const blob = await fetch(imageUrlOrFile).then((r) => r.blob());
+        fileToUpload = new File([blob], "floorplan.png", { type: blob.type });
+    } else {
+        fileToUpload = imageUrlOrFile;
+    }
 
-    let lastStatus = 0;
+    const formData = new FormData();
+    formData.append("file", fileToUpload);
 
-    // Try each model in order
-    for (const model of MODELS) {
-        const attempt = await tryModel(model, base64, mimeType);
-        if ("result" in attempt) {
-            return { ...attempt.result, usedModel: model };
+    try {
+        const res = await fetch(url, {
+            method: "POST",
+            body: formData,
+        });
+
+        if (!res.ok) {
+            const errText = await res.text();
+            console.error("Backend error:", errText);
+            throw new Error(`API_ERROR_${res.status}`);
         }
-        lastStatus = attempt.status;
-        // Only retry on 404 (model not found). Stop on 429/400/403.
-        if (attempt.status !== 404) break;
-    }
 
-    // 429 quota → use mock data + flag it
-    if (lastStatus === 429) {
-        console.warn("[floorplanAI] Quota exceeded — using mock data");
+        const data = await res.json();
+        return {
+            summary: data.summary,
+            rooms: data.rooms || [],
+            walls: data.walls || [],
+            doors: data.doors || [],
+            windows: data.windows || [],
+            usedModel: "opencv-local"
+        };
+    } catch (e) {
+        console.error("Local OpenCV backend failed:", e);
+        console.warn("[floorplanAI] API failed — using mock data as fallback");
         return { ...MOCK_RESULT, usedMock: true };
     }
-
-    // 403 forbidden (leaked/invalid key) → use mock data + flag it
-    if (lastStatus === 403) {
-        console.warn("[floorplanAI] API key invalid or blocked (403) — using mock data");
-        return { ...MOCK_RESULT, usedMock: true };
-    }
-
-    throw new Error(`API_ERROR_${lastStatus}`);
 }
