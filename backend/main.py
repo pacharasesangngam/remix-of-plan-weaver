@@ -143,7 +143,7 @@ def detect(image_bytes: bytes):
         contour = max(contours, key=cv2.contourArea)
     
         # polygon simplify
-        epsilon = 0.03 * cv2.arcLength(contour, True)
+        epsilon = 0.01 * cv2.arcLength(contour, True)
         approx = cv2.approxPolyDP(contour, epsilon, True)
 
         polygon = [
@@ -179,7 +179,7 @@ def detect(image_bytes: bytes):
 
             # เพิ่มขนาดประตู
             door_width = orig_h * 0.1
-            door_height = orig_w * 0.15 
+            door_height = orig_w * 0.15
 
             x1 = cx - door_width / 2
             y1 = cy - door_height / 2
@@ -336,7 +336,7 @@ def detect(image_bytes: bytes):
                     "y2": y / height,
                     "type": "interior",
                     "thicknessRatio": 0.01,
-                            "length": (x2 - x1)  # pixel
+                            "length": (x2 - x1) * PIXEL_TO_METER  # pixel
 
                 })
 
@@ -349,7 +349,7 @@ def detect(image_bytes: bytes):
                     "y2": y2 / height,
                     "type": "interior",
                     "thicknessRatio": 0.01,
-                            "length": (y2 - y1)  # pixel
+                            "length": (y2 - y1) * PIXEL_TO_METER  # pixel
 
                 })
 
