@@ -179,7 +179,7 @@ def detect(image_bytes: bytes):
 
             # เพิ่มขนาดประตู
             door_width = orig_h * 0.1
-            door_height = orig_w * 0.15
+            door_height = orig_w * 0.15 
 
             x1 = cx - door_width / 2
             y1 = cy - door_height / 2
