@@ -16,6 +16,17 @@ interface RightPanelProps {
   onBack?: () => void;
 }
 
+const getWidthM = (
+  bboxW?: number,
+  real?: number,
+  imgWidth?: number,
+  scale?: number
+) => {
+  if (typeof real === "number") return real;
+  if (typeof bboxW !== "number" || !imgWidth || !scale) return 0;
+  return bboxW * imgWidth * scale;
+};
+
 // ── Per-room colour palette based on confidence ───────────────────────────────
 const CONF_COLORS: Record<Room["confidence"], { wall: string; floor: string; emissive: string }> = {
   high: { wall: "#2d4a6b", floor: "#1a2f42", emissive: "#0d2035" },
@@ -258,20 +269,23 @@ function WallSegmentMesh({
 function DoorMesh({
   door,
   wallHeight,
+  scale,
 }: {
   door: DetectedDoor;
   wallHeight: number;
+  scale: number;
 }) {
   // Door position from bbox (normalised)
+  if (!door.bbox) return null;
   const cx = (door.bbox.x + door.bbox.w / 2) * PLAN_SIZE - PLAN_SIZE / 2;
   const cz = (door.bbox.y + door.bbox.h / 2) * PLAN_SIZE - PLAN_SIZE / 2;
-  const doorW = Math.max(door.widthM, 0.8);
+  const doorW = Math.max(getWidthM(door.bbox?.w, door.widthM, PLAN_SIZE, scale),0.8);
   const doorH = Math.min(wallHeight * 0.85, 2.1);
   const doorD = 0.12;
 
   // Determine door orientation from bbox aspect ratio
-  const bboxW = door.bbox.w * PLAN_SIZE;
-  const bboxH = door.bbox.h * PLAN_SIZE;
+ const bboxW = (door.bbox?.w ?? 0) * PLAN_SIZE;
+  const bboxH = (door.bbox?.h ?? 0) * PLAN_SIZE;  
   const isHorizontal = bboxW > bboxH;
   const rotY = isHorizontal ? 0 : Math.PI / 2;
 
@@ -323,20 +337,23 @@ function DoorMesh({
 function WindowMesh({
   win,
   wallHeight,
+  scale,
 }: {
   win: DetectedWindow;
   wallHeight: number;
+  scale: number;
 }) {
+  if (!win.bbox) return null;
   const cx = (win.bbox.x + win.bbox.w / 2) * PLAN_SIZE - PLAN_SIZE / 2;
   const cz = (win.bbox.y + win.bbox.h / 2) * PLAN_SIZE - PLAN_SIZE / 2;
-  const winW = Math.max(win.widthM, 0.6);
+  const winW = Math.max(getWidthM(win.bbox?.w, win.widthM, PLAN_SIZE, scale),0.6);
   const winH = Math.min(wallHeight * 0.45, 1.2);
   const winD = 0.08;
   const sillY = wallHeight * 0.35; // window sill height
 
   // Determine orientation
-  const bboxW = win.bbox.w * PLAN_SIZE;
-  const bboxH = win.bbox.h * PLAN_SIZE;
+  const bboxW = (win.bbox?.w ?? 0) * PLAN_SIZE;
+  const bboxH = (win.bbox?.h ?? 0) * PLAN_SIZE;
   const isHorizontal = bboxW > bboxH;
   const rotY = isHorizontal ? 0 : Math.PI / 2;
 
@@ -521,6 +538,7 @@ function Scene({ rooms, scale, walls, doors, windows, onHoverChange }: {
           key={door.id}
           door={door}
           wallHeight={defaultWallHeight}
+          scale={scale}
         />
       ))}
 
@@ -530,6 +548,7 @@ function Scene({ rooms, scale, walls, doors, windows, onHoverChange }: {
           key={win.id}
           win={win}
           wallHeight={defaultWallHeight}
+          scale={scale}
         />
       ))}
 
@@ -548,6 +567,7 @@ function Scene({ rooms, scale, walls, doors, windows, onHoverChange }: {
 
 // ── Main component ────────────────────────────────────────────────────────────
 const RightPanel = ({ rooms, generated, scale, walls = [], doors = [], windows = [], onBack }: RightPanelProps) => {
+  
   const [hoveredId, setHoveredId] = useState<string | null>(null);
   const hoveredRoom = rooms.find((r) => r.id === hoveredId) ?? null;
 

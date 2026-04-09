@@ -237,22 +237,7 @@ const Sidebar = ({
                             </section>
                         )}
 
-                        {/* Step 3: Generate */}
-                        {/* {detected && (
-                            <section className="space-y-3">
-                                <div className="flex items-center gap-2">
-                                    {stepDot(3, false, true)}
-                                    <h2 className="text-xs font-semibold text-foreground uppercase tracking-wider">Generate 3D</h2>
-                                </div>
-                                <Button
-                                    onClick={onGenerate}
-                                    className="w-full gap-2 h-10 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white shadow-[0_0_20px_rgba(59,130,246,0.3)] hover:shadow-[0_0_28px_rgba(59,130,246,0.5)] transition-all duration-300"
-                                >
-                                    <Zap className="w-4 h-4" />
-                                    Generate 3D
-                                </Button>
-                            </section>
-                        )} */}
+                        
                     </div>
                 </div>
             </div>
