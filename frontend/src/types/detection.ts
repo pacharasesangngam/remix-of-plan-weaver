@@ -1,19 +1,26 @@
 import type { Room } from "./floorplan";
 
-export type { BBox } from "./floorplan"; // re-export จาก floorplan เพื่อไม่ให้ define ซ้ำ
+export type { BBox } from "./floorplan";
+
+export interface NormalizedPoint {
+  x: number;
+  y: number;
+}
 
 export interface DetectedDoor {
   id: string;
   bbox: import("./floorplan").BBox;
+  polygon?: NormalizedPoint[] | null;
   widthPx?: number;
-  widthM?: number;   // ← ชื่อตรงกับ backend (เปลี่ยน widthMeter → widthM ที่ backend แล้ว)
+  widthM?: number;
 }
 
 export interface DetectedWindow {
   id: string;
   bbox: import("./floorplan").BBox;
+  polygon?: NormalizedPoint[] | null;
   widthPx?: number;
-  widthM?: number;   // ← เช่นเดียวกัน
+  widthM?: number;
 }
 
 export interface DetectedWallSegment {

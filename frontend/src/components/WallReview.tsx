@@ -332,6 +332,10 @@ const WallReview = ({
     // widthPx เป็น pixel จาก bbox ของ YOLO → ต้องคูณ scale เพื่อให้เป็นเมตร
     const doorWidthM   = (d: DetectedDoor):   number | null => calibrated && d.widthPx ? d.widthPx * scale : null;
     const windowWidthM = (w: DetectedWindow): number | null => calibrated && w.widthPx ? w.widthPx * scale : (w.widthM ?? null);
+    const polygonPath = (points?: { x: number; y: number }[] | null): string | null => {
+        if (!points || points.length < 3) return null;
+        return points.map((p, idx) => `${idx === 0 ? "M" : "L"} ${p.x} ${p.y}`).join(" ") + " Z";
+    };
 
     // ─────────────────────────────────────────────────────────
     // SUB COMPONENT
@@ -600,14 +604,13 @@ const WallReview = ({
                                         const dh = Math.max(dh0, 0.012); 
                                         const cx = dx + dw / 2, cy = dy + dh / 2;
                                         const wM = doorWidthM(door);
-                                        
-                                        // ลองปรับรัศมี (dw / 2) ให้บวกเพิ่มอีกเล็กน้อยในระดับ SVG
-                                        const visualRadius = dw / 2 + 0.002; 
+                                        const visualRadius = dw;
+                                        const doorPath = polygonPath(door.polygon) ?? `M ${cx} ${cy} L ${cx + visualRadius} ${cy} A ${visualRadius} ${visualRadius} 0 0 0 ${cx} ${cy - visualRadius} Z`;
 
                                         return (
                                             <g key={door.id}>
                                                 <path 
-                                                    d={`M ${cx} ${cy} L ${cx + visualRadius} ${cy} A ${visualRadius} ${visualRadius} 0 0 0 ${cx} ${cy - visualRadius} Z`} 
+                                                    d={doorPath} 
                                                     fill="rgba(245,158,11,0.25)" // เพิ่มความเข้ม
                                                     stroke="#f59e0b" 
                                                     strokeWidth={0.004} // เพิ่มความหนาเส้น

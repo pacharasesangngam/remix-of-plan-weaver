@@ -18,6 +18,7 @@ interface RawRoom {
 interface RawDoor {
   id: string;
   bbox: BBox;
+  polygon?: RawPoint[] | null;
   widthPx?: number;
   widthM?: number;
 }
@@ -25,6 +26,7 @@ interface RawDoor {
 interface RawWindow {
   id: string;
   bbox: BBox;
+  polygon?: RawPoint[] | null;
   widthPx?: number;
   widthM?: number;
 }
