@@ -1,24 +1,19 @@
 import type { Room } from "./floorplan";
 
-export interface BBox {
-  x: number;
-  y: number;
-  w: number;
-  h: number;
-}
+export type { BBox } from "./floorplan"; // re-export จาก floorplan เพื่อไม่ให้ define ซ้ำ
 
 export interface DetectedDoor {
   id: string;
-  bbox: BBox;
-   widthPx?: number; 
-  widthM?: number;
+  bbox: import("./floorplan").BBox;
+  widthPx?: number;
+  widthM?: number;   // ← ชื่อตรงกับ backend (เปลี่ยน widthMeter → widthM ที่ backend แล้ว)
 }
 
 export interface DetectedWindow {
   id: string;
-  bbox: BBox;
+  bbox: import("./floorplan").BBox;
   widthPx?: number;
-  widthM?: number;
+  widthM?: number;   // ← เช่นเดียวกัน
 }
 
 export interface DetectedWallSegment {
@@ -44,5 +39,5 @@ export interface DetectionResult {
 export interface DetectFloorPlanResult extends DetectionResult {
   usedModel?: string;
   usedMock?: boolean;
-  image?: string; // ✅ FIX สำคัญ
+  image?: string;
 }

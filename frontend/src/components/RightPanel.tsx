@@ -16,25 +16,7 @@ interface RightPanelProps {
   onBack?: () => void;
 }
 
-const getWidthM = (
-  bboxW?: number,
-  real?: number,
-  imgWidth?: number,
-  scale?: number
-) => {
-  if (typeof real === "number") return real;
-  if (typeof bboxW !== "number" || !imgWidth || !scale) return 0;
-  return bboxW * imgWidth * scale;
-};
-
-// ── Per-room colour palette based on confidence ───────────────────────────────
-const CONF_COLORS: Record<Room["confidence"], { wall: string; floor: string; emissive: string }> = {
-  high: { wall: "#2d4a6b", floor: "#1a2f42", emissive: "#0d2035" },
-  low: { wall: "#4a3b20", floor: "#2d2410", emissive: "#20180a" },
-  manual: { wall: "#2d3545", floor: "#1a2030", emissive: "#10141e" },
-};
-
-// Room index colours for variety
+// ── Per-room colour palette based on index ────────────────────────────────────
 const ROOM_PALETTE = [
   { wall: "#1e3a5f", floor: "#0f2035" },
   { wall: "#1f3d35", floor: "#0f2018" },
@@ -43,8 +25,28 @@ const ROOM_PALETTE = [
   { wall: "#1a3550", floor: "#0d1e30" },
 ];
 
-// Plan size constant — maps normalised 0-1 bbox to world units
+// ── World-unit constants ──────────────────────────────────────────────────────
+// Walls / doors / windows ใช้ normalized coords (0–1) × PLAN_SIZE → world units
+// Rooms ใช้ bbox × PLAN_SIZE → world units (ไม่ต้องคูณ scale ซ้ำ)
 const PLAN_SIZE = 20;
+
+// ── Safe number helper ────────────────────────────────────────────────────────
+// ป้องกัน NaN / undefined ก่อนเรียก .toFixed() หรือใช้ใน geometry
+const safeNum = (v: unknown, fallback = 0): number => {
+  const n = Number(v);
+  return isFinite(n) ? n : fallback;
+};
+
+// ── Width in metres from bbox or explicit value ───────────────────────────────
+const getWidthM = (
+  bboxW?: number,
+  real?: number,
+  planSize = PLAN_SIZE,
+): number => {
+  if (typeof real === "number" && real > 0) return real;
+  if (typeof bboxW === "number" && bboxW > 0) return bboxW * planSize;
+  return 0;
+};
 
 // ── Animated room mesh ────────────────────────────────────────────────────────
 function RoomMesh({
@@ -61,13 +63,17 @@ function RoomMesh({
   onHover: (id: string | null) => void;
 }) {
   const groupRef = useRef<THREE.Group>(null);
-  const w = room.width;
-  const d = room.height;           // depth (floor plan "height")
-  const h = room.wallHeight ?? 2.8; // ACTUAL wall height from detection
-  const t = 0.12;                  // wall thickness
+
+  // FIX: guard ทุกค่าด้วย safeNum ป้องกัน NaN / undefined ก่อนใช้ใน geometry
+  // room.width / room.height เป็น normalized bbox fraction (0–1)
+  // คูณ PLAN_SIZE → world metres
+  const w = Math.max(safeNum(room.bbox?.w) * PLAN_SIZE, 0.5);
+  const d = Math.max(safeNum(room.bbox?.h) * PLAN_SIZE, 0.5);
+  const h = Math.max(safeNum(room.wallHeight, 2.8), 0.5);
+  const t = 0.12; // wall thickness
 
   const pal = ROOM_PALETTE[index % ROOM_PALETTE.length];
-  const wallColor = hovered ? "#3a6fa8" : pal.wall;
+  const wallColor  = hovered ? "#3a6fa8" : pal.wall;
   const floorColor = pal.floor;
 
   // Gentle float on hover
@@ -81,15 +87,11 @@ function RoomMesh({
     );
   });
 
-  const walls = [
-    // Front
-    { pos: [0, h / 2, d / 2] as [number, number, number], size: [w, h, t] as [number, number, number] },
-    // Back
-    { pos: [0, h / 2, -d / 2] as [number, number, number], size: [w, h, t] as [number, number, number] },
-    // Left
-    { pos: [-w / 2, h / 2, 0] as [number, number, number], size: [t, h, d] as [number, number, number] },
-    // Right
-    { pos: [w / 2, h / 2, 0] as [number, number, number], size: [t, h, d] as [number, number, number] },
+  const wallDefs = [
+    { pos: [0, h / 2,  d / 2] as [number, number, number], size: [w, h, t] as [number, number, number] }, // Front
+    { pos: [0, h / 2, -d / 2] as [number, number, number], size: [w, h, t] as [number, number, number] }, // Back
+    { pos: [-w / 2, h / 2, 0] as [number, number, number], size: [t, h, d] as [number, number, number] }, // Left
+    { pos: [ w / 2, h / 2, 0] as [number, number, number], size: [t, h, d] as [number, number, number] }, // Right
   ];
 
   return (
@@ -105,7 +107,7 @@ function RoomMesh({
         <meshStandardMaterial color={floorColor} roughness={0.8} metalness={0.1} />
       </mesh>
 
-      {/* Ceiling edge glow (thin plane at top) */}
+      {/* Ceiling edge glow */}
       <mesh position={[0, h, 0]} rotation={[-Math.PI / 2, 0, 0]}>
         <planeGeometry args={[w, d]} />
         <meshStandardMaterial
@@ -119,7 +121,7 @@ function RoomMesh({
       </mesh>
 
       {/* Walls */}
-      {walls.map((wall, i) => (
+      {wallDefs.map((wall, i) => (
         <mesh key={i} position={wall.pos} castShadow receiveShadow>
           <boxGeometry args={wall.size} />
           <meshStandardMaterial
@@ -141,10 +143,10 @@ function RoomMesh({
         anchorY="middle"
         font={undefined}
       >
-        {room.name}
+        {room.name ?? "Room"}
       </Text>
 
-      {/* Dimension labels on floor */}
+      {/* Dimension labels on floor — FIX: ใช้ w/d ที่คำนวณไว้แล้วแทน room.width/height */}
       <Text
         position={[0, 0.05, d / 2 + 0.3]}
         rotation={[-Math.PI / 2, 0, 0]}
@@ -153,7 +155,7 @@ function RoomMesh({
         anchorX="center"
         anchorY="middle"
       >
-        {room.width.toFixed(1)}m
+        {`${w.toFixed(1)}m`}
       </Text>
       <Text
         position={[w / 2 + 0.3, 0.05, 0]}
@@ -163,7 +165,7 @@ function RoomMesh({
         anchorX="center"
         anchorY="middle"
       >
-        {room.height.toFixed(1)}m
+        {`${d.toFixed(1)}m`}
       </Text>
     </group>
   );
@@ -177,7 +179,6 @@ function WallSegmentMesh({
   wall: DetectedWallSegment;
   wallHeight: number;
 }) {
-  // Convert normalised coords to world coords
   const x1 = wall.x1 * PLAN_SIZE - PLAN_SIZE / 2;
   const z1 = wall.y1 * PLAN_SIZE - PLAN_SIZE / 2;
   const x2 = wall.x2 * PLAN_SIZE - PLAN_SIZE / 2;
@@ -188,33 +189,23 @@ function WallSegmentMesh({
   const rawLength = Math.sqrt(dx * dx + dz * dz);
   const angle = Math.atan2(dz, dx);
 
-  const wallHeight = wall.wallHeight ?? defaultWallHeight;
-  const thickness = wall.thickness ?? (wall.type === "exterior" ? 0.25 : 0.15);
+  const wallHeight  = safeNum(wall.wallHeight, defaultWallHeight);
+  const thickness   = safeNum(wall.thickness, wall.type === "exterior" ? 0.25 : 0.15);
 
-  // ── Miter compensation ──────────────────────────────────────────────────────
-  // Shorten each wall by half its own thickness on both ends so adjacent
-  // walls that meet at a T-junction or corner no longer overlap.
-  // The half-thickness "ear" is donated to the wall running perpendicular.
   const halfT = thickness / 2;
   const effectiveLength = Math.max(0.01, rawLength - halfT * 2);
 
-  // Midpoint of the trimmed segment (same as original mid — trimming is symmetric)
   const cx = (x1 + x2) / 2;
   const cz = (z1 + z2) / 2;
 
   const isExterior = wall.type === "exterior";
-  const color = isExterior ? "#4a5568" : "#6b7280";
-  const emissive = isExterior ? "#1a2332" : "#1f2937";
+  const color     = isExterior ? "#4a5568" : "#6b7280";
+  const emissive  = isExterior ? "#1a2332" : "#1f2937";
   const typeColor = isExterior ? "#e2e8f0" : "#94a3b8";
 
   return (
     <group position={[cx, 0, cz]} rotation={[0, -angle, 0]}>
-      {/* Wall body — shortened by half-thickness on each end */}
-      <mesh
-        position={[0, wallHeight / 2, 0]}
-        castShadow
-        receiveShadow
-      >
+      <mesh position={[0, wallHeight / 2, 0]} castShadow receiveShadow>
         <boxGeometry args={[effectiveLength, wallHeight, thickness]} />
         <meshStandardMaterial
           color={color}
@@ -228,18 +219,9 @@ function WallSegmentMesh({
         />
       </mesh>
 
-      {/* Length label — on top of wall */}
-      <Text
-        position={[0, wallHeight + 0.2, 0]}
-        fontSize={0.16}
-        color={typeColor}
-        anchorX="center"
-        anchorY="middle"
-      >
+      <Text position={[0, wallHeight + 0.2, 0]} fontSize={0.16} color={typeColor} anchorX="center" anchorY="middle">
         {`${rawLength.toFixed(1)}m`}
       </Text>
-
-      {/* Height label — side of wall */}
       <Text
         position={[effectiveLength / 2 + 0.15, wallHeight / 2, thickness / 2 + 0.05]}
         fontSize={0.12}
@@ -250,15 +232,7 @@ function WallSegmentMesh({
       >
         {`H ${wallHeight.toFixed(1)}m`}
       </Text>
-
-      {/* Type + thickness label — below length */}
-      <Text
-        position={[0, wallHeight + 0.4, 0]}
-        fontSize={0.11}
-        color={wall.type === "exterior" ? "#cbd5e1" : "#9ca3af"}
-        anchorX="center"
-        anchorY="middle"
-      >
+      <Text position={[0, wallHeight + 0.4, 0]} fontSize={0.11} color={typeColor} anchorX="center" anchorY="middle">
         {`${isExterior ? "EXT" : "INT"} · ${(thickness * 100).toFixed(0)}cm`}
       </Text>
     </group>
@@ -269,64 +243,46 @@ function WallSegmentMesh({
 function DoorMesh({
   door,
   wallHeight,
-  scale,
 }: {
   door: DetectedDoor;
   wallHeight: number;
-  scale: number;
 }) {
-  // Door position from bbox (normalised)
   if (!door.bbox) return null;
   const cx = (door.bbox.x + door.bbox.w / 2) * PLAN_SIZE - PLAN_SIZE / 2;
   const cz = (door.bbox.y + door.bbox.h / 2) * PLAN_SIZE - PLAN_SIZE / 2;
-  const doorW = Math.max(getWidthM(door.bbox?.w, door.widthM, PLAN_SIZE, scale),0.8);
+  // FIX: ไม่ต้องรับ scale แล้ว — getWidthM ใช้ bbox × PLAN_SIZE โดยตรง
+  const doorW = Math.max(getWidthM(door.bbox.w, door.widthM), 0.8);
   const doorH = Math.min(wallHeight * 0.85, 2.1);
   const doorD = 0.12;
 
-  // Determine door orientation from bbox aspect ratio
- const bboxW = (door.bbox?.w ?? 0) * PLAN_SIZE;
-  const bboxH = (door.bbox?.h ?? 0) * PLAN_SIZE;  
+  const bboxW = door.bbox.w * PLAN_SIZE;
+  const bboxH = door.bbox.h * PLAN_SIZE;
   const isHorizontal = bboxW > bboxH;
   const rotY = isHorizontal ? 0 : Math.PI / 2;
 
   return (
     <group position={[cx, 0, cz]} rotation={[0, rotY, 0]}>
-      {/* Door frame — left */}
+      {/* Frame left */}
       <mesh position={[-doorW / 2 - 0.04, doorH / 2, 0]} castShadow>
         <boxGeometry args={[0.08, doorH, doorD + 0.06]} />
         <meshStandardMaterial color="#92400e" roughness={0.5} metalness={0.1} />
       </mesh>
-      {/* Door frame — right */}
+      {/* Frame right */}
       <mesh position={[doorW / 2 + 0.04, doorH / 2, 0]} castShadow>
         <boxGeometry args={[0.08, doorH, doorD + 0.06]} />
         <meshStandardMaterial color="#92400e" roughness={0.5} metalness={0.1} />
       </mesh>
-      {/* Door frame — top */}
+      {/* Frame top */}
       <mesh position={[0, doorH + 0.04, 0]} castShadow>
         <boxGeometry args={[doorW + 0.16, 0.08, doorD + 0.06]} />
         <meshStandardMaterial color="#92400e" roughness={0.5} metalness={0.1} />
       </mesh>
-      {/* Door panel (slightly open) */}
+      {/* Door panel */}
       <mesh position={[doorW / 4, doorH / 2, doorD / 2 + 0.02]} castShadow>
         <boxGeometry args={[doorW * 0.48, doorH - 0.05, 0.05]} />
-        <meshStandardMaterial
-          color="#b45309"
-          emissive="#451a03"
-          emissiveIntensity={0.2}
-          roughness={0.4}
-          metalness={0.08}
-          transparent
-          opacity={0.9}
-        />
+        <meshStandardMaterial color="#b45309" emissive="#451a03" emissiveIntensity={0.2} roughness={0.4} metalness={0.08} transparent opacity={0.9} />
       </mesh>
-      {/* Door label */}
-      <Text
-        position={[0, doorH + 0.3, 0]}
-        fontSize={0.15}
-        color="#f59e0b"
-        anchorX="center"
-        anchorY="middle"
-      >
+      <Text position={[0, doorH + 0.3, 0]} fontSize={0.15} color="#f59e0b" anchorX="center" anchorY="middle">
         {`D ${doorW.toFixed(1)}m`}
       </Text>
     </group>
@@ -337,133 +293,99 @@ function DoorMesh({
 function WindowMesh({
   win,
   wallHeight,
-  scale,
 }: {
   win: DetectedWindow;
   wallHeight: number;
-  scale: number;
 }) {
   if (!win.bbox) return null;
   const cx = (win.bbox.x + win.bbox.w / 2) * PLAN_SIZE - PLAN_SIZE / 2;
   const cz = (win.bbox.y + win.bbox.h / 2) * PLAN_SIZE - PLAN_SIZE / 2;
-  const winW = Math.max(getWidthM(win.bbox?.w, win.widthM, PLAN_SIZE, scale),0.6);
-  const winH = Math.min(wallHeight * 0.45, 1.2);
-  const winD = 0.08;
-  const sillY = wallHeight * 0.35; // window sill height
+  // FIX: ไม่ต้องรับ scale แล้ว
+  const winW  = Math.max(getWidthM(win.bbox.w, win.widthM), 0.6);
+  const winH  = Math.min(wallHeight * 0.45, 1.2);
+  const winD  = 0.08;
+  const sillY = wallHeight * 0.35;
 
-  // Determine orientation
-  const bboxW = (win.bbox?.w ?? 0) * PLAN_SIZE;
-  const bboxH = (win.bbox?.h ?? 0) * PLAN_SIZE;
+  const bboxW = win.bbox.w * PLAN_SIZE;
+  const bboxH = win.bbox.h * PLAN_SIZE;
   const isHorizontal = bboxW > bboxH;
   const rotY = isHorizontal ? 0 : Math.PI / 2;
 
   return (
     <group position={[cx, sillY, cz]} rotation={[0, rotY, 0]}>
-      {/* Window frame */}
+      {/* Frame */}
       <mesh castShadow>
         <boxGeometry args={[winW + 0.1, winH + 0.1, winD + 0.04]} />
         <meshStandardMaterial color="#64748b" roughness={0.4} metalness={0.3} />
       </mesh>
-      {/* Glass pane — left */}
+      {/* Glass left */}
       <mesh position={[-winW / 4, 0, 0]}>
         <boxGeometry args={[winW / 2 - 0.04, winH - 0.06, winD - 0.02]} />
-        <meshStandardMaterial
-          color="#67e8f9"
-          emissive="#06b6d4"
-          emissiveIntensity={0.15}
-          roughness={0.1}
-          metalness={0.5}
-          transparent
-          opacity={0.35}
-        />
+        <meshStandardMaterial color="#67e8f9" emissive="#06b6d4" emissiveIntensity={0.15} roughness={0.1} metalness={0.5} transparent opacity={0.35} />
       </mesh>
-      {/* Glass pane — right */}
+      {/* Glass right */}
       <mesh position={[winW / 4, 0, 0]}>
         <boxGeometry args={[winW / 2 - 0.04, winH - 0.06, winD - 0.02]} />
-        <meshStandardMaterial
-          color="#67e8f9"
-          emissive="#06b6d4"
-          emissiveIntensity={0.15}
-          roughness={0.1}
-          metalness={0.5}
-          transparent
-          opacity={0.35}
-        />
+        <meshStandardMaterial color="#67e8f9" emissive="#06b6d4" emissiveIntensity={0.15} roughness={0.1} metalness={0.5} transparent opacity={0.35} />
       </mesh>
-      {/* Cross bar (vertical divider) */}
+      {/* Vertical divider */}
       <mesh position={[0, 0, 0]}>
         <boxGeometry args={[0.04, winH - 0.06, winD]} />
         <meshStandardMaterial color="#94a3b8" roughness={0.4} metalness={0.3} />
       </mesh>
-      {/* Cross bar (horizontal divider) */}
+      {/* Horizontal divider */}
       <mesh position={[0, 0, 0]}>
         <boxGeometry args={[winW - 0.06, 0.04, winD]} />
         <meshStandardMaterial color="#94a3b8" roughness={0.4} metalness={0.3} />
       </mesh>
-      {/* Window label */}
-      <Text
-        position={[0, winH / 2 + 0.25, 0]}
-        fontSize={0.13}
-        color="#06b6d4"
-        anchorX="center"
-        anchorY="middle"
-      >
+      <Text position={[0, winH / 2 + 0.25, 0]} fontSize={0.13} color="#06b6d4" anchorX="center" anchorY="middle">
         {`W ${winW.toFixed(1)}m`}
       </Text>
     </group>
   );
 }
 
-// ── Compute positions from bbox if available, else auto-layout ────────────────
-function computePositions(
-  rooms: Room[],
-  scale: number,
-): [number, number, number][] {
-  // Check if rooms have bbox (from AI detection)
-  const hasBbox = rooms.every((r) => (r as Room & { bbox?: object }).bbox);
+// ── Compute 3D positions from room bbox ───────────────────────────────────────
+function computePositions(rooms: Room[]): [number, number, number][] {
+  const hasBbox = rooms.every((r) => r.bbox);
 
   if (hasBbox) {
-    // Use bbox x/y → 3D x/z, scaled to meters
+    // FIX: ใช้ bbox × PLAN_SIZE โดยตรง — ไม่คูณ scale ซ้ำ
+    // scale ใน WallReview ใช้สำหรับแสดงผลเมตรบน UI เท่านั้น
+    // ใน 3D world เราใช้ normalized coords × PLAN_SIZE เป็น world units
     return rooms.map((r) => {
-      const bbox = (r as Room & { bbox: { x: number; y: number; w: number; h: number } }).bbox;
+      const bbox = r.bbox!;
       const cx = (bbox.x + bbox.w / 2) * PLAN_SIZE - PLAN_SIZE / 2;
       const cz = (bbox.y + bbox.h / 2) * PLAN_SIZE - PLAN_SIZE / 2;
-      return [cx * scale, 0, cz * scale];
+      return [cx, 0, cz];
     });
   }
 
-  // Fallback: arrange in a smart grid
+  // Fallback: grid layout
   const cols = Math.ceil(Math.sqrt(rooms.length));
-  return rooms.map((room, i) => {
+  return rooms.map((_, i) => {
     const col = i % cols;
     const row = Math.floor(i / cols);
-    let x = 0, z = 0;
-    let ox = 0;
-    for (let j = 0; j < rooms.length; j++) {
-      if (j % cols === 0 && j > 0) ox = 0;
-      if (j === i) {
-        x = ox + (rooms[j].width * scale) / 2;
-        z = row * 8;
-        break;
-      }
-      ox += rooms[j].width * scale + 0.8;
-    }
-    return [x - 5, 0, z - (Math.floor(rooms.length / cols) * 4)] as [number, number, number];
+    return [col * 8 - (cols * 4), 0, row * 8 - (Math.floor(rooms.length / cols) * 4)] as [number, number, number];
   });
 }
 
 // ── Info overlay ──────────────────────────────────────────────────────────────
 function RoomInfoCard({ room }: { room: Room }) {
+  // FIX: ใช้ bbox สำหรับ display — guard ด้วย safeNum
+  const w = safeNum(room.bbox?.w) * PLAN_SIZE;
+  const d = safeNum(room.bbox?.h) * PLAN_SIZE;
+  const h = safeNum(room.wallHeight, 2.8);
   return (
     <div className="absolute bottom-4 left-1/2 -translate-x-1/2 px-4 py-2.5 rounded-2xl bg-black/70 backdrop-blur-md border border-white/10 shadow-2xl flex items-center gap-4 min-w-[280px] pointer-events-none">
       <div className="flex-1 min-w-0">
         <p className="text-xs font-semibold text-foreground truncate">{room.name}</p>
         <p className="text-[10px] text-muted-foreground mt-0.5 font-mono">
-          {room.width.toFixed(2)}m × {room.height.toFixed(2)}m · H: {(room.wallHeight ?? 2.8).toFixed(2)}m
+          {w.toFixed(2)}m × {d.toFixed(2)}m · H: {h.toFixed(2)}m
         </p>
       </div>
       <div className="text-right shrink-0">
-        <p className="text-[11px] font-mono text-primary">{(room.width * room.height).toFixed(1)} m²</p>
+        <p className="text-[11px] font-mono text-primary">{(w * d).toFixed(1)} m²</p>
         <p className="text-[9px] text-muted-foreground/60 uppercase tracking-wider">{room.confidence}</p>
       </div>
     </div>
@@ -471,7 +393,9 @@ function RoomInfoCard({ room }: { room: Room }) {
 }
 
 // ── Scene ─────────────────────────────────────────────────────────────────────
-function Scene({ rooms, scale, walls, doors, windows, onHoverChange }: {
+function Scene({
+  rooms, scale, walls, doors, windows, onHoverChange,
+}: {
   rooms: Room[];
   scale: number;
   walls: DetectedWallSegment[];
@@ -480,10 +404,12 @@ function Scene({ rooms, scale, walls, doors, windows, onHoverChange }: {
   onHoverChange: (id: string | null) => void;
 }) {
   const [hoveredId, setHoveredId] = useState<string | null>(null);
-  const positions = computePositions(rooms, scale);
+  // FIX: ไม่ส่ง scale เข้า computePositions แล้ว
+  const positions = computePositions(rooms);
 
-  // Default wall height — max from rooms or 2.8
-  const defaultWallHeight = Math.max(...rooms.map((r) => r.wallHeight ?? 2.8), 2.8);
+  const defaultWallHeight = rooms.length > 0
+    ? Math.max(...rooms.map((r) => safeNum(r.wallHeight, 2.8)), 2.8)
+    : 2.8;
 
   const handleHover = (id: string | null) => {
     setHoveredId(id);
@@ -493,12 +419,7 @@ function Scene({ rooms, scale, walls, doors, windows, onHoverChange }: {
   return (
     <>
       <ambientLight intensity={0.4} />
-      <directionalLight
-        position={[10, 16, 10]}
-        intensity={0.8}
-        castShadow
-        shadow-mapSize={[2048, 2048]}
-      />
+      <directionalLight position={[10, 16, 10]} intensity={0.8} castShadow shadow-mapSize={[2048, 2048]} />
       <pointLight position={[-8, 10, -8]} intensity={0.3} color="#60a5fa" />
       <pointLight position={[8, 6, 8]} intensity={0.2} color="#a78bfa" />
 
@@ -511,7 +432,6 @@ function Scene({ rooms, scale, walls, doors, windows, onHoverChange }: {
         fadeDistance={40}
       />
 
-      {/* Room meshes */}
       {rooms.map((room, i) => (
         <RoomMesh
           key={room.id}
@@ -523,33 +443,17 @@ function Scene({ rooms, scale, walls, doors, windows, onHoverChange }: {
         />
       ))}
 
-      {/* Detected wall segments */}
       {walls.map((wall) => (
-        <WallSegmentMesh
-          key={wall.id}
-          wall={wall}
-          wallHeight={defaultWallHeight}
-        />
+        <WallSegmentMesh key={wall.id} wall={wall} wallHeight={defaultWallHeight} />
       ))}
 
-      {/* Detected doors */}
+      {/* FIX: ไม่ส่ง scale เข้า DoorMesh / WindowMesh แล้ว */}
       {doors.map((door) => (
-        <DoorMesh
-          key={door.id}
-          door={door}
-          wallHeight={defaultWallHeight}
-          scale={scale}
-        />
+        <DoorMesh key={door.id} door={door} wallHeight={defaultWallHeight} />
       ))}
 
-      {/* Detected windows */}
       {windows.map((win) => (
-        <WindowMesh
-          key={win.id}
-          win={win}
-          wallHeight={defaultWallHeight}
-          scale={scale}
-        />
+        <WindowMesh key={win.id} win={win} wallHeight={defaultWallHeight} />
       ))}
 
       <OrbitControls
@@ -566,15 +470,23 @@ function Scene({ rooms, scale, walls, doors, windows, onHoverChange }: {
 }
 
 // ── Main component ────────────────────────────────────────────────────────────
-const RightPanel = ({ rooms, generated, scale, walls = [], doors = [], windows = [], onBack }: RightPanelProps) => {
-  
+const RightPanel = ({
+  rooms, generated, scale, walls = [], doors = [], windows = [], onBack,
+}: RightPanelProps) => {
   const [hoveredId, setHoveredId] = useState<string | null>(null);
   const hoveredRoom = rooms.find((r) => r.id === hoveredId) ?? null;
 
-  // Camera position based on total plan size
-  const totalW = rooms.reduce((s, r) => s + r.width, 0);
-  const maxH = Math.max(...rooms.map((r) => r.wallHeight ?? 2.8), 3);
+  // FIX: guard rooms ว่างก่อนเรียก reduce / Math.max
+  const totalW  = rooms.reduce((s, r) => s + safeNum(r.bbox?.w) * PLAN_SIZE, 0);
+  const maxH    = rooms.length > 0 ? Math.max(...rooms.map((r) => safeNum(r.wallHeight, 2.8)), 3) : 3;
   const camDist = Math.max(totalW * 0.8, 15);
+
+  // FIX: stats bar ใช้ bbox × PLAN_SIZE แทน room.width / room.height ตรงๆ
+  const totalArea = rooms.reduce((s, r) => {
+    const w = safeNum(r.bbox?.w) * PLAN_SIZE;
+    const d = safeNum(r.bbox?.h) * PLAN_SIZE;
+    return s + w * d;
+  }, 0);
 
   return (
     <div className="flex-1 flex items-center justify-center bg-background relative overflow-hidden">
@@ -623,30 +535,19 @@ const RightPanel = ({ rooms, generated, scale, walls = [], doors = [], windows =
             </div>
           )}
 
-          {/* Stats bar top-right */}
+          {/* Stats bar */}
           <div className="absolute top-4 right-4 flex items-center gap-3 bg-black/50 border border-white/[0.07] backdrop-blur-md rounded-xl px-3 py-2 z-10">
             <Info className="w-3.5 h-3.5 text-muted-foreground shrink-0" />
             <div className="flex items-center gap-3 text-[10px] font-mono divide-x divide-white/10">
               <span className="text-muted-foreground">{rooms.length} rooms</span>
-              {walls.length > 0 && (
-                <span className="pl-3 text-slate-400">{walls.length} walls</span>
-              )}
-              {doors.length > 0 && (
-                <span className="pl-3 text-amber-400">{doors.length} doors</span>
-              )}
-              {windows.length > 0 && (
-                <span className="pl-3 text-cyan-400">{windows.length} windows</span>
-              )}
-              <span className="pl-3 text-muted-foreground">
-                {rooms.reduce((s, r) => s + r.width * r.height, 0).toFixed(1)} m²
-              </span>
-              <span className="pl-3 text-muted-foreground">
-                H: {Math.max(...rooms.map((r) => r.wallHeight ?? 2.8)).toFixed(1)}m
-              </span>
+              {walls.length > 0   && <span className="pl-3 text-slate-400">{walls.length} walls</span>}
+              {doors.length > 0   && <span className="pl-3 text-amber-400">{doors.length} doors</span>}
+              {windows.length > 0 && <span className="pl-3 text-cyan-400">{windows.length} windows</span>}
+              <span className="pl-3 text-muted-foreground">{totalArea.toFixed(1)} m²</span>
+              <span className="pl-3 text-muted-foreground">H: {maxH.toFixed(1)}m</span>
             </div>
           </div>
 
-          {/* Hover info card */}
           {hoveredRoom && <RoomInfoCard room={hoveredRoom} />}
         </>
       )}

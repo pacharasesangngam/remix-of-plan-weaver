@@ -1,5 +1,5 @@
 import { useState, useCallback } from "react";
-import { ChevronLeft, Key, Loader2, X } from "lucide-react";
+import { ChevronLeft, Loader2 } from "lucide-react";
 import Sidebar from "@/components/Sidebar";
 import RightPanel from "@/components/RightPanel";
 import WallReview from "@/components/WallReview";
@@ -9,20 +9,22 @@ import type { DetectedWallSegment, DetectedDoor, DetectedWindow } from "@/types/
 import type { Room, FloorPlanData, AppMode, DimensionUnit } from "@/types/floorplan";
 
 const Index = () => {
-  const [showSplash, setShowSplash] = useState(true);
-  const [mode, setMode] = useState<AppMode>("simple");
-  const [imageUrl, setImageUrl] = useState<string | null>(null);
-  const [imageFile, setImageFile] = useState<File | null>(null);
-  const [rooms, setRooms] = useState<Room[]>([]);
-  const [walls, setWalls] = useState<DetectedWallSegment[]>([]);
-  const [doors, setDoors] = useState<DetectedDoor[]>([]);
-  const [windows, setWindows] = useState<DetectedWindow[]>([]);
-  const [detected, setDetected] = useState(false);
-  const [detecting, setDetecting] = useState(false);
+  const [showSplash, setShowSplash]   = useState(true);
+  const [mode, setMode]               = useState<AppMode>("simple");
+  const [imageUrl, setImageUrl]       = useState<string | null>(null);
+  const [imageFile, setImageFile]     = useState<File | null>(null);
+  const [rooms, setRooms]             = useState<Room[]>([]);
+  const [walls, setWalls]             = useState<DetectedWallSegment[]>([]);
+  const [doors, setDoors]             = useState<DetectedDoor[]>([]);
+  const [windows, setWindows]         = useState<DetectedWindow[]>([]);
+  const [detected, setDetected]       = useState(false);
+  const [detecting, setDetecting]     = useState(false);
   const [detectError, setDetectError] = useState<string | null>(null);
-  const [generated, setGenerated] = useState(false);
-  const [scale, setScale] = useState(1.0);
-  const [unit, setUnit] = useState<DimensionUnit>("m");
+  const [generated, setGenerated]     = useState(false);
+  // FIX: เริ่มต้น scale = 0 เพื่อให้ WallReview รู้ว่ายังไม่ calibrate
+  // scale จะถูก set จริงเมื่อผู้ใช้กด Apply ใน calibration flow เท่านั้น
+  const [scale, setScale]             = useState(0);
+  const [unit, setUnit]               = useState<DimensionUnit>("m");
 
   const handleImageUpload = useCallback((file: File) => {
     const url = URL.createObjectURL(file);
@@ -35,6 +37,8 @@ const Index = () => {
     setWalls([]);
     setDoors([]);
     setWindows([]);
+    // FIX: reset scale ทุกครั้งที่อัปโหลดรูปใหม่
+    setScale(0);
   }, []);
 
   const handleClear = useCallback(() => {
@@ -48,42 +52,39 @@ const Index = () => {
     setDetecting(false);
     setDetectError(null);
     setGenerated(false);
+    setScale(0);
   }, []);
 
-const handleDetect = useCallback(async () => {
-  if (!imageFile) return;
-
-  setDetecting(true);
-  setDetectError(null);
-
-  try {
-    const result = await detectFloorPlan(imageFile);
-
-    setRooms(result.rooms);
-    setWalls(result.walls);
-    setDoors(result.doors);
-    setWindows(result.windows);
-
-
-    setDetected(true);
-    setGenerated(false);
-  } catch (err: unknown) {
-    setDetectError(err instanceof Error ? err.message : String(err));
-  } finally {
-    setDetecting(false);
-  }
-}, [imageFile]);
+  const handleDetect = useCallback(async () => {
+    if (!imageFile) return;
+    setDetecting(true);
+    setDetectError(null);
+    try {
+      const result = await detectFloorPlan(imageFile);
+      setRooms(result.rooms);
+      setWalls(result.walls);
+      setDoors(result.doors);
+      setWindows(result.windows);
+      setDetected(true);
+      setGenerated(false);
+    } catch (err: unknown) {
+      setDetectError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setDetecting(false);
+    }
+  }, [imageFile]);
 
   const handleRoomUpdate = useCallback((id: string, field: keyof Room, value: number | string) => {
     setRooms(prev =>
-      prev.map(r => r.id === id ? { ...r, [field]: value, confidence: field === "width" || field === "height" ? "manual" : r.confidence } : r)
+      prev.map(r => r.id === id
+        ? { ...r, [field]: value, confidence: (field === "width" || field === "height") ? "manual" : r.confidence }
+        : r
+      )
     );
   }, []);
 
   const handleWallUpdate = useCallback((id: string, field: keyof DetectedWallSegment, value: number | string) => {
-    setWalls(prev =>
-      prev.map(w => w.id === id ? { ...w, [field]: value } : w)
-    );
+    setWalls(prev => prev.map(w => w.id === id ? { ...w, [field]: value } : w));
   }, []);
 
   const handleGenerate = useCallback(() => setGenerated(true), []);
@@ -98,8 +99,12 @@ const handleDetect = useCallback(async () => {
           <div className="px-6 py-3 flex items-center justify-between">
             <div className="flex items-center gap-3">
               {generated && (
-                <button onClick={() => setGenerated(false)} className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors group mr-1">
-                  <ChevronLeft className="w-3.5 h-3.5 group-hover:-translate-x-0.5 transition-transform" /> Back to Review
+                <button
+                  onClick={() => setGenerated(false)}
+                  className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors group mr-1"
+                >
+                  <ChevronLeft className="w-3.5 h-3.5 group-hover:-translate-x-0.5 transition-transform" />
+                  Back to Review
                 </button>
               )}
               <h1 className="text-sm font-semibold text-foreground tracking-tight font-sans">Floor Plan → 3D</h1>
@@ -135,7 +140,9 @@ const handleDetect = useCallback(async () => {
             <div className="flex-1 flex flex-col items-center justify-center gap-4 p-8">
               <p className="text-sm font-semibold text-foreground">Detection ล้มเหลว</p>
               <p className="text-xs text-muted-foreground">{detectError}</p>
-              <button onClick={() => setDetectError(null)} className="text-xs text-primary hover:underline">ลองอีกครั้ง</button>
+              <button onClick={() => setDetectError(null)} className="text-xs text-primary hover:underline">
+                ลองอีกครั้ง
+              </button>
             </div>
           ) : detected && !generated ? (
             <WallReview
@@ -145,8 +152,8 @@ const handleDetect = useCallback(async () => {
               walls={walls}
               doors={doors}
               windows={windows}
-              scale={scale}                 // 🔥 เพิ่ม
-              onScaleChange={setScale}  
+              scale={scale}
+              onScaleChange={setScale}
               onRoomUpdate={handleRoomUpdate}
               onWallUpdate={handleWallUpdate}
               onGenerate={handleGenerate}
@@ -156,7 +163,15 @@ const handleDetect = useCallback(async () => {
               <img src={imageUrl} alt="Floor plan preview" className="max-w-full max-h-full object-contain" />
             </div>
           ) : (
-            <RightPanel rooms={rooms} generated={generated} scale={scale} walls={walls} doors={doors} windows={windows} onBack={() => setGenerated(false)} />
+            <RightPanel
+              rooms={rooms}
+              generated={generated}
+              scale={scale}
+              walls={walls}
+              doors={doors}
+              windows={windows}
+              onBack={() => setGenerated(false)}
+            />
           )}
         </div>
       </div>
