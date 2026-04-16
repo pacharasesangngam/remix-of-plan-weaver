@@ -217,8 +217,8 @@ def extract_clean_walls(results, width, height, doors, windows):
     mask = cv2.dilate(mask, cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3)), iterations=1)
     skel = skeletonize(mask)
 
-    cv2.imwrite("debug_1_mask.png", mask)
-    cv2.imwrite("debug_2_skel.png", skel)
+    # cv2.imwrite("debug_1_mask.png", mask)
+    # cv2.imwrite("debug_2_skel.png", skel)
 
     walls = detect_lines(skel)
     walls = align_axis(walls)
