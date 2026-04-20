@@ -1,4 +1,6 @@
+import base64
 import cv2
+import fitz
 import numpy as np
 from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -69,6 +71,34 @@ def build_wall_mask(results, width, height):
     return mask
 
 
+def decode_input_image(file_bytes, filename=""):
+    lower_name = (filename or "").lower()
+
+    if lower_name.endswith(".pdf") or file_bytes[:4] == b"%PDF":
+        pdf = fitz.open(stream=file_bytes, filetype="pdf")
+        if pdf.page_count == 0:
+            raise ValueError("PDF has no pages")
+
+        page = pdf.load_page(0)
+        pix = page.get_pixmap(matrix=fitz.Matrix(2, 2), alpha=False)
+        img = np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.height, pix.width, pix.n)
+        pdf.close()
+        return cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
+
+    nparr = np.frombuffer(file_bytes, np.uint8)
+    img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+    if img is None:
+        raise ValueError("Unsupported file format")
+    return img
+
+
+def encode_image_data_url(img):
+    success, encoded = cv2.imencode(".png", img)
+    if not success:
+        return None
+    return f"data:image/png;base64,{base64.b64encode(encoded.tobytes()).decode('ascii')}"
+
+
 def extract_rooms(results, width, height):
     rooms = []
     if results.masks is None:
@@ -120,6 +150,59 @@ def align_axis(walls):
         else:
             x = (w["x1"] + w["x2"]) / 2
             w["x1"] = w["x2"] = x
+    return walls
+
+
+def normalize_wall_endpoints(walls):
+    normalized = []
+    for wall in walls:
+        w = wall.copy()
+        if is_horizontal_wall(w):
+            x1, x2 = sorted((w["x1"], w["x2"]))
+            y = (w["y1"] + w["y2"]) / 2
+            w["x1"], w["x2"] = x1, x2
+            w["y1"] = w["y2"] = y
+        else:
+            y1, y2 = sorted((w["y1"], w["y2"]))
+            x = (w["x1"] + w["x2"]) / 2
+            w["y1"], w["y2"] = y1, y2
+            w["x1"] = w["x2"] = x
+        normalized.append(w)
+    return normalized
+
+
+def snap_axis_clusters(walls, axis_thresh=12):
+    horizontals = [w for w in walls if is_horizontal_wall(w)]
+    verticals = [w for w in walls if not is_horizontal_wall(w)]
+
+    def snap_group(group, axis_key):
+        if not group:
+            return
+        group.sort(key=lambda wall: wall[axis_key])
+        cluster = [group[0]]
+        for wall in group[1:]:
+            if abs(wall[axis_key] - cluster[-1][axis_key]) <= axis_thresh:
+                cluster.append(wall)
+                continue
+            snapped = float(np.mean([item[axis_key] for item in cluster]))
+            for item in cluster:
+                item[axis_key] = snapped
+                if axis_key == "x1":
+                    item["x2"] = snapped
+                else:
+                    item["y2"] = snapped
+            cluster = [wall]
+
+        snapped = float(np.mean([item[axis_key] for item in cluster]))
+        for item in cluster:
+            item[axis_key] = snapped
+            if axis_key == "x1":
+                item["x2"] = snapped
+            else:
+                item["y2"] = snapped
+
+    snap_group(horizontals, "y1")
+    snap_group(verticals, "x1")
     return walls
 
 
@@ -189,6 +272,34 @@ def snap_and_trim_corners(walls, snap_dist=70):
     return walls
 
 
+def connect_wall_junctions(walls, snap_dist=35):
+    horizontals = [w for w in walls if is_horizontal_wall(w)]
+    verticals = [w for w in walls if not is_horizontal_wall(w)]
+
+    for h in horizontals:
+        hx1, hx2 = sorted((h["x1"], h["x2"]))
+        hy = h["y1"]
+        for v in verticals:
+            vy1, vy2 = sorted((v["y1"], v["y2"]))
+            vx = v["x1"]
+
+            can_meet = hx1 - snap_dist <= vx <= hx2 + snap_dist and vy1 - snap_dist <= hy <= vy2 + snap_dist
+            if not can_meet:
+                continue
+
+            if abs(h["x1"] - vx) <= snap_dist:
+                h["x1"] = vx
+            elif abs(h["x2"] - vx) <= snap_dist:
+                h["x2"] = vx
+
+            if abs(v["y1"] - hy) <= snap_dist:
+                v["y1"] = hy
+            elif abs(v["y2"] - hy) <= snap_dist:
+                v["y2"] = hy
+
+    return normalize_wall_endpoints(walls)
+
+
 def snap_to_borders(walls, w, h, margin=35):
     for wall in walls:
         for k in ["x1", "x2"]:
@@ -202,6 +313,59 @@ def snap_to_borders(walls, w, h, margin=35):
             elif wall[k] > h - margin:
                 wall[k] = float(h)
     return walls
+
+
+def wall_length(wall):
+    return float(np.hypot(wall["x2"] - wall["x1"], wall["y2"] - wall["y1"]))
+
+
+def is_horizontal_wall(wall):
+    return abs(wall["y1"] - wall["y2"]) <= abs(wall["x1"] - wall["x2"])
+
+
+def wall_overlap_ratio(a, b):
+    a_horizontal = is_horizontal_wall(a)
+    b_horizontal = is_horizontal_wall(b)
+    if a_horizontal != b_horizontal:
+        return 0.0
+
+    if a_horizontal:
+        if abs(a["y1"] - b["y1"]) > 10:
+            return 0.0
+        a_min, a_max = sorted((a["x1"], a["x2"]))
+        b_min, b_max = sorted((b["x1"], b["x2"]))
+    else:
+        if abs(a["x1"] - b["x1"]) > 10:
+            return 0.0
+        a_min, a_max = sorted((a["y1"], a["y2"]))
+        b_min, b_max = sorted((b["y1"], b["y2"]))
+
+    overlap = max(0.0, min(a_max, b_max) - max(a_min, b_min))
+    shorter = max(1.0, min(a_max - a_min, b_max - b_min))
+    return overlap / shorter
+
+
+def average_parallel_gap(a, b):
+    if is_horizontal_wall(a):
+        return abs(a["y1"] - b["y1"])
+    return abs(a["x1"] - b["x1"])
+
+
+def dedupe_walls(walls):
+    if len(walls) < 2:
+        return walls
+
+    kept = []
+    for wall in sorted(walls, key=wall_length, reverse=True):
+        duplicate = False
+        for existing in kept:
+            overlap_ratio = wall_overlap_ratio(wall, existing)
+            if overlap_ratio >= 0.9 and average_parallel_gap(wall, existing) <= 10:
+                duplicate = True
+                break
+        if not duplicate:
+            kept.append(wall)
+    return kept
 
 
 def extract_clean_walls(results, width, height, doors, windows):
@@ -222,9 +386,14 @@ def extract_clean_walls(results, width, height, doors, windows):
 
     walls = detect_lines(skel)
     walls = align_axis(walls)
+    walls = normalize_wall_endpoints(walls)
+    walls = snap_axis_clusters(walls)
     walls = merge_collinear(walls)
     walls = snap_and_trim_corners(walls, 50)
+    walls = connect_wall_junctions(walls, 45)
+    walls = merge_collinear(walls, perp_thresh=12, gap_thresh=45)
     walls = snap_to_borders(walls, width, height, 35)
+    walls = dedupe_walls(walls)
 
     final_walls = []
     for i, w in enumerate(walls):
@@ -244,9 +413,9 @@ def extract_clean_walls(results, width, height, doors, windows):
     return final_walls
 
 
-def detect(image_bytes):
-    nparr = np.frombuffer(image_bytes, np.uint8)
-    img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+def detect(file_bytes, filename=""):
+    img = decode_input_image(file_bytes, filename)
+    preview_image = encode_image_data_url(img)
     h, w = img.shape[:2]
     results = model(img, imgsz=IMG_SIZE)[0]
     doors, windows = [], []
@@ -287,13 +456,13 @@ def detect(image_bytes):
     rooms = extract_rooms(results, w, h)
     walls = extract_clean_walls(results, w, h, doors, windows)
 
-    return rooms, walls, doors, windows, calculated_scale
+    return rooms, walls, doors, windows, calculated_scale, preview_image
 
 
 @app.post("/api/detect-floorplan")
 async def analyze(file: UploadFile = File(...)):
     try:
-        rooms, walls, doors, windows, scale = detect(await file.read())
+        rooms, walls, doors, windows, scale, preview_image = detect(await file.read(), file.filename or "")
         return {
             "meta": {
                 "unit": "m",
@@ -303,6 +472,7 @@ async def analyze(file: UploadFile = File(...)):
             "walls": to_python(walls),
             "doors": to_python(doors),
             "windows": to_python(windows),
+            "image": preview_image,
         }
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))

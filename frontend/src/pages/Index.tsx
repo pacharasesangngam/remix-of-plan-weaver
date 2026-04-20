@@ -1,5 +1,6 @@
-import { useState, useCallback } from "react";
-import { ChevronLeft, Loader2 } from "lucide-react";
+import { useState, useCallback, useEffect } from "react";
+import { ChevronLeft, Loader2, Moon, Sun } from "lucide-react";
+import { useTheme } from "next-themes";
 import Sidebar from "@/components/Sidebar";
 import RightPanel from "@/components/RightPanel";
 import WallReview from "@/components/WallReview";
@@ -9,9 +10,12 @@ import type { DetectedWallSegment, DetectedDoor, DetectedWindow } from "@/types/
 import type { Room, FloorPlanData, AppMode, DimensionUnit } from "@/types/floorplan";
 
 const Index = () => {
+  const { theme, setTheme } = useTheme();
+  const [mounted, setMounted]           = useState(false);
   const [showSplash, setShowSplash]   = useState(true);
   const [mode, setMode]               = useState<AppMode>("simple");
   const [imageUrl, setImageUrl]       = useState<string | null>(null);
+  const [fileType, setFileType]       = useState<string | null>(null);
   const [imageFile, setImageFile]     = useState<File | null>(null);
   const [rooms, setRooms]             = useState<Room[]>([]);
   const [walls, setWalls]             = useState<DetectedWallSegment[]>([]);
@@ -26,9 +30,14 @@ const Index = () => {
   const [scale, setScale]             = useState(0);
   const [unit, setUnit]               = useState<DimensionUnit>("m");
 
+  useEffect(() => {
+    setMounted(true);
+  }, []);
+
   const handleImageUpload = useCallback((file: File) => {
     const url = URL.createObjectURL(file);
     setImageUrl(url);
+    setFileType(file.type || null);
     setImageFile(file);
     setDetected(false);
     setGenerated(false);
@@ -43,6 +52,7 @@ const Index = () => {
 
   const handleClear = useCallback(() => {
     setImageUrl(null);
+    setFileType(null);
     setImageFile(null);
     setRooms([]);
     setWalls([]);
@@ -61,6 +71,10 @@ const Index = () => {
     setDetectError(null);
     try {
       const result = await detectFloorPlan(imageFile);
+      if (result.image) {
+        setImageUrl(result.image);
+        setFileType("image/png");
+      }
       setRooms(result.rooms);
       setWalls(result.walls);
       setDoors(result.doors);
@@ -109,6 +123,14 @@ const Index = () => {
               )}
               <h1 className="text-sm font-semibold text-foreground tracking-tight font-sans">Floor Plan → 3D</h1>
             </div>
+            <button
+              onClick={() => setTheme(theme === "dark" ? "light" : "dark")}
+              className="inline-flex items-center gap-2 rounded-xl border border-border bg-card px-3 py-2 text-xs text-muted-foreground transition-colors hover:text-foreground"
+              aria-label="Toggle theme"
+            >
+              {mounted && theme === "dark" ? <Sun className="w-3.5 h-3.5" /> : <Moon className="w-3.5 h-3.5" />}
+              {mounted && theme === "dark" ? "Light" : "Dark"}
+            </button>
           </div>
         </header>
 
@@ -117,6 +139,7 @@ const Index = () => {
             mode={mode}
             unit={unit}
             imageUrl={imageUrl}
+            fileType={fileType}
             rooms={rooms}
             detected={detected}
             detecting={detecting}
@@ -160,7 +183,11 @@ const Index = () => {
             />
           ) : imageUrl && !generated ? (
             <div className="flex-1 flex flex-col items-center justify-center bg-background relative overflow-hidden p-6 gap-4">
-              <img src={imageUrl} alt="Floor plan preview" className="max-w-full max-h-full object-contain" />
+              {fileType === "application/pdf" ? (
+                <iframe src={imageUrl} title="Floor plan PDF preview" className="h-full w-full rounded-2xl border border-border bg-card" />
+              ) : (
+                <img src={imageUrl} alt="Floor plan preview" className="max-w-full max-h-full object-contain" />
+              )}
             </div>
           ) : (
             <RightPanel

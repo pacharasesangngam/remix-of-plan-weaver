@@ -294,10 +294,19 @@ const WallReview = ({
         return px / 40;
     };
 
-    const getWallThickness = (w: DetectedWallSegment) => w.thickness ?? (w.type === "exterior" ? 0.25 : 0.15);
-    const getWallHeight    = (w: DetectedWallSegment) => w.wallHeight ?? 2.8;
+    const getWallThickness = (w: DetectedWallSegment): number | null =>
+        typeof w.thickness === "number" ? w.thickness : null;
+    const getWallHeight = (w: DetectedWallSegment): number | null =>
+        typeof w.wallHeight === "number" ? w.wallHeight : null;
+    const getWallThicknessLabel = (w: DetectedWallSegment) =>
+        getWallThickness(w) !== null
+            ? `${(getWallThickness(w)! * 100).toFixed(0)}cm`
+            : w.thicknessRatio != null
+                ? `r ${(w.thicknessRatio).toFixed(3)}`
+                : "N/A";
 
-    const startWallEdit  = (wallId: string, field: WallEditState["field"], val: number) => setWallEditState({ wallId, field, value: String(val) });
+    const startWallEdit = (wallId: string, field: WallEditState["field"], val?: number | null) =>
+        setWallEditState({ wallId, field, value: val == null ? "" : String(val) });
     const commitWallEdit = () => {
         if (!wallEditState || !onWallUpdate) return;
         const v = parseFloat(wallEditState.value);
@@ -322,10 +331,10 @@ const WallReview = ({
         calibrated ? normDim * (axis === "w" ? imgSize.w : imgSize.h) * scale : null;
 
     // ── ค่า label บน SVG overlay ────────────────────────────
-    // ถ้ายังไม่ calibrate แสดง "—" แทนตัวเลขเมตร
+    // ถ้ายังไม่ calibrate แสดง "N/A" แทนตัวเลขเมตร
     const dimLabel = (normDim: number, axis: "w" | "h"): string => {
         const m = bboxToM(normDim, axis);
-        return m !== null ? `${m.toFixed(2)}m` : "—";
+        return m !== null ? `${m.toFixed(2)}m` : "N/A";
     };
 
     // ── ค่า door/window width เป็นเมตร ──────────────────────
@@ -363,7 +372,7 @@ const WallReview = ({
                     </div>
                 ) : (
                     <button onClick={() => startEdit(room.id, field, val)}
-                        className="group flex items-center gap-1 w-full text-left px-1 py-0.5 -mx-1 rounded hover:bg-white/5 transition-colors">
+                        className="group flex items-center gap-1 w-full text-left px-1 py-0.5 -mx-1 rounded hover:bg-slate-100 transition-colors">
                         <span className="text-sm font-mono font-semibold text-foreground">{val}</span>
                         <span className="text-[10px] text-muted-foreground">{suffix}</span>
                         <Pencil className="w-2.5 h-2.5 opacity-0 group-hover:opacity-50 ml-auto transition-opacity" />
@@ -397,7 +406,7 @@ const WallReview = ({
                     <div className={`flex items-center gap-2 rounded-lg px-3 py-1.5 border transition-all duration-200 ${
                         inCalibMode                ? "border-amber-500/60 bg-amber-500/10"
                         : calibPhase === "applied" ? "border-emerald-500/40 bg-emerald-500/8"
-                        : "border-white/[0.06] bg-black/20"
+                        : "border-border bg-card/80"
                     }`}>
                         {/* IDLE */}
                         {calibPhase === "idle" && (
@@ -417,7 +426,7 @@ const WallReview = ({
                                     {scale.toFixed(5)} m/px
                                 </button>
                                 <button onClick={resetCalibration} title="รีเซ็ต"
-                                    className="p-1 rounded hover:bg-white/10 text-muted-foreground/50 hover:text-muted-foreground transition-colors">
+                                    className="p-1 rounded hover:bg-slate-100 text-muted-foreground/70 hover:text-foreground transition-colors">
                                     <RotateCcw className="w-3 h-3" />
                                 </button>
                             </>
@@ -430,7 +439,7 @@ const WallReview = ({
                                 <span className="text-[11px] text-amber-300 font-medium">
                                     {calibPts.length === 0 ? "คลิก P1 บนรูป" : "คลิก P2"}
                                 </span>
-                                <button onClick={resetCalibration} className="p-1 rounded hover:bg-white/10 text-muted-foreground">
+                                <button onClick={resetCalibration} className="p-1 rounded hover:bg-slate-100 text-muted-foreground">
                                     <X className="w-3.5 h-3.5" />
                                 </button>
                             </>
@@ -448,7 +457,7 @@ const WallReview = ({
                                     value={calibLength}
                                     onChange={e => setCalibLength(e.target.value)}
                                     onKeyDown={e => { if (e.key === "Enter") applyCalibration(); if (e.key === "Escape") resetCalibration(); }}
-                                    className="h-7 w-20 text-xs font-mono border-amber-500/60 bg-black/30"
+                                    className="h-7 w-20 text-xs font-mono border-amber-500/60 bg-background"
                                     autoFocus
                                 />
                                 <span className="text-[10px] text-muted-foreground shrink-0">m</span>
@@ -458,7 +467,7 @@ const WallReview = ({
                                     className="h-7 px-3 text-xs bg-amber-500 hover:bg-amber-400 text-black font-semibold disabled:opacity-40">
                                     Apply
                                 </Button>
-                                <button onClick={resetCalibration} className="p-1 rounded hover:bg-white/10 text-muted-foreground">
+                                <button onClick={resetCalibration} className="p-1 rounded hover:bg-slate-100 text-muted-foreground">
                                     <X className="w-3.5 h-3.5" />
                                 </button>
                             </>
@@ -466,15 +475,15 @@ const WallReview = ({
                     </div>
 
                     {/* LAYER TOGGLES */}
-                    <div className="flex items-center gap-1 bg-black/20 rounded-lg p-1 border border-white/[0.06]">
+                    <div className="flex items-center gap-1 bg-card/80 rounded-lg p-1 border border-border shadow-sm">
                         <button onClick={() => toggleLayer("image")}
                             className={`flex items-center gap-1.5 px-2 py-1 rounded-md text-[10px] font-medium transition-all duration-150 border ${
-                                layers.has("image") ? "bg-white/10 text-foreground border-white/10" : "text-muted-foreground/40 hover:text-muted-foreground border-transparent"
+                                layers.has("image") ? "bg-accent text-foreground border-border" : "text-muted-foreground/50 hover:text-foreground border-transparent"
                             }`}>
                             {layers.has("image") ? <Eye className="w-3 h-3 text-emerald-400" /> : <EyeOff className="w-3 h-3" />}
                             <span className="hidden sm:inline">Image</span>
                         </button>
-                        <div className="w-px h-4 bg-white/10 mx-0.5" />
+                        <div className="w-px h-4 bg-border mx-0.5" />
                         {([
                             { id: "rooms",   label: "Rooms",   color: "#60a5fa" },
                             { id: "walls",   label: "Walls",   color: "#94a3b8" },
@@ -483,7 +492,7 @@ const WallReview = ({
                         ] as { id: OverlayLayer; label: string; color: string }[]).map(({ id, label, color }) => (
                             <button key={id} onClick={() => toggleLayer(id)}
                                 className={`flex items-center gap-1.5 px-2 py-1 rounded-md text-[10px] font-medium transition-all duration-150 ${
-                                    layers.has(id) ? "bg-white/10 text-foreground" : "text-muted-foreground/40 hover:text-muted-foreground"
+                                    layers.has(id) ? "bg-accent text-foreground" : "text-muted-foreground/50 hover:text-foreground"
                                 }`}>
                                 <span className="w-2 h-2 rounded-full shrink-0" style={{ background: layers.has(id) ? color : "#374151" }} />
                                 <span className="hidden sm:inline">{label}</span>
@@ -502,7 +511,7 @@ const WallReview = ({
             <div className="flex-1 flex min-h-0">
 
                 {/* LEFT: IMAGE */}
-                <div className="flex-1 relative bg-black/20 flex items-center justify-center overflow-hidden">
+                <div className="flex-1 relative bg-background flex items-center justify-center overflow-hidden">
                     {imageUrl ? (
                         <div className="relative w-full h-full flex items-center justify-center p-4">
                             <div className="relative inline-block" style={{ lineHeight: 0 }}>
@@ -555,8 +564,8 @@ const WallReview = ({
                                                         <text x={mx} y={my - 0.018} textAnchor="middle" fontSize={0.02} fontWeight="700" fill="#000" fontFamily="monospace">
                                                             {/* FIX: แสดง — ถ้ายังไม่ calibrate */}
                                                             {calibrated
-                                                                ? `${getWallLength(wall).toFixed(2)}m · ${(getWallThickness(wall) * 100).toFixed(0)}cm`
-                                                                : `— · ${(getWallThickness(wall) * 100).toFixed(0)}cm`}
+                                                                ? `${getWallLength(wall).toFixed(2)}m · ${getWallThicknessLabel(wall)}`
+                                                                : `— · ${getWallThicknessLabel(wall)}`}
                                                         </text>
                                                     </g>
                                                 )}
@@ -633,7 +642,7 @@ const WallReview = ({
                                                 <line x1={wx + ww * 0.33} y1={wy} x2={wx + ww * 0.33} y2={wy + wh} stroke="#06b6d4" strokeWidth={0.002} opacity={0.6} />
                                                 <line x1={wx + ww * 0.67} y1={wy} x2={wx + ww * 0.67} y2={wy + wh} stroke="#06b6d4" strokeWidth={0.002} opacity={0.6} />
                                                 <text x={wx + ww / 2} y={wy + wh + 0.018} textAnchor="middle" fontSize={0.013} fill="#06b6d4" fontFamily="monospace" opacity={0.9}>
-                                                    W {wM !== null ? `${wM.toFixed(2)}m` : "—"}
+                                                    W {wM !== null ? `${wM.toFixed(2)}m` : "N/A"}
                                                 </text>
                                             </g>
                                         );
@@ -713,7 +722,7 @@ const WallReview = ({
 
                                 {/* Calibration hint banner */}
                                 {inCalibMode && (
-                                    <div className="absolute top-3 left-1/2 -translate-x-1/2 flex items-center gap-2 bg-black/80 border border-amber-500/40 text-amber-300 text-[11px] font-medium px-4 py-1.5 rounded-full shadow-lg pointer-events-none backdrop-blur-sm">
+                                    <div className="absolute top-3 left-1/2 -translate-x-1/2 flex items-center gap-2 bg-card/92 border border-amber-500/40 text-amber-500 text-[11px] font-medium px-4 py-1.5 rounded-full shadow-lg pointer-events-none backdrop-blur-sm">
                                         <Crosshair className="w-3.5 h-3.5 shrink-0" />
                                         {calibPts.length === 0 && "คลิกวาง P1"}
                                         {calibPts.length === 1 && "คลิกวาง P2"}
@@ -723,7 +732,7 @@ const WallReview = ({
 
                                 {/* FIX: Banner แจ้งเตือนให้ calibrate เมื่อยังไม่ได้ทำ */}
                                 {!inCalibMode && calibPhase === "idle" && (
-                                    <div className="absolute bottom-3 left-1/2 -translate-x-1/2 flex items-center gap-2 bg-black/70 border border-amber-500/30 text-amber-400/80 text-[11px] font-medium px-4 py-1.5 rounded-full shadow pointer-events-none backdrop-blur-sm">
+                                    <div className="absolute bottom-3 left-1/2 -translate-x-1/2 flex items-center gap-2 bg-card/92 border border-amber-500/30 text-amber-500 text-[11px] font-medium px-4 py-1.5 rounded-full shadow pointer-events-none backdrop-blur-sm">
                                         <Crosshair className="w-3 h-3 shrink-0" />
                                         กด Calibrate Scale เพื่อคำนวณขนาดจริงเป็นเมตร
                                     </div>
@@ -761,7 +770,7 @@ const WallReview = ({
                             const realH = bbox ? bboxToM(bbox.h, "h") : null;
                             return (
                                 <button key={room.id} onClick={() => selectRoom(room.id)}
-                                    className={`w-full text-left rounded-lg px-3 py-2.5 border transition-all duration-200 ${isSel ? "border-white/20 shadow-sm" : "border-border/50 hover:border-border hover:bg-white/4"}`}
+                                    className={`w-full text-left rounded-lg px-3 py-2.5 border transition-all duration-200 ${isSel ? "shadow-sm" : "border-border/70 hover:border-border hover:bg-accent/60"}`}
                                     style={isSel ? { borderColor: `${pal.stroke}60`, background: pal.fill } : {}}>
                                     <div className="flex items-center justify-between">
                                         <div className="flex items-center gap-2">
@@ -790,17 +799,17 @@ const WallReview = ({
                                     const isExt = wall.type === "exterior";
                                     return (
                                         <button key={wall.id} onClick={() => selectWall(wall.id)}
-                                            className={`w-full text-left rounded-lg px-3 py-2 border transition-all duration-200 mb-1 ${isSel ? "border-amber-500/40 bg-amber-500/10 shadow-sm" : "border-border/50 hover:border-border hover:bg-white/4"}`}>
+                                            className={`w-full text-left rounded-lg px-3 py-2 border transition-all duration-200 mb-1 ${isSel ? "border-amber-500/40 bg-amber-500/10 shadow-sm" : "border-border/70 hover:border-border hover:bg-accent/60"}`}>
                                             <div className="flex items-center gap-2">
-                                                <span className={`w-2 h-0.5 rounded shrink-0 ${isExt ? "bg-slate-300" : "bg-slate-500"}`} />
+                                                <span className={`w-2 h-0.5 rounded shrink-0 ${isExt ? "bg-muted-foreground/70" : "bg-primary/70"}`} />
                                                 <span className="text-[11px] font-medium text-foreground">Wall {idx + 1}</span>
-                                                <span className={`text-[9px] px-1.5 py-0.5 rounded font-mono ${isExt ? "bg-slate-500/20 text-slate-300" : "bg-slate-600/20 text-slate-400"}`}>{isExt ? "EXT" : "INT"}</span>
+                                                <span className={`text-[9px] px-1.5 py-0.5 rounded font-mono ${isExt ? "bg-muted text-muted-foreground" : "bg-primary/10 text-primary"}`}>{isExt ? "EXT" : "INT"}</span>
                                             </div>
                                             <div className="mt-1 text-[10px] font-mono text-muted-foreground flex gap-3">
                                                 {/* FIX: แสดง — ก่อน calibrate */}
-                                                <span>L: {calibrated ? `${getWallLength(wall).toFixed(1)}m` : "—"}</span>
-                                                <span>T: {(getWallThickness(wall) * 100).toFixed(0)}cm</span>
-                                                <span>H: {getWallHeight(wall).toFixed(1)}m</span>
+                                                <span>L: {calibrated ? `${getWallLength(wall).toFixed(1)}m` : "N/A"}</span>
+                                                <span>T: {getWallThicknessLabel(wall)}</span>
+                                                <span>H: {getWallHeight(wall) != null ? `${getWallHeight(wall)!.toFixed(1)}m` : "N/A"}</span>
                                             </div>
                                         </button>
                                     );
@@ -862,13 +871,13 @@ const WallReview = ({
                             <div className="flex items-center justify-between">
                                 <span className="text-xs font-semibold" style={{ color: palette.stroke }}>{selectedRoom.name}</span>
                                 <div className="flex items-center gap-1">
-                                    <button onClick={() => navigate(-1)} disabled={selectedIdx === 0} className="p-1 rounded hover:bg-white/8 text-muted-foreground disabled:opacity-30"><ChevronLeft className="w-3.5 h-3.5" /></button>
+                                    <button onClick={() => navigate(-1)} disabled={selectedIdx === 0} className="p-1 rounded hover:bg-accent text-muted-foreground disabled:opacity-30"><ChevronLeft className="w-3.5 h-3.5" /></button>
                                     <span className="text-[10px] text-muted-foreground font-mono">{selectedIdx + 1}/{rooms.length}</span>
-                                    <button onClick={() => navigate(1)} disabled={selectedIdx === rooms.length - 1} className="p-1 rounded hover:bg-white/8 text-muted-foreground disabled:opacity-30"><ChevronRight className="w-3.5 h-3.5" /></button>
+                                    <button onClick={() => navigate(1)} disabled={selectedIdx === rooms.length - 1} className="p-1 rounded hover:bg-accent text-muted-foreground disabled:opacity-30"><ChevronRight className="w-3.5 h-3.5" /></button>
                                 </div>
                             </div>
                             <div className="flex gap-2">
-                                {/* FIX: EditableCell จะแสดง placeholder "—" ถ้ายังไม่ calibrate */}
+                                {/* FIX: EditableCell จะแสดง placeholder "N/A" ถ้ายังไม่ calibrate */}
                                 <EditableCell room={selectedRoom} field="width"      label="W (m)" suffix="m" />
                                 <EditableCell room={selectedRoom} field="height"     label="D (m)" suffix="m" />
                                 <EditableCell room={selectedRoom} field="wallHeight" label="H (m)" suffix="m" />
@@ -914,28 +923,29 @@ const WallReview = ({
                                         <Ruler className="w-3.5 h-3.5 text-amber-400" />
                                         <span className="text-xs font-semibold text-amber-300">Wall {swIdx + 1}</span>
                                         <button onClick={() => onWallUpdate && onWallUpdate(sw.id, "type", sw.type === "exterior" ? "interior" : "exterior")}
-                                            className={`text-[9px] px-1.5 py-0.5 rounded font-mono cursor-pointer transition-colors ${sw.type === "exterior" ? "bg-slate-500/20 text-slate-300 hover:bg-slate-500/30" : "bg-slate-600/20 text-slate-400 hover:bg-slate-600/30"}`}>
+                                            className={`text-[9px] px-1.5 py-0.5 rounded font-mono cursor-pointer transition-colors ${sw.type === "exterior" ? "bg-muted text-muted-foreground hover:bg-accent" : "bg-primary/10 text-primary hover:bg-primary/15"}`}>
                                             {sw.type === "exterior" ? "EXT" : "INT"}
                                         </button>
                                     </div>
                                     <div className="flex items-center gap-1">
-                                        <button onClick={() => { const p = swIdx - 1; if (p >= 0) selectWall(walls[p].id); }} disabled={swIdx === 0} className="p-1 rounded hover:bg-white/8 text-muted-foreground disabled:opacity-30"><ChevronLeft className="w-3.5 h-3.5" /></button>
+                                        <button onClick={() => { const p = swIdx - 1; if (p >= 0) selectWall(walls[p].id); }} disabled={swIdx === 0} className="p-1 rounded hover:bg-accent text-muted-foreground disabled:opacity-30"><ChevronLeft className="w-3.5 h-3.5" /></button>
                                         <span className="text-[10px] text-muted-foreground font-mono">{swIdx + 1}/{walls.length}</span>
-                                        <button onClick={() => { const n = swIdx + 1; if (n < walls.length) selectWall(walls[n].id); }} disabled={swIdx === walls.length - 1} className="p-1 rounded hover:bg-white/8 text-muted-foreground disabled:opacity-30"><ChevronRight className="w-3.5 h-3.5" /></button>
+                                        <button onClick={() => { const n = swIdx + 1; if (n < walls.length) selectWall(walls[n].id); }} disabled={swIdx === walls.length - 1} className="p-1 rounded hover:bg-accent text-muted-foreground disabled:opacity-30"><ChevronRight className="w-3.5 h-3.5" /></button>
                                     </div>
                                 </div>
                                 {/* FIX: Length แสดงเฉพาะเมื่อ calibrate แล้ว */}
                                 <div className="text-[10px] text-muted-foreground font-mono flex justify-between">
                                     <span>Length</span>
                                     <span className={calibrated ? "text-foreground font-medium" : "text-muted-foreground/40"}>
-                                        {calibrated ? `${getWallLength(sw).toFixed(2)} m` : "—"}
+                                        {calibrated ? `${getWallLength(sw).toFixed(2)} m` : "N/A"}
                                     </span>
                                 </div>
                                 {(["thickness", "wallHeight"] as const).map((field) => {
                                     const label = field === "thickness" ? "Thickness (cm)" : "Height (m)";
-                                    const value = field === "thickness"
-                                        ? (swThick * 100).toFixed(0)
-                                        : swH.toFixed(2);
+                                    const numericValue = field === "thickness"
+                                        ? (swThick != null ? +(swThick * 100).toFixed(0) : null)
+                                        : (swH != null ? +swH.toFixed(2) : null);
+                                    const displayValue = numericValue == null ? "N/A" : String(numericValue);
                                     return (
                                         <div key={field} className="flex-1 min-w-0">
                                             <div className="text-[9px] text-muted-foreground uppercase tracking-wider mb-1">{label}</div>
@@ -954,9 +964,9 @@ const WallReview = ({
                                                 </div>
                                             ) : (
                                                 <button
-                                                    onClick={() => startWallEdit(sw.id, field, Number(value) || 0)}
-                                                    className="group flex items-center gap-1 w-full text-left px-1 py-0.5 -mx-1 rounded hover:bg-white/5 transition-colors">
-                                                    <span className="text-sm font-mono font-semibold text-foreground">{value}</span>
+                                                    onClick={() => startWallEdit(sw.id, field, numericValue)}
+                                                    className="group flex items-center gap-1 w-full text-left px-1 py-0.5 -mx-1 rounded hover:bg-accent transition-colors">
+                                                    <span className="text-sm font-mono font-semibold text-foreground">{displayValue}</span>
                                                     <span className="text-[10px] text-muted-foreground">{field === "thickness" ? "cm" : "m"}</span>
                                                     <Pencil className="w-2.5 h-2.5 opacity-0 group-hover:opacity-50 ml-auto transition-opacity" />
                                                 </button>
@@ -994,3 +1004,5 @@ const WallReview = ({
 };
 
 export default WallReview;
+
+

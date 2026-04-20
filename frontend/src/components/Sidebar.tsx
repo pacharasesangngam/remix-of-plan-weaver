@@ -2,17 +2,24 @@ import { useCallback, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import {
-  Upload, X, ScanLine, CheckCircle2, AlertCircle, ChevronDown,
-  Code, Download, ChevronLeft, ChevronRight,
-  Image as ImageIcon, Loader2,
+  CheckCircle2,
+  ChevronDown,
+  ChevronLeft,
+  ChevronRight,
+  Code,
+  Copy,
+  Loader2,
+  ScanLine,
+  Upload,
+  X,
 } from "lucide-react";
 import type { Room, FloorPlanData, AppMode, DimensionUnit } from "@/types/floorplan";
-import { MATERIALS, UNITS } from "@/types/floorplan";
 
 interface SidebarProps {
   mode: AppMode;
   unit: DimensionUnit;
   imageUrl: string | null;
+  fileType?: string | null;
   rooms: Room[];
   detected: boolean;
   detecting?: boolean;
@@ -24,25 +31,29 @@ interface SidebarProps {
   onScaleChange: (scale: number) => void;
   onUnitChange: (unit: DimensionUnit) => void;
   onGenerate: () => void;
-  floorPlanData: FloorPlanData | null; // 🔥 กัน undefined
+  floorPlanData: FloorPlanData | null;
 }
 
 const Sidebar = ({
-  mode, unit, imageUrl, rooms, detected, detecting = false, scale,
-  onImageUpload, onClear, onDetect, onRoomUpdate,
-  onScaleChange, onUnitChange, onGenerate, floorPlanData,
+  unit,
+  imageUrl,
+  fileType,
+  rooms,
+  detected,
+  detecting = false,
+  scale,
+  onImageUpload,
+  onClear,
+  onDetect,
+  floorPlanData,
 }: SidebarProps) => {
-
   const [collapsed, setCollapsed] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
   const [jsonOpen, setJsonOpen] = useState(false);
+  const [copied, setCopied] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
 
-  const isPro = mode === "pro";
-
-  // ✅ SAFETY LAYER
-  const safeRooms = Array.isArray(rooms) ? rooms : [];
-  const safeData = floorPlanData ?? { meta: { unit: unit, scale: scale }, rooms: [] };
+  const safeData = floorPlanData ?? { meta: { unit, scale }, rooms: [] };
 
   const handleDrop = useCallback((e: React.DragEvent) => {
     e.preventDefault();
@@ -56,155 +67,191 @@ const Sidebar = ({
     if (file) onImageUpload(file);
   };
 
-  const confidenceLabel = (c: Room["confidence"]) => {
-    if (c === "high") return { text: "Detected (high)", icon: CheckCircle2, cls: "text-success" };
-    if (c === "low") return { text: "Detected (low)", icon: AlertCircle, cls: "text-warning" };
-    return { text: "Manual", icon: AlertCircle, cls: "text-muted-foreground" };
+  const handleCopyJSON = async () => {
+    try {
+      await navigator.clipboard.writeText(JSON.stringify(safeData, null, 2));
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1400);
+    } catch {
+      setCopied(false);
+    }
   };
 
-  const totalCost = safeRooms.reduce((sum, r) => {
-    const mat = MATERIALS.find((m) => m.id === r.material);
-    const area = (r.width ?? 0) * (r.height ?? 0);
-    return sum + area * (mat?.costPerSqm ?? 0) + (r.finishCost ?? 0);
-  }, 0);
-
-  const handleExportJSON = () => {
-    const blob = new Blob([JSON.stringify(safeData, null, 2)], { type: "application/json" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = "floorplan.json";
-    a.click();
-    URL.revokeObjectURL(url);
-  };
-
-  const currentUnit = UNITS.find((u) => u.value === unit) ?? UNITS[0];
-
-  const step1Done = !!imageUrl;
-  const step2Done = detected;
-
-  const stepDot = (n: number, done: boolean, active: boolean) => (
-    <span
-      className={`flex items-center justify-center w-5 h-5 rounded-full text-[10px] font-bold font-mono shrink-0 transition-all duration-300 ${
-        done
-          ? "bg-success/20 text-success border border-success/30"
-          : active
-          ? "bg-primary/20 text-primary border border-primary/30"
-          : "bg-muted/30 text-muted-foreground border border-border"
-      }`}
-    >
-      {done ? "✓" : n}
-    </span>
-  );
+  const stepOneLabel = imageUrl ? "Loaded" : "Missing";
+  const stepTwoLabel = detected ? "Ready" : detecting ? "Running" : "Idle";
+  const isPdf = fileType === "application/pdf";
 
   return (
     <div className="relative flex shrink-0">
-
-      {/* Sidebar */}
       <div
-        className={`relative flex flex-col bg-card/40 border-r border-border backdrop-blur-sm overflow-hidden transition-all duration-300 ${
+        className={`relative flex flex-col overflow-hidden border-r border-border bg-[linear-gradient(180deg,hsl(var(--card))_0%,hsl(var(--surface-raised))_100%)] transition-all duration-300 ${
           collapsed ? "w-0 opacity-0 pointer-events-none" : "w-[360px]"
         }`}
       >
-        <div className="w-[360px] flex flex-col h-full overflow-y-auto">
-
-          {/* Header */}
-          <div className="px-4 py-3 border-b border-border flex justify-between">
-            <span className="text-[11px] font-semibold uppercase">Steps</span>
+        <div className="scrollbar-none w-[360px] h-full overflow-y-auto">
+          <div className="border-b border-border/70 bg-[radial-gradient(circle_at_top_left,hsl(var(--primary)/0.22),transparent_34%)] px-5 pb-5 pt-6">
+            <div className="space-y-4">
+              <div className="flex items-center justify-between">
+                <div>
+                  <div className="text-[10px] font-semibold uppercase tracking-[0.22em] text-primary">Workspace</div>
+                  <h2 className="mt-1 text-lg font-semibold text-foreground">Plan Pipeline</h2>
+                </div>
+                <div className="rounded-2xl border border-border/70 bg-primary/10 px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.16em] text-primary">
+                  2 Steps
+                </div>
+              </div>
+            </div>
           </div>
 
-          <div className="flex-1 p-4 space-y-5">
-
-            {/* Upload */}
-            <section className="space-y-3">
-              <div className="flex items-center gap-2">
-                {stepDot(1, step1Done, !step1Done)}
-                <h2 className="text-xs font-semibold uppercase">
-                  Upload Floor Plan
-                </h2>
+          <div className="space-y-4 p-4">
+            <section className="overflow-hidden rounded-[28px] border border-border/55 bg-card shadow-[0_14px_36px_hsl(var(--foreground)/0.04)]">
+              <div className="flex items-center justify-between border-b border-border/55 px-4 py-4">
+                <div className="flex items-center gap-3">
+                  <div className={`flex h-9 w-9 items-center justify-center rounded-2xl border text-xs font-semibold ${
+                    imageUrl ? "border-border/55 bg-success/10 text-success" : "border-border/55 bg-primary/10 text-primary"
+                  }`}>
+                    {imageUrl ? <CheckCircle2 className="h-4 w-4" /> : "1"}
+                  </div>
+                  <div>
+                    <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-muted-foreground">Step 1</div>
+                    <div className="text-sm font-medium text-foreground">Upload Floor Plan</div>
+                  </div>
+                </div>
+                <div className={`rounded-full px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] ${
+                  imageUrl ? "bg-success/10 text-success" : "bg-muted text-muted-foreground"
+                }`}>
+                  {stepOneLabel}
+                </div>
               </div>
 
-              {!imageUrl ? (
-                <div
-                  onDragOver={(e) => { e.preventDefault(); setIsDragging(true); }}
-                  onDragLeave={() => setIsDragging(false)}
-                  onDrop={handleDrop}
-                  onClick={() => inputRef.current?.click()}
-                  className="h-32 flex flex-col items-center justify-center border-2 border-dashed rounded-xl cursor-pointer"
-                >
-                  <Upload className="w-5 h-5 mb-2" />
-                  <p className="text-xs">Drop floor plan here</p>
-                  <input ref={inputRef} type="file" className="hidden" onChange={handleFileChange} />
-                </div>
-              ) : (
-                <div className="relative border rounded-xl overflow-hidden">
-                  <img src={imageUrl} className="w-full h-32 object-contain p-2" />
-                  <button onClick={onClear} className="absolute top-2 right-2">
-                    <X className="w-4 h-4" />
+              <div className="p-4">
+                {!imageUrl ? (
+                  <button
+                    type="button"
+                    onDragOver={(e) => { e.preventDefault(); setIsDragging(true); }}
+                    onDragLeave={() => setIsDragging(false)}
+                    onDrop={handleDrop}
+                    onClick={() => inputRef.current?.click()}
+                    className={`flex h-40 w-full flex-col items-center justify-center rounded-[24px] border-2 border-dashed px-4 text-center transition-all ${
+                      isDragging
+                        ? "border-primary bg-primary/10 shadow-[0_0_0_5px_hsl(var(--primary)/0.10)]"
+                        : "border-border bg-background hover:border-primary/35 hover:bg-accent/60"
+                    }`}
+                  >
+                    <div className="mb-3 rounded-2xl border border-border/70 bg-card p-3 shadow-sm">
+                      <Upload className="h-5 w-5 text-primary" />
+                    </div>
+                    <div className="text-sm font-medium text-foreground">Drop floor plan here</div>
+                    <div className="mt-1 text-[11px] text-muted-foreground">PNG, JPG, WEBP, PDF</div>
+                    <input ref={inputRef} type="file" accept="image/*,.pdf,application/pdf" className="hidden" onChange={handleFileChange} />
                   </button>
-                </div>
-              )}
+                ) : (
+                <div className="relative overflow-hidden rounded-[24px] border border-border/55 bg-background shadow-inner">
+                    {isPdf ? (
+                      <iframe src={imageUrl} title="Floor plan PDF preview" className="h-40 w-full bg-background" />
+                    ) : (
+                      <img src={imageUrl} alt="Floor plan" className="h-40 w-full object-contain p-3" />
+                    )}
+                    <button
+                      type="button"
+                      onClick={onClear}
+                      className="absolute right-3 top-3 rounded-full border border-border/55 bg-card/90 p-1.5 text-muted-foreground transition-colors hover:text-foreground"
+                    >
+                      <X className="h-4 w-4" />
+                    </button>
+                  </div>
+                )}
+              </div>
             </section>
 
-            {/* Detect */}
             {imageUrl && (
-              <section className="space-y-3">
-                <div className="flex items-center gap-2">
-                  {stepDot(2, step2Done, !step2Done)}
-                  <h2 className="text-xs font-semibold uppercase">
-                    Detect & Calibrate
-                  </h2>
+              <section className="overflow-hidden rounded-[28px] border border-border/55 bg-card shadow-[0_14px_36px_hsl(var(--foreground)/0.04)]">
+                <div className="flex items-center justify-between border-b border-border/55 px-4 py-4">
+                  <div className="flex items-center gap-3">
+                    <div className={`flex h-9 w-9 items-center justify-center rounded-2xl border text-xs font-semibold ${
+                      detected ? "border-border/55 bg-success/10 text-success" : "border-border/55 bg-primary/10 text-primary"
+                    }`}>
+                      {detected ? <CheckCircle2 className="h-4 w-4" /> : "2"}
+                    </div>
+                    <div>
+                      <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-muted-foreground">Step 2</div>
+                      <div className="text-sm font-medium text-foreground">Detect And Inspect</div>
+                    </div>
+                  </div>
+                  <div className={`rounded-full px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] ${
+                    detected ? "bg-success/10 text-success" : "bg-muted text-muted-foreground"
+                  }`}>
+                    {stepTwoLabel}
+                  </div>
                 </div>
 
-                {!detected ? (
-                  <Button
-                    onClick={onDetect}
-                    disabled={!imageUrl || detecting} // 🔥 FIX
-                    className="w-full"
-                  >
-                    {detecting ? (
-                      <><Loader2 className="animate-spin w-4 h-4" /> Detecting…</>
-                    ) : (
-                      <><ScanLine className="w-4 h-4" /> Detect</>
-                    )}
-                  </Button>
-                ) : (
-                  <Collapsible open={jsonOpen} onOpenChange={setJsonOpen}>
-                    <CollapsibleTrigger className="flex items-center gap-2 text-xs">
-                      <Code className="w-3 h-3" />
-                      JSON Output
-                      <ChevronDown className={`ml-auto ${jsonOpen ? "rotate-180" : ""}`} />
-                    </CollapsibleTrigger>
-
-                    <CollapsibleContent>
-                      <pre className="text-xs overflow-auto max-h-[200px]">
-                        {JSON.stringify(safeData, null, 2)}
-                      </pre>
-
-                      {isPro && (
-                        <Button onClick={handleExportJSON} className="w-full mt-2">
-                          <Download className="w-3 h-3" />
-                          Download JSON
-                        </Button>
+                <div className="p-4">
+                  {!detected ? (
+                    <Button
+                      onClick={onDetect}
+                      disabled={!imageUrl || detecting}
+                      className="h-12 w-full rounded-[22px] text-sm shadow-sm"
+                    >
+                      {detecting ? (
+                        <>
+                          <Loader2 className="h-4 w-4 animate-spin" />
+                          Detecting
+                        </>
+                      ) : (
+                        <>
+                          <ScanLine className="h-4 w-4" />
+                          Run Detection
+                        </>
                       )}
-                    </CollapsibleContent>
-                  </Collapsible>
-                )}
+                    </Button>
+                  ) : (
+                    <Collapsible open={jsonOpen} onOpenChange={setJsonOpen}>
+                      <CollapsibleTrigger className="flex w-full items-center gap-3 rounded-[22px] border border-border/55 bg-background px-4 py-3 text-left text-sm font-medium text-foreground transition-colors hover:bg-accent/70">
+                        <div className="rounded-xl border border-border/55 bg-primary/10 p-1.5 text-primary">
+                          <Code className="h-4 w-4" />
+                        </div>
+                        <div className="flex-1">
+                          <div>JSON Output</div>
+                          <div className="text-[11px] font-normal text-muted-foreground">Copy or export the current payload</div>
+                        </div>
+                        <ChevronDown className={`h-4 w-4 transition-transform ${jsonOpen ? "rotate-180" : ""}`} />
+                      </CollapsibleTrigger>
+
+                      <CollapsibleContent className="pt-3">
+                        <div className="relative overflow-hidden rounded-[22px] border border-border/55 bg-background shadow-inner">
+                          <button
+                            type="button"
+                            onClick={handleCopyJSON}
+                            className="absolute right-3 top-3 z-10 inline-flex h-9 items-center gap-1.5 rounded-full border border-border/55 bg-card/95 px-3 text-[11px] font-medium text-foreground shadow-sm transition-colors hover:bg-accent"
+                          >
+                            <Copy className="h-3.5 w-3.5" />
+                            {copied ? "Copied" : "Copy"}
+                          </button>
+                          <pre className="scrollbar-none max-h-[250px] overflow-auto p-4 pt-14 text-xs text-muted-foreground">
+                            {JSON.stringify(safeData, null, 2)}
+                          </pre>
+                        </div>
+                      </CollapsibleContent>
+                    </Collapsible>
+                  )}
+                </div>
               </section>
             )}
-
           </div>
         </div>
       </div>
 
-      {/* Toggle */}
       <button
-        onClick={() => setCollapsed(c => !c)}
-        className="absolute -right-3 top-1/2 -translate-y-1/2 w-6 h-12 border"
+        type="button"
+        onClick={() => setCollapsed((c) => !c)}
+        aria-label={collapsed ? "Open sidebar" : "Close sidebar"}
+        className="absolute -right-6 top-1/2 z-30 flex h-16 w-8 -translate-y-1/2 flex-col items-center justify-center gap-0.5 rounded-xl border border-border/55 bg-card/95 px-1 text-muted-foreground shadow-lg backdrop-blur-sm transition-all hover:text-foreground hover:shadow-xl"
       >
-        {collapsed ? <ChevronRight /> : <ChevronLeft />}
+        {collapsed ? <ChevronRight className="h-4 w-4" /> : <ChevronLeft className="h-4 w-4" />}
+        <span className="text-[8px] font-semibold uppercase tracking-[0.14em] [writing-mode:vertical-rl]">
+          {collapsed ? "Open" : "Close"}
+        </span>
       </button>
-
     </div>
   );
 };

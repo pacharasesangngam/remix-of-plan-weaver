@@ -13,8 +13,8 @@ function BuildingModel() {
     }
   });
 
-  const wallColor = "#3b82f6";
-  const floorColor = "#1e293b";
+  const wallColor = "#60a5fa";
+  const floorColor = "#f8fafc";
   const wallOpacity = 0.75;
   const h = 1.4; // wall height
   const wt = 0.06; // wall thickness
@@ -61,7 +61,7 @@ function BuildingModel() {
       {/* Base slab */}
       <mesh position={[0, -0.03, 0]} rotation={[-Math.PI / 2, 0, 0]}>
         <planeGeometry args={[4, 3.6]} />
-        <meshStandardMaterial color="#0f172a" roughness={0.9} />
+        <meshStandardMaterial color="#e2e8f0" roughness={0.9} />
       </mesh>
     </group>
   );

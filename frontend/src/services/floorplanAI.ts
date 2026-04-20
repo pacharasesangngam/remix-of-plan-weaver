@@ -37,6 +37,7 @@ interface RawApiResponse {
   walls: DetectFloorPlanResult["walls"];
   doors: RawDoor[];
   windows: RawWindow[];
+  image?: string;
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -107,6 +108,7 @@ export async function detectFloorPlan(file: File): Promise<DetectFloorPlanResult
     walls:   json.walls   ?? [],
     doors:   json.doors   ?? [],
     windows: json.windows ?? [],
+    image:   json.image,
     // scale จาก backend ไม่ได้ใช้ตรงๆ แล้ว
     // ผู้ใช้ต้อง calibrate เองผ่าน WallReview ก่อนถึงจะได้ค่าเมตรจริง
   };
