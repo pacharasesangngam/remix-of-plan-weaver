@@ -1,6 +1,11 @@
 import type { DetectFloorPlanResult } from "@/types/detection";
 import type { Room, BBox } from "@/types/floorplan";
 
+const API_BASE_URL = (
+  import.meta.env.VITE_API_BASE_URL ||
+  "http://localhost:8000"
+).replace(/\/+$/, "");
+
 // ─────────────────────────────────────────────────────────────
 // Raw types ที่ backend ส่งมา (ก่อน transform)
 // ─────────────────────────────────────────────────────────────
@@ -88,7 +93,7 @@ export async function detectFloorPlan(file: File): Promise<DetectFloorPlanResult
   const formData = new FormData();
   formData.append("file", file);
 
-  const res = await fetch("http://localhost:8000/api/detect-floorplan", {
+  const res = await fetch(`${API_BASE_URL}/api/detect-floorplan`, {
     method: "POST",
     body: formData,
   });
