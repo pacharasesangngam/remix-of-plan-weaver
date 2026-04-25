@@ -731,12 +731,12 @@ const WallReview = ({
                                 )}
 
                                 {/* FIX: Banner แจ้งเตือนให้ calibrate เมื่อยังไม่ได้ทำ */}
-                                {!inCalibMode && calibPhase === "idle" && (
+                                {/* {!inCalibMode && calibPhase === "idle" && (
                                     <div className="absolute bottom-3 left-1/2 -translate-x-1/2 flex items-center gap-2 bg-card/92 border border-amber-500/30 text-amber-500 text-[11px] font-medium px-4 py-1.5 rounded-full shadow pointer-events-none backdrop-blur-sm">
                                         <Crosshair className="w-3 h-3 shrink-0" />
                                         กด Calibrate Scale เพื่อคำนวณขนาดจริงเป็นเมตร
                                     </div>
-                                )}
+                                )} */}
                             </div>
                         </div>
                     ) : (
