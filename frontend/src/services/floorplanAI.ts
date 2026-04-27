@@ -1,14 +1,8 @@
 import type { DetectFloorPlanResult } from "@/types/detection";
-import type { Room, BBox } from "@/types/floorplan";
+import type { Room, BBox, NormalizedPoint } from "@/types/floorplan";
 
-const API_BASE_URL = (
-  import.meta.env.VITE_API_BASE_URL ||
-  "http://localhost:8000"
-).replace(/\/+$/, "");
+const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL || "http://localhost:8000").replace(/\/+$/, "");
 
-// ─────────────────────────────────────────────────────────────
-// Raw types ที่ backend ส่งมา (ก่อน transform)
-// ─────────────────────────────────────────────────────────────
 interface RawPoint {
   x: number;
   y: number;
@@ -18,6 +12,9 @@ interface RawRoom {
   id: string;
   name: string;
   polygon: RawPoint[];
+  wallPolygon?: RawPoint[] | null;
+  center?: RawPoint | null;
+  bbox?: BBox | null;
 }
 
 interface RawDoor {
@@ -45,50 +42,84 @@ interface RawApiResponse {
   image?: string;
 }
 
-// ─────────────────────────────────────────────────────────────
-// Mapper: polygon (normalized 0–1) → Room
-// ─────────────────────────────────────────────────────────────
+function polygonCentroid(points: RawPoint[]): RawPoint | null {
+  if (points.length < 3) return null;
+
+  let twiceArea = 0;
+  let cx = 0;
+  let cy = 0;
+
+  for (let i = 0; i < points.length; i += 1) {
+    const p1 = points[i];
+    const p2 = points[(i + 1) % points.length];
+    const cross = p1.x * p2.y - p2.x * p1.y;
+    twiceArea += cross;
+    cx += (p1.x + p2.x) * cross;
+    cy += (p1.y + p2.y) * cross;
+  }
+
+  if (Math.abs(twiceArea) < 1e-8) {
+    const sum = points.reduce(
+      (acc, point) => {
+        acc.x += point.x;
+        acc.y += point.y;
+        return acc;
+      },
+      { x: 0, y: 0 },
+    );
+    return { x: sum.x / points.length, y: sum.y / points.length };
+  }
+
+  const factor = 1 / (3 * twiceArea);
+  return {
+    x: cx * factor,
+    y: cy * factor,
+  };
+}
+
 function polygonToRoom(raw: RawRoom): Room {
-  if (!raw.polygon || raw.polygon.length === 0) {
-    // fallback กรณี polygon ว่าง
+  const originalPolygon = raw.polygon ?? [];
+  const wallPolygon = raw.wallPolygon ?? originalPolygon;
+
+  if (originalPolygon.length === 0 && wallPolygon.length === 0) {
     return {
       id: raw.id,
       name: raw.name,
       width: 0,
       height: 0,
       confidence: "low",
+      polygon: [],
+      wallPolygon: [],
+      center: { x: 0, y: 0 },
       bbox: { x: 0, y: 0, w: 0, h: 0 },
     };
   }
 
-  const xs = raw.polygon.map((p) => p.x);
-  const ys = raw.polygon.map((p) => p.y);
+  const shapePolygon = wallPolygon.length > 0 ? wallPolygon : originalPolygon;
+  const xs = shapePolygon.map((p) => p.x);
+  const ys = shapePolygon.map((p) => p.y);
 
   const x = Math.min(...xs);
   const y = Math.min(...ys);
   const w = Math.max(...xs) - x;
   const h = Math.max(...ys) - y;
-
-  const bbox: BBox = { x, y, w, h };
+  const bbox: BBox = raw.bbox ?? { x, y, w, h };
+  const center = raw.center ?? polygonCentroid(shapePolygon) ?? { x: x + w / 2, y: y + h / 2 };
 
   return {
     id: raw.id,
     name: raw.name,
-    // width/height เก็บเป็น normalized fraction (0–1) ของรูป
-    // การแปลงเป็นเมตรจริงทำทีหลังเมื่อผู้ใช้ calibrate scale แล้ว
-    // → realWidth  = bbox.w * imgPixelWidth  * scale (m/px)
-    // → realHeight = bbox.h * imgPixelHeight * scale (m/px)
-    width: w,
-    height: h,
+    width: bbox.w,
+    height: bbox.h,
     confidence: "high",
+    polygon: originalPolygon as NormalizedPoint[],
+    wallPolygon: wallPolygon as NormalizedPoint[],
+    center,
     wallHeight: 2.8,
     bbox,
   };
 }
 
-// ─────────────────────────────────────────────────────────────
-// Main service
-// ─────────────────────────────────────────────────────────────
 export async function detectFloorPlan(file: File): Promise<DetectFloorPlanResult> {
   const formData = new FormData();
   formData.append("file", file);
@@ -104,17 +135,13 @@ export async function detectFloorPlan(file: File): Promise<DetectFloorPlanResult
   }
 
   const json: RawApiResponse = await res.json();
-
-  // transform rooms: polygon[] → Room (with bbox)
   const rooms: Room[] = (json.rooms ?? []).map(polygonToRoom);
 
   return {
     rooms,
-    walls:   json.walls   ?? [],
-    doors:   json.doors   ?? [],
+    walls: json.walls ?? [],
+    doors: json.doors ?? [],
     windows: json.windows ?? [],
-    image:   json.image,
-    // scale จาก backend ไม่ได้ใช้ตรงๆ แล้ว
-    // ผู้ใช้ต้อง calibrate เองผ่าน WallReview ก่อนถึงจะได้ค่าเมตรจริง
+    image: json.image,
   };
 }

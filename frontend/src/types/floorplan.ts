@@ -9,13 +9,21 @@ export interface BBox {
   h: number;
 }
 
+export interface NormalizedPoint {
+  x: number;
+  y: number;
+}
+
 export interface Room {
   id: string;
   name: string;
-  width: number;   // normalized 0–1 (fraction of image width) — คูณ imgWidth × scale → เมตร
-  height: number;  // normalized 0–1 (fraction of image height)
+  width: number;   // normalized 0â€“1 (fraction of image width) â€” à¸„à¸¹à¸“ imgWidth Ã— scale â†’ à¹€à¸¡à¸•à¸£
+  height: number;  // normalized 0â€“1 (fraction of image height)
   confidence: "high" | "low" | "manual";
-  bbox?: BBox;     // normalized bbox จาก polygon (เพิ่มเพื่อไม่ต้อง cast dirty ใน WallReview)
+  polygon?: NormalizedPoint[];
+  wallPolygon?: NormalizedPoint[];
+  center?: NormalizedPoint;
+  bbox?: BBox;     // normalized bbox derived from polygon
   // Pro mode fields
   material?: string;
   finishCost?: number;
@@ -33,17 +41,17 @@ export interface FloorPlanData {
 }
 
 export const MATERIALS = [
-  { id: "none",     label: "— ไม่ระบุ —",        costPerSqm: 0   },
-  { id: "tile",     label: "กระเบื้อง",           costPerSqm: 350 },
-  { id: "wood",     label: "ไม้ลามิเนต",          costPerSqm: 500 },
+  { id: "none",     label: "â€” à¹„à¸¡à¹ˆà¸£à¸°à¸šà¸¸ â€”",        costPerSqm: 0   },
+  { id: "tile",     label: "à¸à¸£à¸°à¹€à¸šà¸·à¹‰à¸­à¸‡",           costPerSqm: 350 },
+  { id: "wood",     label: "à¹„à¸¡à¹‰à¸¥à¸²à¸¡à¸´à¹€à¸™à¸•",          costPerSqm: 500 },
   { id: "vinyl",    label: "Vinyl / SPC",          costPerSqm: 280 },
-  { id: "concrete", label: "คอนกรีตขัดมัน",       costPerSqm: 450 },
-  { id: "carpet",   label: "พรม",                  costPerSqm: 200 },
+  { id: "concrete", label: "à¸„à¸­à¸™à¸à¸£à¸µà¸•à¸‚à¸±à¸”à¸¡à¸±à¸™",       costPerSqm: 450 },
+  { id: "carpet",   label: "à¸žà¸£à¸¡",                  costPerSqm: 200 },
 ];
 
 export const UNITS: { value: DimensionUnit; label: string; toMeter: number }[] = [
-  { value: "m",  label: "เมตร (m)",        toMeter: 1      },
-  { value: "cm", label: "เซนติเมตร (cm)", toMeter: 0.01   },
-  { value: "mm", label: "มิลลิเมตร (mm)", toMeter: 0.001  },
-  { value: "ft", label: "ฟุต (ft)",        toMeter: 0.3048 },
+  { value: "m",  label: "à¹€à¸¡à¸•à¸£ (m)",        toMeter: 1      },
+  { value: "cm", label: "à¹€à¸‹à¸™à¸•à¸´à¹€à¸¡à¸•à¸£ (cm)", toMeter: 0.01   },
+  { value: "mm", label: "à¸¡à¸´à¸¥à¸¥à¸´à¹€à¸¡à¸•à¸£ (mm)", toMeter: 0.001  },
+  { value: "ft", label: "à¸Ÿà¸¸à¸• (ft)",        toMeter: 0.3048 },
 ];

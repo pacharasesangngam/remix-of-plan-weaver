@@ -260,10 +260,11 @@ const WallReview = ({
     // FIX: ถ้า calibrate แล้ว แสดงค่าจาก bbox × imgSize × scale แทน normalized width/height
     const getDisplay = (room: Room, field: "width" | "height" | "wallHeight") => {
         if (field === "wallHeight") return +(room.wallHeight ?? 2.8).toFixed(2);
-        if (calibrated && room.bbox) {
+        const bbox = roomBBox(room);
+        if (calibrated && bbox) {
             const px = field === "width"
-                ? room.bbox.w * imgSize.w * scale
-                : room.bbox.h * imgSize.h * scale;
+                ? bbox.w * imgSize.w * scale
+                : bbox.h * imgSize.h * scale;
             return +px.toFixed(2);
         }
         // ก่อน calibrate — แสดง normalized เป็น unit ที่เลือก (fallback)
@@ -323,8 +324,16 @@ const WallReview = ({
     const palette      = selectedIdx >= 0 ? ROOM_PALETTE[selectedIdx % ROOM_PALETTE.length] : ROOM_PALETTE[0];
     const navigate     = (dir: -1 | 1) => { const n = selectedIdx + dir; if (n >= 0 && n < rooms.length) setSelectedId(rooms[n].id); };
 
-    // FIX: Room มี bbox ใน type แล้ว ไม่ต้อง cast dirty อีกต่อไป
-    const roomBBox = (room: Room) => room.bbox ?? null;
+    const roomBBox = (room: Room) => {
+        if (room.bbox) return room.bbox;
+        const poly = room.wallPolygon ?? room.polygon;
+        if (!poly || poly.length === 0) return null;
+        const xs = poly.map((p) => p.x);
+        const ys = poly.map((p) => p.y);
+        const x = Math.min(...xs);
+        const y = Math.min(...ys);
+        return { x, y, w: Math.max(...xs) - x, h: Math.max(...ys) - y };
+    };
 
     // FIX: คืน null เมื่อยังไม่ calibrate เพื่อให้ panel ขวา block ตัวเลขเมตร
     const bboxToM = (normDim: number, axis: "w" | "h"): number | null =>
@@ -543,8 +552,10 @@ const WallReview = ({
 
                                 {/* SVG overlays */}
                                 <svg className="absolute inset-0" width="100%" height="100%"
-                                    viewBox="0 0 1 1" preserveAspectRatio="none"
+                                    viewBox="0 0 100 100" preserveAspectRatio="none"
                                     style={{ pointerEvents: inCalibMode ? "none" : "all" }}>
+
+                                    <g transform="scale(100)">
 
                                     {/* WALLS */}
                                     {layers.has("walls") && walls.map(wall => {
@@ -576,10 +587,16 @@ const WallReview = ({
                                     {/* ROOMS */}
                                     {layers.has("rooms") && rooms.map((room, idx) => {
                                         const bbox = roomBBox(room);
-                                        if (!bbox) return null;
+                                        const polygon = room.wallPolygon ?? room.polygon ?? null;
+                                        if (!bbox && (!polygon || polygon.length < 3)) return null;
                                         const cs = CONF_STYLE[room.confidence] ?? CONF_STYLE.manual;
                                         const pal = ROOM_PALETTE[idx % ROOM_PALETTE.length];
                                         const isSel = selectedId === room.id;
+                                        const points = polygon && polygon.length >= 3
+                                            ? polygon.map((p) => `${p.x},${p.y}`).join(" ")
+                                            : `${bbox.x},${bbox.y} ${bbox.x + bbox.w},${bbox.y} ${bbox.x + bbox.w},${bbox.y + bbox.h} ${bbox.x},${bbox.y + bbox.h}`;
+                                        const cx = room.center?.x ?? (bbox.x + bbox.w / 2);
+                                        const cy = room.center?.y ?? (bbox.y + bbox.h / 2);
                                         const { x: rx0, y: ry0, w: rw, h: rh } = bbox;
                                         const badgeW = Math.max(0, Math.min(rw - 0.008, (room.name ?? "").length * 0.009 + 0.015));
                                         // FIX: ใช้ dimLabel ที่ block ก่อน calibrate
@@ -588,21 +605,16 @@ const WallReview = ({
                                         return (
                                             <g key={room.id} style={{ cursor: "pointer", pointerEvents: "all" }}
                                                 onClick={e => { e.stopPropagation(); if (!inCalibMode) selectRoom(room.id); }}>
-                                                <rect x={rx0} y={ry0} width={rw} height={rh} fill={isSel ? pal.fill : `${cs.stroke}18`} rx={0.004} />
-                                                <rect x={rx0} y={ry0} width={rw} height={rh} fill="none" stroke={isSel ? pal.stroke : cs.stroke}
-                                                    strokeWidth={isSel ? 0.004 : 0.002} strokeDasharray={isSel ? "none" : "0.01 0.005"} rx={0.004} opacity={isSel ? 1 : 0.6} />
-                                                {isSel && [
-                                                    [[rx0, ry0 + 0.015], [rx0, ry0], [rx0 + 0.015, ry0]],
-                                                    [[rx0 + rw - 0.015, ry0], [rx0 + rw, ry0], [rx0 + rw, ry0 + 0.015]],
-                                                    [[rx0, ry0 + rh - 0.015], [rx0, ry0 + rh], [rx0 + 0.015, ry0 + rh]],
-                                                    [[rx0 + rw - 0.015, ry0 + rh], [rx0 + rw, ry0 + rh], [rx0 + rw, ry0 + rh - 0.015]],
-                                                ].map((pts, i) => <polyline key={i} points={pts.map(([x, y]) => `${x},${y}`).join(" ")} fill="none" stroke={pal.stroke} strokeWidth={0.005} strokeLinecap="round" />)}
+                                                <polygon points={points} fill={isSel ? pal.fill : `${cs.stroke}18`} />
+                                                <polygon points={points} fill="none" stroke={isSel ? pal.stroke : cs.stroke}
+                                                    strokeWidth={isSel ? 0.004 : 0.002} strokeDasharray={isSel ? "none" : "0.01 0.005"} opacity={isSel ? 1 : 0.6} />
+                                                {isSel && <circle cx={cx} cy={cy} r={0.008} fill={pal.stroke} opacity={0.85} />}
                                                 {badgeW > 0.01 && <>
-                                                    <rect x={rx0 + 0.006} y={ry0 + 0.006} width={badgeW} height={0.025} rx={0.005} fill={isSel ? pal.stroke : cs.labelBg} opacity={0.92} />
-                                                    <text x={rx0 + 0.012} y={ry0 + 0.023} fontSize={0.016} fontWeight="600" fill="#000" fontFamily="sans-serif">{room.name}</text>
+                                                    <rect x={cx - badgeW / 2} y={cy - 0.02} width={badgeW} height={0.025} rx={0.005} fill={isSel ? pal.stroke : cs.labelBg} opacity={0.92} />
+                                                    <text x={cx - badgeW / 2 + 0.006} y={cy - 0.003} fontSize={0.016} fontWeight="600" fill="#000" fontFamily="sans-serif">{room.name}</text>
                                                 </>}
-                                                <text x={rx0 + rw / 2} y={ry0 + rh + 0.022} textAnchor="middle" fontSize={0.014} fill={isSel ? pal.text : cs.stroke} fontFamily="monospace" opacity={isSel ? 1 : 0.7}>{wL}</text>
-                                                <text x={rx0 + rw + 0.008} y={ry0 + rh / 2 + 0.007} textAnchor="start" fontSize={0.014} fill={isSel ? pal.text : cs.stroke} fontFamily="monospace" opacity={isSel ? 1 : 0.7}>{hL}</text>
+                                                <text x={cx} y={cy + 0.032} textAnchor="middle" fontSize={0.014} fill={isSel ? pal.text : cs.stroke} fontFamily="monospace" opacity={isSel ? 1 : 0.7}>{wL}</text>
+                                                <text x={cx + (bbox.w / 2 + 0.008)} y={cy + 0.007} textAnchor="start" fontSize={0.014} fill={isSel ? pal.text : cs.stroke} fontFamily="monospace" opacity={isSel ? 1 : 0.7}>{hL}</text>
                                             </g>
                                         );
                                     })}
@@ -718,6 +730,7 @@ const WallReview = ({
                                             ))}
                                         </>
                                     )}
+                                    </g>
                                 </svg>
 
                                 {/* Calibration hint banner */}
@@ -1004,5 +1017,4 @@ const WallReview = ({
 };
 
 export default WallReview;
-
 

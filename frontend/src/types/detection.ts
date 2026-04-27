@@ -1,11 +1,6 @@
-import type { Room } from "./floorplan";
+import type { NormalizedPoint, Room } from "./floorplan";
 
-export type { BBox } from "./floorplan";
-
-export interface NormalizedPoint {
-  x: number;
-  y: number;
-}
+export type { BBox, NormalizedPoint } from "./floorplan";
 
 export interface DetectedDoor {
   id: string;

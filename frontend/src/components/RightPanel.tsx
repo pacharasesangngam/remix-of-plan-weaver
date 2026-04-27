@@ -1,9 +1,9 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Canvas, useFrame, useThree } from "@react-three/fiber";
 import { OrbitControls, Grid, PointerLockControls, Text } from "@react-three/drei";
 import * as THREE from "three";
 import { Box, ChevronLeft, Info, Move3D } from "lucide-react";
-import type { Room } from "@/types/floorplan";
+import type { BBox, NormalizedPoint, Room } from "@/types/floorplan";
 import type { DetectedWallSegment, DetectedDoor, DetectedWindow } from "@/types/detection";
 
 interface RightPanelProps {
@@ -32,6 +32,95 @@ const safeNum = (v: unknown, fallback = 0): number => {
   const n = Number(v);
   return isFinite(n) ? n : fallback;
 };
+
+const toPlanPoint = (point: NormalizedPoint): [number, number] => [
+  point.x * PLAN_SIZE - PLAN_SIZE / 2,
+  -(point.y * PLAN_SIZE - PLAN_SIZE / 2),
+];
+
+const bboxToPolygon = (bbox?: BBox | null): NormalizedPoint[] | null => {
+  if (!bbox) return null;
+  return [
+    { x: bbox.x, y: bbox.y },
+    { x: bbox.x + bbox.w, y: bbox.y },
+    { x: bbox.x + bbox.w, y: bbox.y + bbox.h },
+    { x: bbox.x, y: bbox.y + bbox.h },
+  ];
+};
+
+const getRoomPolygon = (room: Room): NormalizedPoint[] | null => {
+  if (room.wallPolygon && room.wallPolygon.length >= 3) return room.wallPolygon;
+  if (room.polygon && room.polygon.length >= 3) return room.polygon;
+  return bboxToPolygon(room.bbox);
+};
+
+const getRoomBounds = (room: Room): BBox | null => {
+  if (room.bbox) return room.bbox;
+  const polygon = getRoomPolygon(room);
+  if (!polygon || polygon.length === 0) return null;
+
+  const xs = polygon.map((p) => p.x);
+  const ys = polygon.map((p) => p.y);
+  const x = Math.min(...xs);
+  const y = Math.min(...ys);
+  return {
+    x,
+    y,
+    w: Math.max(...xs) - x,
+    h: Math.max(...ys) - y,
+  };
+};
+
+const polygonArea = (polygon?: NormalizedPoint[] | null): number => {
+  if (!polygon || polygon.length < 3) return 0;
+  let area = 0;
+  for (let i = 0; i < polygon.length; i += 1) {
+    const p1 = polygon[i];
+    const p2 = polygon[(i + 1) % polygon.length];
+    area += p1.x * p2.y - p2.x * p1.y;
+  }
+  return Math.abs(area) * 0.5 * PLAN_SIZE * PLAN_SIZE;
+};
+
+const polygonCentroid = (polygon?: NormalizedPoint[] | null): NormalizedPoint | null => {
+  if (!polygon || polygon.length < 3) return null;
+
+  let twiceArea = 0;
+  let cx = 0;
+  let cy = 0;
+
+  for (let i = 0; i < polygon.length; i += 1) {
+    const p1 = polygon[i];
+    const p2 = polygon[(i + 1) % polygon.length];
+    const cross = p1.x * p2.y - p2.x * p1.y;
+    twiceArea += cross;
+    cx += (p1.x + p2.x) * cross;
+    cy += (p1.y + p2.y) * cross;
+  }
+
+  if (Math.abs(twiceArea) < 1e-8) {
+    const sum = polygon.reduce(
+      (acc, point) => {
+        acc.x += point.x;
+        acc.y += point.y;
+        return acc;
+      },
+      { x: 0, y: 0 },
+    );
+    return { x: sum.x / polygon.length, y: sum.y / polygon.length };
+  }
+
+  const factor = 1 / (3 * twiceArea);
+  return {
+    x: cx * factor,
+    y: cy * factor,
+  };
+};
+
+const getRoomCenter = (room: Room): NormalizedPoint | null =>
+  room.center ?? polygonCentroid(getRoomPolygon(room)) ?? (room.bbox
+    ? { x: room.bbox.x + room.bbox.w / 2, y: room.bbox.y + room.bbox.h / 2 }
+    : null);
 
 function FirstPersonController({ enabled }: { enabled: boolean }) {
   const { camera } = useThree();
@@ -353,6 +442,118 @@ function RoomMesh({ room, position, index, hovered, onHover }) {
 }
 
 // ── Detected Wall Segment as 3D box ──────────────────────────────────────────
+function RoomPolygonMesh({
+  room,
+  index,
+  hovered,
+  onHover,
+}: {
+  room: Room;
+  index: number;
+  hovered: boolean;
+  onHover: (id: string | null) => void;
+}) {
+  const groupRef = useRef<THREE.Group>(null);
+  const floorMatRef = useRef<THREE.MeshStandardMaterial>(null);
+  const pal = ROOM_PALETTE[index % ROOM_PALETTE.length];
+  const baseColorRef = useRef(new THREE.Color(pal.floor));
+  const hoverColorRef = useRef(new THREE.Color(FLOOR_HOVER_COLOR));
+
+  const polygon = useMemo(() => getRoomPolygon(room), [room]);
+  const shape = useMemo(() => {
+    if (!polygon || polygon.length < 3) return null;
+    const points = polygon.map((p) => toPlanPoint(p));
+    const nextShape = new THREE.Shape();
+    nextShape.moveTo(points[0][0], points[0][1]);
+    for (let i = 1; i < points.length; i += 1) {
+      nextShape.lineTo(points[i][0], points[i][1]);
+    }
+    nextShape.closePath();
+    return nextShape;
+  }, [polygon]);
+
+  const labelPoint = useMemo(() => {
+    const center = getRoomCenter(room);
+    if (!center) return [0, 0] as [number, number];
+    return toPlanPoint(center);
+  }, [room]);
+
+  const sizeHint = useMemo(() => {
+    const bounds = getRoomBounds(room);
+    if (!bounds) return { w: 0, d: 0 };
+    return {
+      w: Math.max(bounds.w * PLAN_SIZE, 0.5),
+      d: Math.max(bounds.h * PLAN_SIZE, 0.5),
+    };
+  }, [room]);
+
+  useFrame((_, delta) => {
+    if (!groupRef.current) return;
+
+    const targetY = hovered ? 0.04 : 0;
+    groupRef.current.position.y = THREE.MathUtils.lerp(groupRef.current.position.y, targetY, delta * 6);
+
+    if (floorMatRef.current) {
+      const targetColor = hovered ? hoverColorRef.current : baseColorRef.current;
+      floorMatRef.current.color.lerp(targetColor, delta * 8);
+    }
+  });
+
+  if (!shape) return null;
+
+  return (
+    <group
+      ref={groupRef}
+      position={[0, 0, 0]}
+      onPointerEnter={() => onHover(room.id)}
+      onPointerLeave={() => onHover(null)}
+    >
+      <mesh position={[0, 0, 0]} rotation={[-Math.PI / 2, 0, 0]}>
+        <shapeGeometry args={[shape]} />
+        <meshStandardMaterial
+          ref={floorMatRef}
+          color={pal.floor}
+          roughness={0.85}
+          metalness={0.02}
+          side={THREE.DoubleSide}
+        />
+      </mesh>
+
+      <Text
+        position={[labelPoint[0], 0.3, labelPoint[1]]}
+        fontSize={0.26}
+        color="#374151"
+        anchorX="center"
+        anchorY="middle"
+      >
+        {room.name ?? "Room"}
+      </Text>
+
+      <Text
+        position={[labelPoint[0], 0.05, labelPoint[1] + sizeHint.d / 2 + 0.3]}
+        rotation={[-Math.PI / 2, 0, 0]}
+        fontSize={0.18}
+        color="#6b7280"
+        anchorX="center"
+        anchorY="middle"
+      >
+        {`${sizeHint.w.toFixed(1)}m`}
+      </Text>
+
+      <Text
+        position={[labelPoint[0] + sizeHint.w / 2 + 0.3, 0.05, labelPoint[1]]}
+        rotation={[-Math.PI / 2, 0, Math.PI / 2]}
+        fontSize={0.18}
+        color="#6b7280"
+        anchorX="center"
+        anchorY="middle"
+      >
+        {`${sizeHint.d.toFixed(1)}m`}
+      </Text>
+    </group>
+  );
+}
+
 function WallSegmentMesh({
   wall,
   walls,
@@ -559,9 +760,11 @@ function computePositions(rooms: Room[]): [number, number, number][] {
 
 // ── Info overlay ──────────────────────────────────────────────────────────────
 function RoomInfoCard({ room }: { room: Room }) {
-  const w = safeNum(room.bbox?.w) * PLAN_SIZE;
-  const d = safeNum(room.bbox?.h) * PLAN_SIZE;
+  const bounds = getRoomBounds(room);
+  const w = Math.max(safeNum(bounds?.w) * PLAN_SIZE, 0);
+  const d = Math.max(safeNum(bounds?.h) * PLAN_SIZE, 0);
   const h = safeNum(room.wallHeight, 2.8);
+  const area = polygonArea(getRoomPolygon(room));
   return (
     <div className="absolute bottom-4 left-1/2 -translate-x-1/2 px-4 py-2.5 rounded-2xl bg-card/90 backdrop-blur-md border border-border shadow-2xl flex items-center gap-4 min-w-[280px] pointer-events-none">
       <div className="flex-1 min-w-0">
@@ -571,7 +774,7 @@ function RoomInfoCard({ room }: { room: Room }) {
         </p>
       </div>
       <div className="text-right shrink-0">
-        <p className="text-[11px] font-mono text-primary">{(w * d).toFixed(1)} m²</p>
+        <p className="text-[11px] font-mono text-primary">{area.toFixed(1)} m²</p>
         <p className="text-[9px] text-muted-foreground/60 uppercase tracking-wider">{room.confidence}</p>
       </div>
     </div>
@@ -594,7 +797,6 @@ function Scene({
 }) {
   const [hoveredId, setHoveredId] = useState<string | null>(null);
   const orbitControlsRef = useRef<any>(null);
-  const positions = computePositions(rooms);
   const renderWalls = snapRenderedWallJunctions(walls);
 
   const defaultWallHeight = rooms.length > 0
@@ -623,10 +825,9 @@ function Scene({
       />
 
       {rooms.map((room, i) => (
-        <RoomMesh
+        <RoomPolygonMesh
           key={room.id}
           room={room}
-          position={positions[i]}
           index={i}
           hovered={hoveredId === room.id}
           onHover={handleHover}
@@ -679,15 +880,15 @@ const RightPanel = ({
   const [viewPreset, setViewPreset] = useState<ViewPreset>("perspective");
   const hoveredRoom = rooms.find((r) => r.id === hoveredId) ?? null;
 
-  const totalW = rooms.reduce((s, r) => s + safeNum(r.bbox?.w) * PLAN_SIZE, 0);
   const maxH = rooms.length > 0 ? Math.max(...rooms.map((r) => safeNum(r.wallHeight, 2.8)), 3) : 3;
-  const camDist = Math.max(totalW * 0.8, 15);
+  const planSpan = rooms.reduce((max, room) => {
+    const bounds = getRoomBounds(room);
+    if (!bounds) return max;
+    return Math.max(max, Math.max(bounds.w, bounds.h) * PLAN_SIZE);
+  }, PLAN_SIZE);
+  const camDist = Math.max(planSpan * 1.4, 15);
 
-  const totalArea = rooms.reduce((s, r) => {
-    const w = safeNum(r.bbox?.w) * PLAN_SIZE;
-    const d = safeNum(r.bbox?.h) * PLAN_SIZE;
-    return s + w * d;
-  }, 0);
+  const totalArea = rooms.reduce((s, room) => s + polygonArea(getRoomPolygon(room)), 0);
 
   const viewOptions: { id: ViewPreset; label: string }[] = [
     { id: "perspective", label: "Perspective" },
