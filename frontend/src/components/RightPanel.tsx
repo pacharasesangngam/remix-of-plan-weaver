@@ -28,6 +28,8 @@ const ROOM_PALETTE = [
 const FLOOR_HOVER_COLOR = "#f5e6c8";
 const PLAN_SIZE = 20;
 
+// ── Utilities ─────────────────────────────────────────────────────────────────
+
 const safeNum = (v: unknown, fallback = 0): number => {
   const n = Number(v);
   return isFinite(n) ? n : fallback;
@@ -111,16 +113,420 @@ const polygonCentroid = (polygon?: NormalizedPoint[] | null): NormalizedPoint | 
   }
 
   const factor = 1 / (3 * twiceArea);
-  return {
-    x: cx * factor,
-    y: cy * factor,
-  };
+  return { x: cx * factor, y: cy * factor };
 };
 
 const getRoomCenter = (room: Room): NormalizedPoint | null =>
-  room.center ?? polygonCentroid(getRoomPolygon(room)) ?? (room.bbox
+  room.center ??
+  polygonCentroid(getRoomPolygon(room)) ??
+  (room.bbox
     ? { x: room.bbox.x + room.bbox.w / 2, y: room.bbox.y + room.bbox.h / 2 }
     : null);
+
+// ── Wall thickness helper ─────────────────────────────────────────────────────
+
+const getWallThicknessM = (wall: DetectedWallSegment): number => {
+  if (typeof wall.thickness === "number" && wall.thickness > 0) return wall.thickness;
+  if (typeof wall.thicknessRatio === "number" && wall.thicknessRatio > 0) {
+    return wall.thicknessRatio * PLAN_SIZE;
+  }
+  return wall.type === "exterior" ? 0.3 : 0.18;
+};
+
+// ── Opening width helper ──────────────────────────────────────────────────────
+
+const getWidthM = (bboxW?: number, real?: number): number => {
+  if (typeof real === "number" && real > 0) return real;
+  if (typeof bboxW === "number" && bboxW > 0) return bboxW * PLAN_SIZE;
+  return 0;
+};
+
+// ── Wall junction snapping ────────────────────────────────────────────────────
+
+const isHorizontalSegment = (wall: DetectedWallSegment): boolean =>
+  Math.abs(wall.x2 - wall.x1) >= Math.abs(wall.y2 - wall.y1);
+
+const normalizeRenderWall = (wall: DetectedWallSegment): DetectedWallSegment => {
+  if (isHorizontalSegment(wall)) {
+    const x1 = Math.min(wall.x1, wall.x2);
+    const x2 = Math.max(wall.x1, wall.x2);
+    const y = (wall.y1 + wall.y2) / 2;
+    return { ...wall, x1, x2, y1: y, y2: y };
+  }
+  const y1 = Math.min(wall.y1, wall.y2);
+  const y2 = Math.max(wall.y1, wall.y2);
+  const x = (wall.x1 + wall.x2) / 2;
+  return { ...wall, x1: x, x2: x, y1, y2 };
+};
+
+const snapAxisGroup = (
+  walls: DetectedWallSegment[],
+  axisKey: "x1" | "y1",
+  threshold = 0.003,
+) => {
+  if (walls.length === 0) return;
+  walls.sort((a, b) => a[axisKey] - b[axisKey]);
+  let cluster = [walls[0]];
+
+  const flush = () => {
+    const snapped =
+      cluster.reduce((sum, wall) => sum + wall[axisKey], 0) / cluster.length;
+    for (const wall of cluster) {
+      wall[axisKey] = snapped;
+      if (axisKey === "x1") wall.x2 = snapped;
+      else wall.y2 = snapped;
+    }
+  };
+
+  for (const wall of walls.slice(1)) {
+    if (Math.abs(wall[axisKey] - cluster[cluster.length - 1][axisKey]) <= threshold) {
+      cluster.push(wall);
+      continue;
+    }
+    flush();
+    cluster = [wall];
+  }
+  flush();
+};
+
+const snapRenderedWallJunctions = (
+  walls: DetectedWallSegment[],
+  threshold = 0.004,
+): DetectedWallSegment[] => {
+  const normalized = walls.map(normalizeRenderWall);
+  const horizontals = normalized.filter(isHorizontalSegment);
+  const verticals = normalized.filter((wall) => !isHorizontalSegment(wall));
+
+  snapAxisGroup(horizontals, "y1");
+  snapAxisGroup(verticals, "x1");
+
+  for (const horizontal of horizontals) {
+    for (const vertical of verticals) {
+      const x = vertical.x1;
+      const y = horizontal.y1;
+      const withinHorizontal =
+        x >= horizontal.x1 - threshold && x <= horizontal.x2 + threshold;
+      const withinVertical =
+        y >= vertical.y1 - threshold && y <= vertical.y2 + threshold;
+      if (!withinHorizontal || !withinVertical) continue;
+
+      if (Math.abs(horizontal.x1 - x) <= threshold) horizontal.x1 = x;
+      if (Math.abs(horizontal.x2 - x) <= threshold) horizontal.x2 = x;
+      if (Math.abs(vertical.y1 - y) <= threshold) vertical.y1 = y;
+      if (Math.abs(vertical.y2 - y) <= threshold) vertical.y2 = y;
+    }
+  }
+
+  return normalized.map(normalizeRenderWall);
+};
+
+// ── Opening gap types & projection ───────────────────────────────────────────
+
+/**
+ * A gap interval in the wall's local axis space.
+ * t values are world-metres measured from the wall's start endpoint.
+ */
+interface GapInterval {
+  tStart: number;
+  tEnd: number;
+  yStart: number; // 0 for doors, wallHeight*0.35 for windows
+  height: number; // opening height in metres
+}
+
+/**
+ * Project an opening's bbox centre onto the wall axis.
+ * Returns the [tStart, tEnd] interval in wall-local metres, or null
+ * if the opening is too far off-axis to belong to this wall.
+ */
+const projectOpeningEdgesOntoWall = (
+  bbox: BBox,
+  wall: DetectedWallSegment,
+  wallLengthM: number
+): { tStart: number; tEnd: number } | null => {
+  // ── World wall vector ──
+  const wx1 = wall.x1 * PLAN_SIZE;
+  const wz1 = wall.y1 * PLAN_SIZE;
+  const wx2 = wall.x2 * PLAN_SIZE;
+  const wz2 = wall.y2 * PLAN_SIZE;
+
+  const dx = wx2 - wx1;
+  const dz = wz2 - wz1;
+  const wallLen = Math.sqrt(dx * dx + dz * dz);
+  if (wallLen < 1e-6) return null;
+
+  const ux = dx / wallLen;
+  const uz = dz / wallLen;
+
+  // ── BBOX edges (world space) ──
+  const leftX = bbox.x * PLAN_SIZE;
+  const rightX = (bbox.x + bbox.w) * PLAN_SIZE;
+  const topZ = bbox.y * PLAN_SIZE;
+  const bottomZ = (bbox.y + bbox.h) * PLAN_SIZE;
+
+  // 4 corners
+  const points = [
+    [leftX, topZ],
+    [rightX, topZ],
+    [rightX, bottomZ],
+    [leftX, bottomZ],
+  ];
+
+  // project all points → take min/max
+  let minT = Infinity;
+  let maxT = -Infinity;
+
+  for (const [px, pz] of points) {
+    const vx = px - wx1;
+    const vz = pz - wz1;
+    const t = vx * ux + vz * uz;
+    minT = Math.min(minT, t);
+    maxT = Math.max(maxT, t);
+  }
+
+  // reject if not on wall
+  const thickness = getWallThicknessM(wall);
+  const tolerance = Math.max(thickness, 0.2);
+
+  // check perpendicular distance using center
+  const cx = (bbox.x + bbox.w / 2) * PLAN_SIZE;
+  const cz = (bbox.y + bbox.h / 2) * PLAN_SIZE;
+
+  const vx = cx - wx1;
+  const vz = cz - wz1;
+
+  const perp = Math.abs(vx * (-uz) + vz * ux);
+  if (perp > tolerance) return null;
+
+  // clamp
+  if (maxT < 0 || minT > wallLengthM) return null;
+
+  return {
+    tStart: Math.max(0, minT),
+    tEnd: Math.min(wallLengthM, maxT),
+  };
+};
+
+/**
+ * Collect all gap intervals for a wall from doors + windows.
+ * Sorts and merges overlapping intervals.
+ */
+const computeGapIntervals = (
+  wall: DetectedWallSegment,
+  wallLengthM: number,
+  wallHeightM: number,
+  doors: DetectedDoor[],
+  windows: DetectedWindow[],
+): GapInterval[] => {
+  const raw: GapInterval[] = [];
+
+  for (const door of doors) {
+    if (!door.bbox) continue;
+    const proj = projectOpeningEdgesOntoWall(door.bbox, wall, wallLengthM);
+    if (!proj) continue;
+    raw.push({
+      ...proj,
+      yStart: 0,
+      height: Math.min(wallHeightM * 0.9, 2.2),
+    });
+  }
+
+  for (const win of windows) {
+    if (!win.bbox) continue;
+    const proj = projectOpeningEdgesOntoWall(win.bbox, wall, wallLengthM);
+    if (!proj) continue;
+    raw.push({
+      ...proj,
+      yStart: wallHeightM * 0.35,
+      height: Math.min(wallHeightM * 0.45, 1.2),
+    });
+  }
+
+  if (raw.length === 0) return [];
+
+  raw.sort((a, b) => a.tStart - b.tStart);
+
+  const merged: GapInterval[] = [{ ...raw[0] }];
+  for (let i = 1; i < raw.length; i++) {
+    const prev = merged[merged.length - 1];
+    const cur = raw[i];
+    const EPS = 0.05;
+    if (cur.tStart <= prev.tEnd + EPS) {
+      const newYStart = Math.min(prev.yStart, cur.yStart);
+      const prevTop = prev.yStart + prev.height;
+      const curTop = cur.yStart + cur.height;
+      prev.tEnd = Math.max(prev.tEnd, cur.tEnd);
+      prev.yStart = newYStart;
+      prev.height = Math.max(prevTop, curTop) - newYStart;
+    } else {
+      merged.push({ ...cur });
+    }
+  }
+
+  return merged;
+};
+
+/**
+ * A solid box sub-segment of the wall.
+ */
+interface SolidSegment {
+  tStart: number;
+  tEnd: number;
+  yStart: number;
+  yEnd: number;
+}
+
+const computeSolidSegments = (
+  wallLengthM: number,
+  wallHeightM: number,
+  gaps: GapInterval[],
+): SolidSegment[] => {
+  const solids: SolidSegment[] = [];
+
+  let cursor = 0;
+  for (const gap of gaps) {
+    if (gap.tStart > cursor + 0.001) {
+      solids.push({ tStart: cursor, tEnd: gap.tStart, yStart: 0, yEnd: wallHeightM });
+    }
+
+    if (gap.yStart > 0.01) {
+      solids.push({ tStart: gap.tStart, tEnd: gap.tEnd, yStart: 0, yEnd: gap.yStart });
+    }
+
+    const gapTop = gap.yStart + gap.height;
+    if (gapTop < wallHeightM - 0.01) {
+      solids.push({ tStart: gap.tStart, tEnd: gap.tEnd, yStart: gapTop, yEnd: wallHeightM });
+    }
+
+    cursor = gap.tEnd;
+  }
+
+  if (cursor < wallLengthM - 0.001) {
+    solids.push({ tStart: cursor, tEnd: wallLengthM, yStart: 0, yEnd: wallHeightM });
+  }
+
+  return solids;
+};
+
+// ── Shared opening transform ──────────────────────────────────────────────────
+
+/**
+ * Unified transform for doors and windows.
+ *
+ * Uses the same projection logic as the gap system so that door/window meshes
+ * are placed in exactly the same wall-local coordinate space as the wall holes.
+ *
+ * Returns:
+ *   center  – world XZ position of the wall's midpoint
+ *   angle   – wall rotation angle (Y axis, radians) — same as WallSegmentMesh
+ *   localX  – X offset within the wall-aligned group (measured from group origin)
+ *
+ * Returns null when the opening cannot be projected onto this wall.
+ */
+interface OpeningTransform {
+  center: [number, number]; // [worldX, worldZ] of wall midpoint
+  angle: number;            // wall rotation (radians)
+  localX: number;           // local X within wall group (opening centre)
+  wallLengthM: number;
+  projectedWidth: number;   // opening width measured along wall axis (= gap width)
+}
+
+function getOpeningTransform(
+  bbox: BBox,
+  wall: DetectedWallSegment,
+): OpeningTransform | null {
+  // World-space wall endpoints (same coordinate transforms as WallSegmentMesh)
+  const x1 = wall.x1 * PLAN_SIZE - PLAN_SIZE / 2;
+  const z1 = wall.y1 * PLAN_SIZE - PLAN_SIZE / 2;
+  const x2 = wall.x2 * PLAN_SIZE - PLAN_SIZE / 2;
+  const z2 = wall.y2 * PLAN_SIZE - PLAN_SIZE / 2;
+
+  const dx = x2 - x1;
+  const dz = z2 - z1;
+  const wallLengthM = Math.sqrt(
+    Math.pow((wall.x2 - wall.x1) * PLAN_SIZE, 2) +
+    Math.pow((wall.y2 - wall.y1) * PLAN_SIZE, 2),
+  );
+
+  if (wallLengthM < 0.001) return null;
+
+  const angle = Math.atan2(dz, dx);
+
+  // Project opening bbox onto wall axis — identical to the gap system
+  const proj = projectOpeningEdgesOntoWall(bbox, wall, wallLengthM);
+  if (!proj) return null;
+
+  // Width along the wall axis = exactly the gap width the wall uses
+  const projectedWidth = proj.tEnd - proj.tStart;
+
+  // Centre of the opening in wall-local space (t from wall start)
+  const tCenter = (proj.tStart + proj.tEnd) / 2;
+
+  // Wall group origin is the wall midpoint → local X offset from midpoint
+  const localX = tCenter - wallLengthM / 2;
+
+  const wallCenterX = (x1 + x2) / 2;
+  const wallCenterZ = (z1 + z2) / 2;
+
+  return {
+    center: [wallCenterX, wallCenterZ],
+    angle,
+    localX,
+    wallLengthM,
+    projectedWidth,
+  };
+}
+
+/**
+ * Find the best matching wall for a given bbox.
+ * Returns the wall whose axis the bbox projects onto with the smallest
+ * perpendicular distance. Falls back to null if no wall accepts the opening.
+ */
+function findBestWall(
+  bbox: BBox,
+  walls: DetectedWallSegment[],
+): DetectedWallSegment | null {
+  let best: DetectedWallSegment | null = null;
+  let bestPerp = Infinity;
+
+  for (const wall of walls) {
+    const wx1 = wall.x1 * PLAN_SIZE;
+    const wz1 = wall.y1 * PLAN_SIZE;
+    const wx2 = wall.x2 * PLAN_SIZE;
+    const wz2 = wall.y2 * PLAN_SIZE;
+
+    const ddx = wx2 - wx1;
+    const ddz = wz2 - wz1;
+    const wallLen = Math.sqrt(ddx * ddx + ddz * ddz);
+    if (wallLen < 0.001) continue;
+
+    const ux = ddx / wallLen;
+    const uz = ddz / wallLen;
+
+    const cx = (bbox.x + bbox.w / 2) * PLAN_SIZE;
+    const cz = (bbox.y + bbox.h / 2) * PLAN_SIZE;
+
+    const vx = cx - wx1;
+    const vz = cz - wz1;
+
+    const t = vx * ux + vz * uz;
+    const perp = Math.abs(vx * (-uz) + vz * ux);
+
+    const thickness = getWallThicknessM(wall);
+    const tolerance = Math.max(thickness, 0.2);
+
+    if (perp > tolerance) continue;
+    if (t < 0 || t > wallLen) continue;
+
+    if (perp < bestPerp) {
+      bestPerp = perp;
+      best = wall;
+    }
+  }
+
+  return best;
+}
+
+// ── First-person controller ───────────────────────────────────────────────────
 
 function FirstPersonController({ enabled }: { enabled: boolean }) {
   const { camera } = useThree();
@@ -143,10 +549,12 @@ function FirstPersonController({ enabled }: { enabled: boolean }) {
     camera.lookAt(0, 1.7, 0);
 
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.code in keysRef.current) keysRef.current[event.code as keyof typeof keysRef.current] = true;
+      if (event.code in keysRef.current)
+        keysRef.current[event.code as keyof typeof keysRef.current] = true;
     };
     const onKeyUp = (event: KeyboardEvent) => {
-      if (event.code in keysRef.current) keysRef.current[event.code as keyof typeof keysRef.current] = false;
+      if (event.code in keysRef.current)
+        keysRef.current[event.code as keyof typeof keysRef.current] = false;
     };
 
     window.addEventListener("keydown", onKeyDown);
@@ -181,6 +589,8 @@ function FirstPersonController({ enabled }: { enabled: boolean }) {
 
   return enabled ? <PointerLockControls ref={controlsRef} /> : null;
 }
+
+// ── Camera preset controller ──────────────────────────────────────────────────
 
 function CameraPresetController({
   preset,
@@ -224,224 +634,8 @@ function CameraPresetController({
   return null;
 }
 
-const getWidthM = (bboxW?: number, real?: number, planSize = PLAN_SIZE): number => {
-  if (typeof real === "number" && real > 0) return real;
-  if (typeof bboxW === "number" && bboxW > 0) return bboxW * planSize;
-  return 0;
-};
+// ── Room Polygon Mesh ─────────────────────────────────────────────────────────
 
-const getWallThicknessM = (wall: DetectedWallSegment): number => {
-  if (typeof wall.thickness === "number" && wall.thickness > 0) return wall.thickness;
-  if (typeof wall.thicknessRatio === "number" && wall.thicknessRatio > 0) {
-    return wall.thicknessRatio * PLAN_SIZE;
-  }
-  return wall.type === "exterior" ? 0.25 : 0.15;
-};
-
-const isHorizontalSegment = (wall: DetectedWallSegment): boolean =>
-  Math.abs(wall.x2 - wall.x1) >= Math.abs(wall.y2 - wall.y1);
-
-const getWallEndpointAdjustment = (
-  wall: DetectedWallSegment,
-  walls: DetectedWallSegment[],
-  endpointValue: number,
-): number => {
-  const horizontal = isHorizontalSegment(wall);
-  const constantAxis = horizontal ? wall.y1 : wall.x1;
-  let adjustment = 0;
-
-  for (const candidate of walls) {
-    if (candidate.id === wall.id || isHorizontalSegment(candidate) === horizontal) continue;
-
-    const candidateAxis = horizontal ? candidate.x1 : candidate.y1;
-    const rangeMin = horizontal ? Math.min(candidate.y1, candidate.y2) : Math.min(candidate.x1, candidate.x2);
-    const rangeMax = horizontal ? Math.max(candidate.y1, candidate.y2) : Math.max(candidate.x1, candidate.x2);
-    const touchesEndpoint =
-      Math.abs(candidateAxis - endpointValue) <= 0.0015 &&
-      constantAxis >= rangeMin - 0.0015 &&
-      constantAxis <= rangeMax + 0.0015;
-
-    if (!touchesEndpoint) continue;
-
-    const candidateThicknessHalf = getWallThicknessM(candidate) / 2;
-    const candidateStartsHere = horizontal
-      ? Math.abs(candidate.y1 - constantAxis) <= 0.0015 || Math.abs(candidate.y2 - constantAxis) <= 0.0015
-      : Math.abs(candidate.x1 - constantAxis) <= 0.0015 || Math.abs(candidate.x2 - constantAxis) <= 0.0015;
-
-    if (candidateStartsHere) {
-      adjustment = Math.max(adjustment, candidateThicknessHalf);
-    } else {
-      adjustment = Math.min(adjustment, -candidateThicknessHalf);
-    }
-  }
-
-  return adjustment;
-};
-
-const normalizeRenderWall = (wall: DetectedWallSegment): DetectedWallSegment => {
-  if (isHorizontalSegment(wall)) {
-    const x1 = Math.min(wall.x1, wall.x2);
-    const x2 = Math.max(wall.x1, wall.x2);
-    const y = (wall.y1 + wall.y2) / 2;
-    return { ...wall, x1, x2, y1: y, y2: y };
-  }
-
-  const y1 = Math.min(wall.y1, wall.y2);
-  const y2 = Math.max(wall.y1, wall.y2);
-  const x = (wall.x1 + wall.x2) / 2;
-  return { ...wall, x1: x, x2: x, y1, y2 };
-};
-
-const snapAxisGroup = (
-  walls: DetectedWallSegment[],
-  axisKey: "x1" | "y1",
-  threshold = 0.003,
-) => {
-  if (walls.length === 0) return;
-
-  walls.sort((a, b) => a[axisKey] - b[axisKey]);
-  let cluster = [walls[0]];
-
-  const flush = () => {
-    const snapped = cluster.reduce((sum, wall) => sum + wall[axisKey], 0) / cluster.length;
-    for (const wall of cluster) {
-      wall[axisKey] = snapped;
-      if (axisKey === "x1") wall.x2 = snapped;
-      else wall.y2 = snapped;
-    }
-  };
-
-  for (const wall of walls.slice(1)) {
-    if (Math.abs(wall[axisKey] - cluster[cluster.length - 1][axisKey]) <= threshold) {
-      cluster.push(wall);
-      continue;
-    }
-    flush();
-    cluster = [wall];
-  }
-
-  flush();
-};
-
-const snapRenderedWallJunctions = (
-  walls: DetectedWallSegment[],
-  threshold = 0.004,
-): DetectedWallSegment[] => {
-  const normalized = walls.map(normalizeRenderWall);
-  const horizontals = normalized.filter(isHorizontalSegment);
-  const verticals = normalized.filter((wall) => !isHorizontalSegment(wall));
-
-  snapAxisGroup(horizontals, "y1");
-  snapAxisGroup(verticals, "x1");
-
-  for (const horizontal of horizontals) {
-    for (const vertical of verticals) {
-      const x = vertical.x1;
-      const y = horizontal.y1;
-      const withinHorizontal = x >= horizontal.x1 - threshold && x <= horizontal.x2 + threshold;
-      const withinVertical = y >= vertical.y1 - threshold && y <= vertical.y2 + threshold;
-      if (!withinHorizontal || !withinVertical) continue;
-
-      if (Math.abs(horizontal.x1 - x) <= threshold) horizontal.x1 = x;
-      if (Math.abs(horizontal.x2 - x) <= threshold) horizontal.x2 = x;
-      if (Math.abs(vertical.y1 - y) <= threshold) vertical.y1 = y;
-      if (Math.abs(vertical.y2 - y) <= threshold) vertical.y2 = y;
-    }
-  }
-
-  return normalized.map(normalizeRenderWall);
-};
-
-// ── Animated room mesh ────────────────────────────────────────────────────────
-function RoomMesh({ room, position, index, hovered, onHover }) {
-  const groupRef = useRef<THREE.Group>(null);
-  // ใช้ ref เก็บ material เพื่อ mutate color โดยไม่ trigger re-render
-  const floorMatRef = useRef<THREE.MeshStandardMaterial>(null);
-  const isHoveredRef = useRef(false);
-
-  const w = Math.max(safeNum(room.bbox?.w) * PLAN_SIZE, 0.5);
-  const d = Math.max(safeNum(room.bbox?.h) * PLAN_SIZE, 0.5);
-  const floorThickness = 0.15;
-
-  const pal = ROOM_PALETTE[index % ROOM_PALETTE.length];
-
-  // สีพื้นฐานเป็น THREE.Color object — สร้างครั้งเดียวใน ref
-  const baseColorRef = useRef(new THREE.Color(pal.floor));
-  const hoverColorRef = useRef(new THREE.Color(FLOOR_HOVER_COLOR));
-
-  useFrame((_, delta) => {
-    if (!groupRef.current) return;
-
-    // Animate Y position
-    const targetY = hovered ? 0.04 : 0;
-    groupRef.current.position.y = THREE.MathUtils.lerp(
-      groupRef.current.position.y,
-      targetY,
-      delta * 6,
-    );
-
-    // Lerp color โดยตรงบน material — ไม่ trigger React re-render
-    if (floorMatRef.current) {
-      const targetColor = hovered ? hoverColorRef.current : baseColorRef.current;
-      floorMatRef.current.color.lerp(targetColor, delta * 8);
-    }
-
-    isHoveredRef.current = hovered;
-  });
-
-  return (
-    <group
-      ref={groupRef}
-      position={position}
-      onPointerEnter={() => onHover(room.id)}
-      onPointerLeave={() => onHover(null)}
-    >
-      <mesh position={[0, -floorThickness / 2, 0]}>
-        <boxGeometry args={[w, floorThickness, d]} />
-        {/* ref material เพื่อ mutate color ใน useFrame */}
-        <meshStandardMaterial
-          ref={floorMatRef}
-          color={pal.floor}
-          roughness={0.85}
-          metalness={0.02}
-        />
-      </mesh>
-
-      <Text
-        position={[0, 0.3, 0]}
-        fontSize={0.26}
-        color="#374151"
-        anchorX="center"
-        anchorY="middle"
-      >
-        {room.name ?? "Room"}
-      </Text>
-
-      <Text
-        position={[0, 0.05, d / 2 + 0.3]}
-        rotation={[-Math.PI / 2, 0, 0]}
-        fontSize={0.18}
-        color="#6b7280"
-        anchorX="center"
-        anchorY="middle"
-      >
-        {`${w.toFixed(1)}m`}
-      </Text>
-      <Text
-        position={[w / 2 + 0.3, 0.05, 0]}
-        rotation={[-Math.PI / 2, 0, Math.PI / 2]}
-        fontSize={0.18}
-        color="#6b7280"
-        anchorX="center"
-        anchorY="middle"
-      >
-        {`${d.toFixed(1)}m`}
-      </Text>
-    </group>
-  );
-}
-
-// ── Detected Wall Segment as 3D box ──────────────────────────────────────────
 function RoomPolygonMesh({
   room,
   index,
@@ -455,21 +649,21 @@ function RoomPolygonMesh({
 }) {
   const groupRef = useRef<THREE.Group>(null);
   const floorMatRef = useRef<THREE.MeshStandardMaterial>(null);
+
   const pal = ROOM_PALETTE[index % ROOM_PALETTE.length];
   const baseColorRef = useRef(new THREE.Color(pal.floor));
   const hoverColorRef = useRef(new THREE.Color(FLOOR_HOVER_COLOR));
 
   const polygon = useMemo(() => getRoomPolygon(room), [room]);
+
   const shape = useMemo(() => {
     if (!polygon || polygon.length < 3) return null;
-    const points = polygon.map((p) => toPlanPoint(p));
-    const nextShape = new THREE.Shape();
-    nextShape.moveTo(points[0][0], points[0][1]);
-    for (let i = 1; i < points.length; i += 1) {
-      nextShape.lineTo(points[i][0], points[i][1]);
-    }
-    nextShape.closePath();
-    return nextShape;
+    const pts = polygon.map(toPlanPoint);
+    const s = new THREE.Shape();
+    s.moveTo(pts[0][0], pts[0][1]);
+    for (let i = 1; i < pts.length; i++) s.lineTo(pts[i][0], pts[i][1]);
+    s.closePath();
+    return s;
   }, [polygon]);
 
   const labelPoint = useMemo(() => {
@@ -489,10 +683,12 @@ function RoomPolygonMesh({
 
   useFrame((_, delta) => {
     if (!groupRef.current) return;
-
     const targetY = hovered ? 0.04 : 0;
-    groupRef.current.position.y = THREE.MathUtils.lerp(groupRef.current.position.y, targetY, delta * 6);
-
+    groupRef.current.position.y = THREE.MathUtils.lerp(
+      groupRef.current.position.y,
+      targetY,
+      delta * 6,
+    );
     if (floorMatRef.current) {
       const targetColor = hovered ? hoverColorRef.current : baseColorRef.current;
       floorMatRef.current.color.lerp(targetColor, delta * 8);
@@ -508,7 +704,7 @@ function RoomPolygonMesh({
       onPointerEnter={() => onHover(room.id)}
       onPointerLeave={() => onHover(null)}
     >
-      <mesh position={[0, 0, 0]} rotation={[-Math.PI / 2, 0, 0]}>
+      <mesh rotation={[-Math.PI / 2, 0, 0]} renderOrder={2}>
         <shapeGeometry args={[shape]} />
         <meshStandardMaterial
           ref={floorMatRef}
@@ -554,217 +750,237 @@ function RoomPolygonMesh({
   );
 }
 
+// ── Wall Segment Mesh ─────────────────────────────────────────────────────────
+
 function WallSegmentMesh({
   wall,
-  walls,
-  wallHeight: defaultWallHeight,
+  wallHeight,
+  doors,
+  windows,
 }: {
   wall: DetectedWallSegment;
-  walls: DetectedWallSegment[];
   wallHeight: number;
+  doors: DetectedDoor[];
+  windows: DetectedWindow[];
 }) {
-  const wallHeight = safeNum(wall.wallHeight, defaultWallHeight);
+  const resolvedHeight = safeNum(wall.wallHeight, wallHeight);
   const thickness = getWallThicknessM(wall);
-  const horizontal = isHorizontalSegment(wall);
 
-  let startX = wall.x1;
-  let startY = wall.y1;
-  let endX = wall.x2;
-  let endY = wall.y2;
-
-  if (horizontal) {
-    const leftToRight = wall.x1 <= wall.x2;
-    const leftAdjust = getWallEndpointAdjustment(wall, walls, leftToRight ? wall.x1 : wall.x2) / PLAN_SIZE;
-    const rightAdjust = getWallEndpointAdjustment(wall, walls, leftToRight ? wall.x2 : wall.x1) / PLAN_SIZE;
-
-    if (leftToRight) {
-      startX -= leftAdjust;
-      endX += rightAdjust;
-    } else {
-      startX += leftAdjust;
-      endX -= rightAdjust;
-    }
-  } else {
-    const topToBottom = wall.y1 <= wall.y2;
-    const topAdjust = getWallEndpointAdjustment(wall, walls, topToBottom ? wall.y1 : wall.y2) / PLAN_SIZE;
-    const bottomAdjust = getWallEndpointAdjustment(wall, walls, topToBottom ? wall.y2 : wall.y1) / PLAN_SIZE;
-
-    if (topToBottom) {
-      startY -= topAdjust;
-      endY += bottomAdjust;
-    } else {
-      startY += topAdjust;
-      endY -= bottomAdjust;
-    }
-  }
-
-  const x1 = startX * PLAN_SIZE - PLAN_SIZE / 2;
-  const z1 = startY * PLAN_SIZE - PLAN_SIZE / 2;
-  const x2 = endX * PLAN_SIZE - PLAN_SIZE / 2;
-  const z2 = endY * PLAN_SIZE - PLAN_SIZE / 2;
+  const x1 = wall.x1 * PLAN_SIZE - PLAN_SIZE / 2;
+  const z1 = wall.y1 * PLAN_SIZE - PLAN_SIZE / 2;
+  const x2 = wall.x2 * PLAN_SIZE - PLAN_SIZE / 2;
+  const z2 = wall.y2 * PLAN_SIZE - PLAN_SIZE / 2;
 
   const dx = x2 - x1;
   const dz = z2 - z1;
-  const rawLength = Math.sqrt(dx * dx + dz * dz);
+  const wallLengthM = Math.sqrt(
+    Math.pow((wall.x2 - wall.x1) * PLAN_SIZE, 2) +
+    Math.pow((wall.y2 - wall.y1) * PLAN_SIZE, 2),
+  );
+
+  if (wallLengthM < 0.001) return null;
+
   const angle = Math.atan2(dz, dx);
-
-  const effectiveLength = Math.max(0.01, rawLength);
-
   const cx = (x1 + x2) / 2;
   const cz = (z1 + z2) / 2;
 
-  const isExterior = wall.type === "exterior";
-  const color = isExterior ? "#d1d5db" : "#e5e7eb";
-  const emissive = isExterior ? "#6b7280" : "#9ca3af";
-  const typeColor = isExterior ? "#e2e8f0" : "#94a3b8";
+  const gaps = computeGapIntervals(wall, wallLengthM, resolvedHeight, doors, windows);
+  const solids = computeSolidSegments(wallLengthM, resolvedHeight, gaps);
 
   return (
     <group position={[cx, 0, cz]} rotation={[0, -angle, 0]}>
-      <mesh position={[0, wallHeight / 2, 0]}>
-        <boxGeometry args={[effectiveLength, wallHeight, thickness]} />
-        <meshStandardMaterial
-          color={color}
-          emissive={emissive}
-          emissiveIntensity={0.3}
-          roughness={0.7}
-          metalness={0.05}
-          polygonOffset
-          polygonOffsetFactor={-1}
-          polygonOffsetUnits={-1}
-        />
-      </mesh>
+      {solids.map((seg, i) => {
+        const segLen = seg.tEnd - seg.tStart;
+        const segH = seg.yEnd - seg.yStart;
+        if (segLen < 0.001 || segH < 0.001) return null;
 
-      <Text position={[0, wallHeight + 0.2, 0]} fontSize={0.16} color={typeColor} anchorX="center" anchorY="middle">
-        {`${rawLength.toFixed(1)}m`}
-      </Text>
-      <Text
-        position={[effectiveLength / 2 + 0.15, wallHeight / 2, thickness / 2 + 0.05]}
-        fontSize={0.12}
-        color="#94a3b8"
-        anchorX="left"
-        anchorY="middle"
-        rotation={[0, 0, Math.PI / 2]}
-      >
-        {`H ${wallHeight.toFixed(1)}m`}
-      </Text>
-      <Text position={[0, wallHeight + 0.4, 0]} fontSize={0.11} color={typeColor} anchorX="center" anchorY="middle">
-        {`${isExterior ? "EXT" : "INT"} · ${(thickness * 100).toFixed(0)}cm`}
-      </Text>
+        const localX = seg.tStart + segLen / 2 - wallLengthM / 2;
+        const localY = seg.yStart + segH / 2;
+
+        return (
+          <mesh key={i} position={[localX, localY, 0]}>
+            <boxGeometry args={[segLen, segH, thickness]} />
+            <meshStandardMaterial color="#e5e7eb" roughness={0.7} metalness={0.05} />
+          </mesh>
+        );
+      })}
     </group>
   );
 }
 
-// ── Detected Door as 3D opening ──────────────────────────────────────────────
-function DoorMesh({ door, wallHeight }: { door: DetectedDoor; wallHeight: number }) {
+// ── Door Mesh ─────────────────────────────────────────────────────────────────
+/**
+ * Positioned using getOpeningTransform() so that the door mesh sits in the
+ * same wall-local coordinate space as the gap cut in WallSegmentMesh.
+ *
+ * Group hierarchy (mirrors WallSegmentMesh):
+ *   <group position={wallCenter} rotation={[0, -angle, 0]}>   ← wall space
+ *     <group position={[localX, 0, 0]}>                        ← opening centre
+ *       {door geometry}
+ *     </group>
+ *   </group>
+ */
+function DoorMesh({
+  door,
+  wallHeight,
+  walls,
+}: {
+  door: DetectedDoor;
+  wallHeight: number;
+  walls: DetectedWallSegment[];
+}) {
   if (!door.bbox) return null;
-  const cx = (door.bbox.x + door.bbox.w / 2) * PLAN_SIZE - PLAN_SIZE / 2;
-  const cz = (door.bbox.y + door.bbox.h / 2) * PLAN_SIZE - PLAN_SIZE / 2;
-  const doorW = Math.max(getWidthM(door.bbox.w, door.widthM), 0.8);
-  const doorH = Math.min(wallHeight * 0.85, 2.1);
+
+  const wall = findBestWall(door.bbox, walls);
+  if (!wall) return null;
+
+  const transform = getOpeningTransform(door.bbox, wall);
+  if (!transform) return null;
+
+  const { center, angle, localX, projectedWidth } = transform;
+
+  // Use the projected wall-axis width (same value the gap system cuts) so the
+  // door frame exactly matches the hole. Fall back to bbox-derived width only
+  // when projection returns zero (shouldn't happen in practice).
+  const doorW = projectedWidth > 0.05 ? projectedWidth : Math.max(getWidthM(door.bbox.w, door.widthM), 0.8);
+  // Match gap height: Math.min(wallHeightM * 0.9, 2.2)
+  const doorH = Math.min(wallHeight * 0.9, 2.2);
   const doorD = 0.12;
 
-  const bboxW = door.bbox.w * PLAN_SIZE;
-  const bboxH = door.bbox.h * PLAN_SIZE;
-  const isHorizontal = bboxW > bboxH;
-  const rotY = isHorizontal ? 0 : Math.PI / 2;
-
   return (
-    <group position={[cx, 0, cz]} rotation={[0, rotY, 0]}>
-      <mesh position={[-doorW / 2 - 0.04, doorH / 2, 0]}>
-        <boxGeometry args={[0.08, doorH, doorD + 0.06]} />
-        <meshStandardMaterial color="#78350f" roughness={0.5} metalness={0.1} />
-      </mesh>
-      <mesh position={[doorW / 2 + 0.04, doorH / 2, 0]}>
-        <boxGeometry args={[0.08, doorH, doorD + 0.06]} />
-        <meshStandardMaterial color="#78350f" roughness={0.5} metalness={0.1} />
-      </mesh>
-      <mesh position={[0, doorH + 0.04, 0]}>
-        <boxGeometry args={[doorW + 0.16, 0.08, doorD + 0.06]} />
-        <meshStandardMaterial color="#78350f" roughness={0.5} metalness={0.1} />
-      </mesh>
-      <mesh position={[doorW / 4, doorH / 2, doorD / 2 + 0.02]} castShadow>
-        <boxGeometry args={[doorW * 0.48, doorH - 0.05, 0.05]} />
-        <meshStandardMaterial color="#fef3c7" emissive="#f59e0b" emissiveIntensity={0.15} roughness={0.4} metalness={0.08} transparent opacity={0.9} />
-      </mesh>
-      <Text position={[0, doorH + 0.3, 0]} fontSize={0.15} color="#f59e0b" anchorX="center" anchorY="middle">
-        {`D ${doorW.toFixed(1)}m`}
-      </Text>
+    <group position={[center[0], 0, center[1]]} rotation={[0, -angle, 0]}>
+      <group position={[localX, 0, 0]}>
+        {/* Left jamb */}
+        <mesh position={[-doorW / 2 - 0.04, doorH / 2, 0]}>
+          <boxGeometry args={[0.08, doorH, doorD + 0.06]} />
+          <meshStandardMaterial color="#78350f" roughness={0.5} metalness={0.1} />
+        </mesh>
+        {/* Right jamb */}
+        <mesh position={[doorW / 2 + 0.04, doorH / 2, 0]}>
+          <boxGeometry args={[0.08, doorH, doorD + 0.06]} />
+          <meshStandardMaterial color="#78350f" roughness={0.5} metalness={0.1} />
+        </mesh>
+        {/* Header */}
+        <mesh position={[0, doorH + 0.04, 0]}>
+          <boxGeometry args={[doorW + 0.16, 0.08, doorD + 0.06]} />
+          <meshStandardMaterial color="#78350f" roughness={0.5} metalness={0.1} />
+        </mesh>
+        {/* Panel */}
+        <mesh position={[doorW / 4, doorH / 2, doorD / 2 + 0.02]} castShadow>
+          <boxGeometry args={[doorW * 0.48, doorH - 0.05, 0.05]} />
+          <meshStandardMaterial
+            color="#fef3c7"
+            emissive="#f59e0b"
+            emissiveIntensity={0.15}
+            roughness={0.4}
+            metalness={0.08}
+            transparent
+            opacity={0.6}
+          />
+        </mesh>
+        <Text
+          position={[0, doorH + 0.3, 0]}
+          fontSize={0.15}
+          color="#f59e0b"
+          anchorX="center"
+          anchorY="middle"
+        >
+          {`D ${doorW.toFixed(1)}m`}
+        </Text>
+      </group>
     </group>
   );
 }
 
-// ── Detected Window as 3D glass pane ─────────────────────────────────────────
-function WindowMesh({ win, wallHeight }: { win: DetectedWindow; wallHeight: number }) {
+// ── Window Mesh ───────────────────────────────────────────────────────────────
+/**
+ * Same coordinate-system unification as DoorMesh.
+ */
+function WindowMesh({
+  win,
+  wallHeight,
+  walls,
+}: {
+  win: DetectedWindow;
+  wallHeight: number;
+  walls: DetectedWallSegment[];
+}) {
   if (!win.bbox) return null;
-  const cx = (win.bbox.x + win.bbox.w / 2) * PLAN_SIZE - PLAN_SIZE / 2;
-  const cz = (win.bbox.y + win.bbox.h / 2) * PLAN_SIZE - PLAN_SIZE / 2;
-  const winW = Math.max(getWidthM(win.bbox.w, win.widthM), 0.6);
+
+  const wall = findBestWall(win.bbox, walls);
+  if (!wall) return null;
+
+  const transform = getOpeningTransform(win.bbox, wall);
+  if (!transform) return null;
+
+  const { center, angle, localX, projectedWidth } = transform;
+
+  // Width: use the projected wall-axis span — identical to gap tEnd-tStart
+  const winW = projectedWidth > 0.05 ? projectedWidth : Math.max(getWidthM(win.bbox.w, win.widthM), 0.6);
+  // Height & sill: must exactly mirror computeGapIntervals window values
   const winH = Math.min(wallHeight * 0.45, 1.2);
   const winD = 0.08;
   const sillY = wallHeight * 0.35;
 
-  const bboxW = win.bbox.w * PLAN_SIZE;
-  const bboxH = win.bbox.h * PLAN_SIZE;
-  const isHorizontal = bboxW > bboxH;
-  const rotY = isHorizontal ? 0 : Math.PI / 2;
-
+  // All child Y positions are relative to sillY (bottom of gap).
+  // BoxGeometry centres are at Y=half-height so we add winH/2 to side frames,
+  // winH to the top frame, and 0 to the bottom frame — matching gap exactly.
   return (
-    <group position={[cx, sillY, cz]} rotation={[0, rotY, 0]}>
-      <mesh castShadow>
-        <boxGeometry args={[winW + 0.1, winH + 0.1, winD + 0.04]} />
-        <meshStandardMaterial color="#cbd5e1" roughness={0.4} metalness={0.3} />
-      </mesh>
-      <mesh position={[-winW / 4, 0, 0]}>
-        <boxGeometry args={[winW / 2 - 0.04, winH - 0.06, winD - 0.02]} />
-        <meshStandardMaterial color="#bae6fd" emissive="#38bdf8" emissiveIntensity={0.4} roughness={0.1} metalness={0.5} transparent opacity={0.55} />
-      </mesh>
-      <mesh position={[winW / 4, 0, 0]}>
-        <boxGeometry args={[winW / 2 - 0.04, winH - 0.06, winD - 0.02]} />
-        <meshStandardMaterial color="#67e8f9" emissive="#06b6d4" emissiveIntensity={0.15} roughness={0.1} metalness={0.5} transparent opacity={0.35} />
-      </mesh>
-      <mesh position={[0, 0, 0]}>
-        <boxGeometry args={[0.04, winH - 0.06, winD]} />
-        <meshStandardMaterial color="#94a3b8" roughness={0.4} metalness={0.3} />
-      </mesh>
-      <mesh position={[0, 0, 0]}>
-        <boxGeometry args={[winW - 0.06, 0.04, winD]} />
-        <meshStandardMaterial color="#94a3b8" roughness={0.4} metalness={0.3} />
-      </mesh>
-      <Text position={[0, winH / 2 + 0.25, 0]} fontSize={0.13} color="#06b6d4" anchorX="center" anchorY="middle">
-        {`W ${winW.toFixed(1)}m`}
-      </Text>
+    <group position={[center[0], 0, center[1]]} rotation={[0, -angle, 0]}>
+      <group position={[localX, sillY, 0]}>
+        {/* Left frame — bottom-anchored: centre at winH/2 */}
+        <mesh position={[-winW / 2, winH / 2, 0]}>
+          <boxGeometry args={[0.05, winH, winD]} />
+          <meshStandardMaterial color="#94a3b8" />
+        </mesh>
+        {/* Right frame — bottom-anchored */}
+        <mesh position={[winW / 2, winH / 2, 0]}>
+          <boxGeometry args={[0.05, winH, winD]} />
+          <meshStandardMaterial color="#94a3b8" />
+        </mesh>
+        {/* Top frame — sits at gap top edge (winH) */}
+        <mesh position={[0, winH, 0]}>
+          <boxGeometry args={[winW, 0.05, winD]} />
+          <meshStandardMaterial color="#94a3b8" />
+        </mesh>
+        {/* Bottom frame — sits at gap bottom edge (sill, Y=0 relative) */}
+        <mesh position={[0, 0, 0]}>
+          <boxGeometry args={[winW, 0.05, winD]} />
+          <meshStandardMaterial color="#94a3b8" />
+        </mesh>
+        {/* Glass — centre at winH/2 */}
+        <mesh position={[0, winH / 2, 0]}>
+          <planeGeometry args={[winW - 0.1, winH - 0.1]} />
+          <meshStandardMaterial
+            color="#7dd3fc"
+            transparent
+            opacity={0.35}
+            side={THREE.DoubleSide}
+          />
+        </mesh>
+        <Text
+          position={[0, winH + 0.25, 0]}
+          fontSize={0.13}
+          color="#06b6d4"
+          anchorX="center"
+          anchorY="middle"
+        >
+          {`W ${winW.toFixed(1)}m`}
+        </Text>
+      </group>
     </group>
   );
 }
 
-// ── Compute 3D positions from room bbox ───────────────────────────────────────
-function computePositions(rooms: Room[]): [number, number, number][] {
-  const hasBbox = rooms.every((r) => r.bbox);
-
-  if (hasBbox) {
-    return rooms.map((r) => {
-      const bbox = r.bbox!;
-      const cx = (bbox.x + bbox.w / 2) * PLAN_SIZE - PLAN_SIZE / 2;
-      const cz = (bbox.y + bbox.h / 2) * PLAN_SIZE - PLAN_SIZE / 2;
-      return [cx, 0, cz];
-    });
-  }
-
-  const cols = Math.ceil(Math.sqrt(rooms.length));
-  return rooms.map((_, i) => {
-    const col = i % cols;
-    const row = Math.floor(i / cols);
-    return [col * 8 - cols * 4, 0, row * 8 - Math.floor(rooms.length / cols) * 4] as [number, number, number];
-  });
-}
-
 // ── Info overlay ──────────────────────────────────────────────────────────────
+
 function RoomInfoCard({ room }: { room: Room }) {
   const bounds = getRoomBounds(room);
   const w = Math.max(safeNum(bounds?.w) * PLAN_SIZE, 0);
   const d = Math.max(safeNum(bounds?.h) * PLAN_SIZE, 0);
   const h = safeNum(room.wallHeight, 2.8);
   const area = polygonArea(getRoomPolygon(room));
+
   return (
     <div className="absolute bottom-4 left-1/2 -translate-x-1/2 px-4 py-2.5 rounded-2xl bg-card/90 backdrop-blur-md border border-border shadow-2xl flex items-center gap-4 min-w-[280px] pointer-events-none">
       <div className="flex-1 min-w-0">
@@ -775,15 +991,26 @@ function RoomInfoCard({ room }: { room: Room }) {
       </div>
       <div className="text-right shrink-0">
         <p className="text-[11px] font-mono text-primary">{area.toFixed(1)} m²</p>
-        <p className="text-[9px] text-muted-foreground/60 uppercase tracking-wider">{room.confidence}</p>
+        <p className="text-[9px] text-muted-foreground/60 uppercase tracking-wider">
+          {room.confidence}
+        </p>
       </div>
     </div>
   );
 }
 
 // ── Scene ─────────────────────────────────────────────────────────────────────
+
 function Scene({
-  rooms, scale, walls, doors, windows, walkMode, viewPreset, cameraDistance, onHoverChange,
+  rooms,
+  scale,
+  walls,
+  doors,
+  windows,
+  walkMode,
+  viewPreset,
+  cameraDistance,
+  onHoverChange,
 }: {
   rooms: Room[];
   scale: number;
@@ -797,11 +1024,13 @@ function Scene({
 }) {
   const [hoveredId, setHoveredId] = useState<string | null>(null);
   const orbitControlsRef = useRef<any>(null);
-  const renderWalls = snapRenderedWallJunctions(walls);
 
-  const defaultWallHeight = rooms.length > 0
-    ? Math.max(...rooms.map((r) => safeNum(r.wallHeight, 2.8)), 2.8)
-    : 2.8;
+  const renderWalls = useMemo(() => snapRenderedWallJunctions(walls), [walls]);
+
+  const defaultWallHeight =
+    rooms.length > 0
+      ? Math.max(...rooms.map((r) => safeNum(r.wallHeight, 2.8)), 2.8)
+      : 2.8;
 
   const handleHover = (id: string | null) => {
     setHoveredId(id);
@@ -811,7 +1040,7 @@ function Scene({
   return (
     <>
       <ambientLight intensity={0.8} />
-      <directionalLight position={[10, 16, 10]} intensity={1.2} />
+      <directionalLight position={[10, 16, 10]} intensity={1.2} castShadow />
       <pointLight position={[-8, 10, -8]} intensity={0.5} color="#60a5fa" />
       <pointLight position={[8, 6, 8]} intensity={0.3} color="#a78bfa" />
 
@@ -824,6 +1053,7 @@ function Scene({
         fadeDistance={40}
       />
 
+      {/* ── Rooms — ShapeGeometry flat tiles ── */}
       {rooms.map((room, i) => (
         <RoomPolygonMesh
           key={room.id}
@@ -834,16 +1064,35 @@ function Scene({
         />
       ))}
 
+      {/* ── Walls — split into sub-segments around door/window openings ── */}
       {renderWalls.map((wall) => (
-        <WallSegmentMesh key={wall.id} wall={wall} walls={renderWalls} wallHeight={defaultWallHeight} />
+        <WallSegmentMesh
+          key={wall.id}
+          wall={wall}
+          wallHeight={defaultWallHeight}
+          doors={doors}
+          windows={windows}
+        />
       ))}
 
+      {/* ── Doors — wall-aligned via getOpeningTransform ── */}
       {doors.map((door) => (
-        <DoorMesh key={door.id} door={door} wallHeight={defaultWallHeight} />
+        <DoorMesh
+          key={door.id}
+          door={door}
+          wallHeight={defaultWallHeight}
+          walls={renderWalls}
+        />
       ))}
 
+      {/* ── Windows — wall-aligned via getOpeningTransform ── */}
       {windows.map((win) => (
-        <WindowMesh key={win.id} win={win} wallHeight={defaultWallHeight} />
+        <WindowMesh
+          key={win.id}
+          win={win}
+          wallHeight={defaultWallHeight}
+          walls={renderWalls}
+        />
       ))}
 
       <CameraPresetController
@@ -872,23 +1121,38 @@ function Scene({
 }
 
 // ── Main component ────────────────────────────────────────────────────────────
+
 const RightPanel = ({
-  rooms, generated, scale, walls = [], doors = [], windows = [], onBack,
+  rooms,
+  generated,
+  scale,
+  walls = [],
+  doors = [],
+  windows = [],
+  onBack,
 }: RightPanelProps) => {
   const [hoveredId, setHoveredId] = useState<string | null>(null);
   const [walkMode, setWalkMode] = useState(false);
   const [viewPreset, setViewPreset] = useState<ViewPreset>("perspective");
   const hoveredRoom = rooms.find((r) => r.id === hoveredId) ?? null;
 
-  const maxH = rooms.length > 0 ? Math.max(...rooms.map((r) => safeNum(r.wallHeight, 2.8)), 3) : 3;
+  const maxH =
+    rooms.length > 0
+      ? Math.max(...rooms.map((r) => safeNum(r.wallHeight, 2.8)), 3)
+      : 3;
+
   const planSpan = rooms.reduce((max, room) => {
     const bounds = getRoomBounds(room);
     if (!bounds) return max;
     return Math.max(max, Math.max(bounds.w, bounds.h) * PLAN_SIZE);
   }, PLAN_SIZE);
+
   const camDist = Math.max(planSpan * 1.4, 15);
 
-  const totalArea = rooms.reduce((s, room) => s + polygonArea(getRoomPolygon(room)), 0);
+  const totalArea = rooms.reduce(
+    (s, room) => s + polygonArea(getRoomPolygon(room)),
+    0,
+  );
 
   const viewOptions: { id: ViewPreset; label: string }[] = [
     { id: "perspective", label: "Perspective" },
@@ -914,7 +1178,10 @@ const RightPanel = ({
       ) : (
         <>
           <Canvas
-            camera={{ position: [camDist * 0.7, camDist * 0.5, camDist * 0.7], fov: 45 }}
+            camera={{
+              position: [camDist * 0.7, camDist * 0.5, camDist * 0.7],
+              fov: 45,
+            }}
             style={{ width: "100%", height: "100%" }}
           >
             <Scene
@@ -940,7 +1207,9 @@ const RightPanel = ({
                 Back to Review
               </button>
               <div className="px-2 py-1 rounded-lg bg-card/80 border border-border backdrop-blur-md text-[10px] text-muted-foreground font-mono">
-                {walkMode ? "Click scene · WASD move · Mouse look · Esc unlock" : "Drag · Scroll · Right-click pan"}
+                {walkMode
+                  ? "Click scene · WASD move · Mouse look · Esc unlock"
+                  : "Drag · Scroll · Right-click pan"}
               </div>
             </div>
           )}
@@ -966,9 +1235,15 @@ const RightPanel = ({
             <Info className="w-3.5 h-3.5 text-muted-foreground shrink-0" />
             <div className="flex items-center gap-3 text-[10px] font-mono divide-x divide-border">
               <span className="text-muted-foreground">{rooms.length} rooms</span>
-              {walls.length > 0   && <span className="pl-3 text-muted-foreground">{walls.length} walls</span>}
-              {doors.length > 0   && <span className="pl-3 text-amber-400">{doors.length} doors</span>}
-              {windows.length > 0 && <span className="pl-3 text-cyan-400">{windows.length} windows</span>}
+              {walls.length > 0 && (
+                <span className="pl-3 text-muted-foreground">{walls.length} walls</span>
+              )}
+              {doors.length > 0 && (
+                <span className="pl-3 text-amber-400">{doors.length} doors</span>
+              )}
+              {windows.length > 0 && (
+                <span className="pl-3 text-cyan-400">{windows.length} windows</span>
+              )}
               <span className="pl-3 text-muted-foreground">{totalArea.toFixed(1)} m²</span>
               <span className="pl-3 text-muted-foreground">H: {maxH.toFixed(1)}m</span>
             </div>
