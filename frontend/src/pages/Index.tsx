@@ -97,8 +97,40 @@ const Index = () => {
     );
   }, []);
 
+  const handleRoomPatch = useCallback((id: string, patch: Partial<Room>) => {
+    setRooms(prev => prev.map(r => r.id === id ? { ...r, ...patch } : r));
+  }, []);
+
+  const handleRoomDelete = useCallback((id: string) => {
+    setRooms(prev => prev.filter(r => r.id !== id));
+  }, []);
+
   const handleWallUpdate = useCallback((id: string, field: keyof DetectedWallSegment, value: number | string) => {
     setWalls(prev => prev.map(w => w.id === id ? { ...w, [field]: value } : w));
+  }, []);
+
+  const handleWallAdd = useCallback((wall: DetectedWallSegment) => {
+    setWalls(prev => [...prev, wall]);
+  }, []);
+
+  const handleWallDelete = useCallback((id: string) => {
+    setWalls(prev => prev.filter(w => w.id !== id));
+  }, []);
+
+  const handleDoorAdd = useCallback((door: DetectedDoor) => {
+    setDoors(prev => [...prev, door]);
+  }, []);
+
+  const handleDoorDelete = useCallback((id: string) => {
+    setDoors(prev => prev.filter(d => d.id !== id));
+  }, []);
+
+  const handleWindowAdd = useCallback((windowItem: DetectedWindow) => {
+    setWindows(prev => [...prev, windowItem]);
+  }, []);
+
+  const handleWindowDelete = useCallback((id: string) => {
+    setWindows(prev => prev.filter(w => w.id !== id));
   }, []);
 
   const handleGenerate = useCallback(() => setGenerated(true), []);
@@ -179,6 +211,8 @@ const Index = () => {
               onScaleChange={setScale}
               onRoomUpdate={handleRoomUpdate}
               onWallUpdate={handleWallUpdate}
+              onWallAdd={handleWallAdd}
+              onWallDelete={handleWallDelete}
               onGenerate={handleGenerate}
             />
           ) : imageUrl && !generated ? (
@@ -193,10 +227,19 @@ const Index = () => {
             <RightPanel
               rooms={rooms}
               generated={generated}
-              scale={scale}
               walls={walls}
               doors={doors}
               windows={windows}
+              onRoomUpdate={handleRoomUpdate}
+              onRoomPatch={handleRoomPatch}
+              onRoomDelete={handleRoomDelete}
+              onWallUpdate={handleWallUpdate}
+              onWallAdd={handleWallAdd}
+              onWallDelete={handleWallDelete}
+              onDoorAdd={handleDoorAdd}
+              onDoorDelete={handleDoorDelete}
+              onWindowAdd={handleWindowAdd}
+              onWindowDelete={handleWindowDelete}
               onBack={() => setGenerated(false)}
             />
           )}

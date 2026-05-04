@@ -25,6 +25,8 @@ interface WallReviewProps {
     onScaleChange: (s: number) => void;
     onRoomUpdate: (id: string, field: keyof Room, value: number | string) => void;
     onWallUpdate?: (id: string, field: keyof DetectedWallSegment, value: number | string) => void;
+    onWallAdd?: (wall: DetectedWallSegment) => void;
+    onWallDelete?: (id: string) => void;
     onGenerate: () => void;
 }
 
@@ -74,7 +76,7 @@ const WallReview = ({
     rooms, unit, imageUrl,
     walls = [], doors = [], windows = [],
     scale, onScaleChange,
-    onRoomUpdate, onWallUpdate, onGenerate,
+    onRoomUpdate, onWallUpdate, onWallAdd, onWallDelete, onGenerate,
 }: WallReviewProps) => {
 
     const [editState,      setEditState]      = useState<EditState | null>(null);
@@ -92,6 +94,9 @@ const WallReview = ({
     const [calibPts,    setCalibPts]    = useState<CalibPoint[]>([]);
     const [calibLength, setCalibLength] = useState("");
     const [mousePos,    setMousePos]    = useState<CalibPoint | null>(null);
+    const [wallDrawMode, setWallDrawMode] = useState(false);
+    const [wallDraftStart, setWallDraftStart] = useState<CalibPoint | null>(null);
+    const [wallDraftMouse, setWallDraftMouse] = useState<CalibPoint | null>(null);
 
     // Drag state
     // useRef สำหรับ logic ที่ต้องการ sync ทันที (ไม่ผ่าน re-render)
@@ -152,11 +157,81 @@ const WallReview = ({
 
     // Cursor style — อิง isDragging state + hover detection
     const cursorStyle = (() => {
+        if (wallDrawMode) return wallDraftStart ? "crosshair" : "cell";
         if (!mousePos) return "crosshair";
         if (isDragging) return "grabbing";
         if (nearestPointIdx(mousePos, calibPts, DRAG_HIT) !== -1) return "grab";
         return "crosshair";
     })();
+
+    const stopWallDraw = () => {
+        setWallDrawMode(false);
+        setWallDraftStart(null);
+        setWallDraftMouse(null);
+    };
+
+    const startWallDraw = () => {
+        if (inCalibMode) {
+            setCalibPhase("idle");
+            setCalibPts([]);
+            setCalibLength("");
+            setMousePos(null);
+            draggingIdx.current = null;
+            setIsDragging(false);
+        }
+        setLayers(prev => new Set(prev).add("walls"));
+        setWallDrawMode(true);
+        setWallDraftStart(null);
+        setWallDraftMouse(null);
+    };
+
+    const undoLastManualWall = () => {
+        const lastManual = [...walls].reverse().find((wall) => wall.id.startsWith("manual-wall-"));
+        if (lastManual && onWallDelete) onWallDelete(lastManual.id);
+    };
+
+    const createManualWall = (start: CalibPoint, end: CalibPoint) => {
+        const pxLen = pixelDist(start, end);
+        if (pxLen < 6 || !onWallAdd) return;
+        const id = `manual-wall-${Date.now()}`;
+
+        onWallAdd({
+            id,
+            x1: start.x,
+            y1: start.y,
+            x2: end.x,
+            y2: end.y,
+            type: "interior",
+            thickness: 0.15,
+            wallHeight: 2.8,
+        });
+        selectWall(id);
+    };
+
+    const onWallDrawPointerDown = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+        e.preventDefault();
+        const pt = evToNorm(e);
+        if (!pt) return;
+
+        if (!wallDraftStart) {
+            setWallDraftStart(pt);
+            setWallDraftMouse(pt);
+            return;
+        }
+
+        createManualWall(wallDraftStart, pt);
+        setWallDraftStart(null);
+        setWallDraftMouse(null);
+    }, [wallDraftStart, onWallAdd, imgSize]);
+
+    const onWallDrawPointerMove = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+        const pt = evToNorm(e);
+        if (pt) setWallDraftMouse(pt);
+    }, []);
+
+    const onWallDrawPointerLeave = useCallback(() => {
+        setWallDraftMouse(null);
+    }, []);
 
     // ── Calibration pointer handlers ─────────────────────────
     const onPointerDown = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
@@ -242,6 +317,7 @@ const WallReview = ({
     };
 
     const startCalibration = () => {
+        stopWallDraw();
         setCalibPhase("placing");
         setCalibPts([]);
         setCalibLength("");
@@ -251,6 +327,7 @@ const WallReview = ({
     const recalibrate = () => { setCalibPhase("ready"); setCalibLength(""); };
 
     const inCalibMode = calibPhase === "placing" || calibPhase === "ready";
+    const inPointerMode = inCalibMode || wallDrawMode;
 
     // ── Layer toggle ─────────────────────────────────────────
     const toggleLayer = (layer: OverlayLayer) =>
@@ -483,6 +560,37 @@ const WallReview = ({
                         )}
                     </div>
 
+                    {/* WALL DRAW TOOL */}
+                    <div className={`flex items-center gap-2 rounded-lg px-3 py-1.5 border transition-all duration-200 ${
+                        wallDrawMode ? "border-blue-500/60 bg-blue-500/10" : "border-border bg-card/80"
+                    }`}>
+                        {!wallDrawMode ? (
+                            <button onClick={startWallDraw}
+                                className="flex items-center gap-1.5 text-[11px] font-medium text-blue-300 hover:text-blue-200 transition-colors">
+                                <Pencil className="w-3.5 h-3.5" />
+                                Draw Wall
+                            </button>
+                        ) : (
+                            <>
+                                <Pencil className="w-3.5 h-3.5 text-blue-400 animate-pulse shrink-0" />
+                                <span className="text-[11px] text-blue-300 font-medium whitespace-nowrap">
+                                    {wallDraftStart ? "Click end point" : "Click start point"}
+                                </span>
+                                <button onClick={stopWallDraw} className="p-1 rounded hover:bg-slate-100 text-muted-foreground">
+                                    <X className="w-3.5 h-3.5" />
+                                </button>
+                            </>
+                        )}
+                        <button
+                            onClick={undoLastManualWall}
+                            disabled={!onWallDelete || !walls.some((wall) => wall.id.startsWith("manual-wall-"))}
+                            title="Undo last manual wall"
+                            className="p-1 rounded text-muted-foreground/70 hover:bg-slate-100 hover:text-foreground disabled:opacity-30 disabled:hover:bg-transparent"
+                        >
+                            <RotateCcw className="w-3 h-3" />
+                        </button>
+                    </div>
+
                     {/* LAYER TOGGLES */}
                     <div className="flex items-center gap-1 bg-card/80 rounded-lg p-1 border border-border shadow-sm">
                         <button onClick={() => toggleLayer("image")}
@@ -532,28 +640,28 @@ const WallReview = ({
                                 />
 
                                 {/* Pointer capture overlay — only active in calib mode */}
-                                {inCalibMode && (
+                                {inPointerMode && (
                                     <div
                                         ref={overlayRef}
-                                        className="absolute inset-0"
+                                        className="absolute inset-0 z-20"
                                         style={{
                                             cursor: cursorStyle,
                                             touchAction: "none",
                                             userSelect: "none",
                                             WebkitUserSelect: "none",
                                         }}
-                                        onPointerDown={onPointerDown}
-                                        onPointerMove={onPointerMove}
-                                        onPointerUp={onPointerUp}
-                                        onPointerLeave={onPointerLeave}
-                                        onContextMenu={e => e.preventDefault()}
+                                        onPointerDown={wallDrawMode ? onWallDrawPointerDown : onPointerDown}
+                                        onPointerMove={wallDrawMode ? onWallDrawPointerMove : onPointerMove}
+                                        onPointerUp={wallDrawMode ? undefined : onPointerUp}
+                                        onPointerLeave={wallDrawMode ? onWallDrawPointerLeave : onPointerLeave}
+                                        onContextMenu={e => { e.preventDefault(); if (wallDrawMode) stopWallDraw(); }}
                                     />
                                 )}
 
                                 {/* SVG overlays */}
-                                <svg className="absolute inset-0" width="100%" height="100%"
+                                <svg className="absolute inset-0 z-10" width="100%" height="100%"
                                     viewBox="0 0 100 100" preserveAspectRatio="none"
-                                    style={{ pointerEvents: inCalibMode ? "none" : "all" }}>
+                                    style={{ pointerEvents: inPointerMode ? "none" : "all" }}>
 
                                     <g transform="scale(100)">
 
@@ -561,11 +669,12 @@ const WallReview = ({
                                     {layers.has("walls") && walls.map(wall => {
                                         const isSel = selectedWallId === wall.id;
                                         const sw = wall.thicknessRatio != null ? Math.max(0.004, wall.thicknessRatio) : wall.type === "exterior" ? 0.013 : 0.007;
-                                        const col = isSel ? "#fbbf24" : wall.type === "exterior" ? "#1a1a1a" : "#2563eb";
+                                        const isManual = wall.id.startsWith("manual-wall-");
+                                        const col = isSel ? "#fbbf24" : isManual ? "#38bdf8" : wall.type === "exterior" ? "#1a1a1a" : "#2563eb";
                                         const mx = (wall.x1 + wall.x2) / 2, my = (wall.y1 + wall.y2) / 2;
                                         return (
                                             <g key={wall.id} style={{ cursor: "pointer", pointerEvents: "all" }}
-                                                onClick={e => { e.stopPropagation(); if (!inCalibMode) selectWall(wall.id); }}>
+                                                onClick={e => { e.stopPropagation(); if (!inPointerMode) selectWall(wall.id); }}>
                                                 <line x1={wall.x1} y1={wall.y1} x2={wall.x2} y2={wall.y2} stroke="transparent" strokeWidth={sw + 0.025} pointerEvents="stroke" />
                                                 {isSel && <line x1={wall.x1} y1={wall.y1} x2={wall.x2} y2={wall.y2} stroke="#fbbf24" strokeWidth={sw + 0.008} strokeLinecap="square" opacity={0.45} />}
                                                 <line x1={wall.x1} y1={wall.y1} x2={wall.x2} y2={wall.y2} stroke={col} strokeWidth={isSel ? sw + 0.002 : sw} strokeLinecap="square" opacity={isSel ? 1 : 0.85} />
@@ -583,6 +692,25 @@ const WallReview = ({
                                             </g>
                                         );
                                     })}
+
+                                    {/* MANUAL WALL DRAFT */}
+                                    {wallDrawMode && wallDraftStart && wallDraftMouse && (
+                                        <g style={{ pointerEvents: "none" }}>
+                                            <line
+                                                x1={wallDraftStart.x}
+                                                y1={wallDraftStart.y}
+                                                x2={wallDraftMouse.x}
+                                                y2={wallDraftMouse.y}
+                                                stroke="#38bdf8"
+                                                strokeWidth={0.006}
+                                                strokeLinecap="square"
+                                                strokeDasharray="0.012 0.008"
+                                                opacity={0.95}
+                                            />
+                                            <circle cx={wallDraftStart.x} cy={wallDraftStart.y} r={0.009} fill="#38bdf8" />
+                                            <circle cx={wallDraftMouse.x} cy={wallDraftMouse.y} r={0.007} fill="#38bdf8" opacity={0.75} />
+                                        </g>
+                                    )}
 
                                     {/* ROOMS */}
                                     {layers.has("rooms") && rooms.map((room, idx) => {
@@ -604,7 +732,7 @@ const WallReview = ({
                                         const hL = dimLabel(rh, "h");
                                         return (
                                             <g key={room.id} style={{ cursor: "pointer", pointerEvents: "all" }}
-                                                onClick={e => { e.stopPropagation(); if (!inCalibMode) selectRoom(room.id); }}>
+                                                onClick={e => { e.stopPropagation(); if (!inPointerMode) selectRoom(room.id); }}>
                                                 <polygon points={points} fill={isSel ? pal.fill : `${cs.stroke}18`} />
                                                 <polygon points={points} fill="none" stroke={isSel ? pal.stroke : cs.stroke}
                                                     strokeWidth={isSel ? 0.004 : 0.002} strokeDasharray={isSel ? "none" : "0.01 0.005"} opacity={isSel ? 1 : 0.6} />

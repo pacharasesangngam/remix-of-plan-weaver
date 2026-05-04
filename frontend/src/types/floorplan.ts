@@ -26,6 +26,7 @@ export interface Room {
   bbox?: BBox;     // normalized bbox derived from polygon
   // Pro mode fields
   material?: string;
+  floorColor?: string;
   finishCost?: number;
   wallHeight?: number;
 }
