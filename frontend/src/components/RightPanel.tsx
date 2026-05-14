@@ -302,7 +302,7 @@ const snapAxisGroup = (
 
 const snapRenderedWallJunctions = (
   walls: DetectedWallSegment[],
-  threshold = 0.004,
+  threshold = 0.012,
 ): DetectedWallSegment[] => {
   const normalized = walls.map(normalizeRenderWall);
   const horizontals = normalized.filter(isHorizontalSegment);
@@ -888,6 +888,8 @@ function WallSegmentMesh({
   wallHeight,
   doors,
   windows,
+  extStart = false,
+  extEnd = false,
   onSelect,
   onPlacementHover,
   onPlacementLeave,
@@ -897,6 +899,8 @@ function WallSegmentMesh({
   wallHeight: number;
   doors: DetectedDoor[];
   windows: DetectedWindow[];
+  extStart?: boolean;
+  extEnd?: boolean;
   onSelect: (id: string, point?: NormalizedPoint) => void;
   onPlacementHover?: (wallId: string, point: NormalizedPoint) => void;
   onPlacementLeave?: () => void;
@@ -926,9 +930,16 @@ function WallSegmentMesh({
   const gaps = computeGapIntervals(wall, wallLengthM, resolvedHeight, doors, windows);
   const solids = computeSolidSegments(wallLengthM, resolvedHeight, gaps);
 
+  const ext = thickness / 2;
+  const renderSolids = solids.map((seg) => ({
+    ...seg,
+    tStart: seg.tStart < 0.001 && extStart ? -ext : seg.tStart,
+    tEnd: seg.tEnd > wallLengthM - 0.001 && extEnd ? wallLengthM + ext : seg.tEnd,
+  }));
+
   return (
     <group position={[cx, 0, cz]} rotation={[0, -angle, 0]}>
-      {solids.map((seg, i) => {
+      {renderSolids.map((seg, i) => {
         const segLen = seg.tEnd - seg.tStart;
         const segH = seg.yEnd - seg.yStart;
         if (segLen < 0.001 || segH < 0.001) return null;
@@ -1672,6 +1683,30 @@ function Scene({
 
   const renderWalls = useMemo(() => snapRenderedWallJunctions(walls), [walls]);
 
+  // คำนวณว่า endpoint แต่ละด้านของแต่ละผนังเชื่อมกับผนังอื่นไหม
+  // เพื่อขยาย segment เฉพาะด้านที่ติดกัน (ไม่ขยาย free end)
+  const wallEndpointConnects = useMemo(() => {
+    const thr = 0.020;
+    const distSq = (ax: number, ay: number, bx: number, by: number) =>
+      (ax - bx) ** 2 + (ay - by) ** 2;
+    const ptOnSeg = (px: number, py: number, x1: number, y1: number, x2: number, y2: number) => {
+      const dx = x2 - x1, dy = y2 - y1;
+      const lenSq = dx * dx + dy * dy;
+      if (lenSq === 0) return Math.sqrt(distSq(px, py, x1, y1));
+      const t = Math.max(0, Math.min(1, ((px - x1) * dx + (py - y1) * dy) / lenSq));
+      return Math.sqrt(distSq(px, py, x1 + t * dx, y1 + t * dy));
+    };
+    return renderWalls.map((wall) => {
+      const connectsStart = renderWalls.some(
+        (other) => other.id !== wall.id && ptOnSeg(wall.x1, wall.y1, other.x1, other.y1, other.x2, other.y2) < thr,
+      );
+      const connectsEnd = renderWalls.some(
+        (other) => other.id !== wall.id && ptOnSeg(wall.x2, wall.y2, other.x1, other.y1, other.x2, other.y2) < thr,
+      );
+      return { id: wall.id, connectsStart, connectsEnd };
+    });
+  }, [renderWalls]);
+
   const defaultWallHeight =
     rooms.length > 0
       ? Math.max(...rooms.map((r) => safeNum(r.wallHeight, 2.8)), 2.8)
@@ -1764,25 +1799,30 @@ function Scene({
       ))}
 
       {/* ── Walls — split into sub-segments around door/window openings ── */}
-      {renderWalls.map((wall) => (
-        <WallSegmentMesh
-          key={wall.id}
-          wall={wall}
-          wallHeight={defaultWallHeight}
-          doors={doors}
-          windows={windows}
-          onSelect={(id, point) => {
-            if (buildMode !== "wall") onSelect({ type: "wall", id, point });
-          }}
-          onPlacementHover={
-            isPlacementMode
-              ? (id, point) => onPlacementHover({ wallId: id, point })
-              : undefined
-          }
-          onPlacementLeave={() => onPlacementHover(null)}
-          onTargetHover={canPreviewTarget ? onHoverTargetChange : undefined}
-        />
-      ))}
+      {renderWalls.map((wall) => {
+        const ec = wallEndpointConnects.find((e) => e.id === wall.id);
+        return (
+          <WallSegmentMesh
+            key={wall.id}
+            wall={wall}
+            wallHeight={defaultWallHeight}
+            doors={doors}
+            windows={windows}
+            extStart={ec?.connectsStart}
+            extEnd={ec?.connectsEnd}
+            onSelect={(id, point) => {
+              if (buildMode !== "wall") onSelect({ type: "wall", id, point });
+            }}
+            onPlacementHover={
+              isPlacementMode
+                ? (id, point) => onPlacementHover({ wallId: id, point })
+                : undefined
+            }
+            onPlacementLeave={() => onPlacementHover(null)}
+            onTargetHover={canPreviewTarget ? onHoverTargetChange : undefined}
+          />
+        );
+      })}
 
       {selectedWallForEdit && (
         <WallEditGizmo

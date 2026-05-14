@@ -672,17 +672,27 @@ const WallReview = ({
                                         const isManual = wall.id.startsWith("manual-wall-");
                                         const col = isSel ? "#fbbf24" : isManual ? "#38bdf8" : wall.type === "exterior" ? "#1a1a1a" : "#2563eb";
                                         const mx = (wall.x1 + wall.x2) / 2, my = (wall.y1 + wall.y2) / 2;
+
+                                        // ขยาย endpoint ออก sw/2 ในแกนที่เป็นแนวของเส้น
+                                        // เพื่อให้มุมผนังเชื่อมกันแม้ preserveAspectRatio="none" ทำให้ linecap ไม่สมมาตร
+                                        const isHoriz = Math.abs(wall.y2 - wall.y1) < 0.005;
+                                        const isVert  = Math.abs(wall.x2 - wall.x1) < 0.005;
+                                        const half = sw / 2;
+                                        const ex1 = isHoriz ? wall.x1 - half : wall.x1;
+                                        const ex2 = isHoriz ? wall.x2 + half : wall.x2;
+                                        const ey1 = isVert  ? wall.y1 - half : wall.y1;
+                                        const ey2 = isVert  ? wall.y2 + half : wall.y2;
+
                                         return (
                                             <g key={wall.id} style={{ cursor: "pointer", pointerEvents: "all" }}
                                                 onClick={e => { e.stopPropagation(); if (!inPointerMode) selectWall(wall.id); }}>
                                                 <line x1={wall.x1} y1={wall.y1} x2={wall.x2} y2={wall.y2} stroke="transparent" strokeWidth={sw + 0.025} pointerEvents="stroke" />
-                                                {isSel && <line x1={wall.x1} y1={wall.y1} x2={wall.x2} y2={wall.y2} stroke="#fbbf24" strokeWidth={sw + 0.008} strokeLinecap="square" opacity={0.45} />}
-                                                <line x1={wall.x1} y1={wall.y1} x2={wall.x2} y2={wall.y2} stroke={col} strokeWidth={isSel ? sw + 0.002 : sw} strokeLinecap="square" opacity={isSel ? 1 : 0.85} />
+                                                {isSel && <line x1={ex1} y1={ey1} x2={ex2} y2={ey2} stroke="#fbbf24" strokeWidth={sw + 0.008} strokeLinecap="butt" opacity={0.45} />}
+                                                <line x1={ex1} y1={ey1} x2={ex2} y2={ey2} stroke={col} strokeWidth={isSel ? sw + 0.002 : sw} strokeLinecap="butt" opacity={isSel ? 1 : 0.85} />
                                                 {isSel && (
                                                     <g style={{ pointerEvents: "none" }}>
                                                         <rect x={mx - 0.075} y={my - 0.045} width={0.15} height={0.032} rx={0.005} fill="rgba(251,191,36,0.95)" />
                                                         <text x={mx} y={my - 0.018} textAnchor="middle" fontSize={0.02} fontWeight="700" fill="#000" fontFamily="monospace">
-                                                            {/* FIX: แสดง — ถ้ายังไม่ calibrate */}
                                                             {calibrated
                                                                 ? `${getWallLength(wall).toFixed(2)}m · ${getWallThicknessLabel(wall)}`
                                                                 : `— · ${getWallThicknessLabel(wall)}`}

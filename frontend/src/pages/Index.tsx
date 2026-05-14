@@ -29,6 +29,8 @@ const Index = () => {
   // scale จะถูก set จริงเมื่อผู้ใช้กด Apply ใน calibration flow เท่านั้น
   const [scale, setScale]             = useState(0);
   const [unit, setUnit]               = useState<DimensionUnit>("m");
+  const [debugMode, setDebugMode]     = useState(false);
+  const [debugImages, setDebugImages] = useState<Record<string, string> | null>(null);
 
   useEffect(() => {
     setMounted(true);
@@ -46,6 +48,7 @@ const Index = () => {
     setWalls([]);
     setDoors([]);
     setWindows([]);
+    setDebugImages(null);
     // FIX: reset scale ทุกครั้งที่อัปโหลดรูปใหม่
     setScale(0);
   }, []);
@@ -62,6 +65,7 @@ const Index = () => {
     setDetecting(false);
     setDetectError(null);
     setGenerated(false);
+    setDebugImages(null);
     setScale(0);
   }, []);
 
@@ -70,7 +74,7 @@ const Index = () => {
     setDetecting(true);
     setDetectError(null);
     try {
-      const result = await detectFloorPlan(imageFile);
+      const result = await detectFloorPlan(imageFile, debugMode);
       if (result.image) {
         setImageUrl(result.image);
         setFileType("image/png");
@@ -79,6 +83,7 @@ const Index = () => {
       setWalls(result.walls);
       setDoors(result.doors);
       setWindows(result.windows);
+      setDebugImages(result.debugImages ?? null);
       setDetected(true);
       setGenerated(false);
     } catch (err: unknown) {
@@ -86,7 +91,7 @@ const Index = () => {
     } finally {
       setDetecting(false);
     }
-  }, [imageFile]);
+  }, [imageFile, debugMode]);
 
   const handleRoomUpdate = useCallback((id: string, field: keyof Room, value: number | string) => {
     setRooms(prev =>
@@ -176,6 +181,8 @@ const Index = () => {
             detected={detected}
             detecting={detecting}
             scale={scale}
+            debugMode={debugMode}
+            debugImages={debugImages}
             onImageUpload={handleImageUpload}
             onClear={handleClear}
             onDetect={handleDetect}
@@ -183,6 +190,7 @@ const Index = () => {
             onScaleChange={setScale}
             onUnitChange={setUnit}
             onGenerate={handleGenerate}
+            onDebugToggle={() => setDebugMode((v) => !v)}
             floorPlanData={floorPlanData}
           />
 

@@ -2,6 +2,7 @@ import { useCallback, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import {
+  Bug,
   CheckCircle2,
   ChevronDown,
   ChevronLeft,
@@ -14,6 +15,7 @@ import {
   X,
 } from "lucide-react";
 import type { Room, FloorPlanData, AppMode, DimensionUnit } from "@/types/floorplan";
+import DebugPanel from "@/components/DebugPanel";
 
 interface SidebarProps {
   mode: AppMode;
@@ -24,6 +26,8 @@ interface SidebarProps {
   detected: boolean;
   detecting?: boolean;
   scale: number;
+  debugMode: boolean;
+  debugImages: Record<string, string> | null;
   onImageUpload: (file: File) => void;
   onClear: () => void;
   onDetect: () => void;
@@ -31,6 +35,7 @@ interface SidebarProps {
   onScaleChange: (scale: number) => void;
   onUnitChange: (unit: DimensionUnit) => void;
   onGenerate: () => void;
+  onDebugToggle: () => void;
   floorPlanData: FloorPlanData | null;
 }
 
@@ -42,15 +47,19 @@ const Sidebar = ({
   detected,
   detecting = false,
   scale,
+  debugMode,
+  debugImages,
   onImageUpload,
   onClear,
   onDetect,
+  onDebugToggle,
   floorPlanData,
 }: SidebarProps) => {
   const [collapsed, setCollapsed] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
   const [jsonOpen, setJsonOpen] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [debugOpen, setDebugOpen] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
 
   const safeData = floorPlanData ?? { meta: { unit, scale }, rooms: [] };
@@ -185,26 +194,59 @@ const Sidebar = ({
                   </div>
                 </div>
 
-                <div className="p-4">
+                <div className="p-4 space-y-3">
                   {!detected ? (
-                    <Button
-                      onClick={onDetect}
-                      disabled={!imageUrl || detecting}
-                      className="h-12 w-full rounded-[22px] text-sm shadow-sm"
-                    >
-                      {detecting ? (
-                        <>
-                          <Loader2 className="h-4 w-4 animate-spin" />
-                          Detecting
-                        </>
-                      ) : (
-                        <>
-                          <ScanLine className="h-4 w-4" />
-                          Run Detection
-                        </>
-                      )}
-                    </Button>
+                    <>
+                      <Button
+                        onClick={onDetect}
+                        disabled={!imageUrl || detecting}
+                        className="h-12 w-full rounded-[22px] text-sm shadow-sm"
+                      >
+                        {detecting ? (
+                          <>
+                            <Loader2 className="h-4 w-4 animate-spin" />
+                            Detecting
+                          </>
+                        ) : (
+                          <>
+                            <ScanLine className="h-4 w-4" />
+                            Run Detection
+                          </>
+                        )}
+                      </Button>
+                      <button
+                        type="button"
+                        onClick={onDebugToggle}
+                        className={`flex w-full items-center gap-2.5 rounded-[18px] border px-4 py-2.5 text-xs font-medium transition-colors ${
+                          debugMode
+                            ? "border-amber-400/60 bg-amber-400/10 text-amber-600 dark:text-amber-400"
+                            : "border-border/55 bg-background text-muted-foreground hover:text-foreground"
+                        }`}
+                      >
+                        <Bug className="h-3.5 w-3.5 shrink-0" />
+                        <span className="flex-1 text-left">Debug Mode</span>
+                        <span className={`h-4 w-7 rounded-full transition-colors ${debugMode ? "bg-amber-400" : "bg-muted"}`}>
+                          <span className={`block h-4 w-4 rounded-full border-2 bg-white transition-transform ${debugMode ? "translate-x-3 border-amber-400" : "translate-x-0 border-muted"}`} />
+                        </span>
+                      </button>
+                    </>
                   ) : (
+                    <>
+                      {debugImages && (
+                        <button
+                          type="button"
+                          onClick={() => setDebugOpen(true)}
+                          className="flex w-full items-center gap-3 rounded-[22px] border border-amber-400/60 bg-amber-400/10 px-4 py-3 text-left text-sm font-medium text-amber-600 transition-colors hover:bg-amber-400/20 dark:text-amber-400"
+                        >
+                          <div className="rounded-xl border border-amber-400/40 bg-amber-400/20 p-1.5">
+                            <Bug className="h-4 w-4" />
+                          </div>
+                          <div className="flex-1">
+                            <div>Debug Images</div>
+                            <div className="text-[11px] font-normal opacity-70">{Object.keys(debugImages).length} ขั้นตอน</div>
+                          </div>
+                        </button>
+                      )}
                     <Collapsible open={jsonOpen} onOpenChange={setJsonOpen}>
                       <CollapsibleTrigger className="flex w-full items-center gap-3 rounded-[22px] border border-border/55 bg-background px-4 py-3 text-left text-sm font-medium text-foreground transition-colors hover:bg-accent/70">
                         <div className="rounded-xl border border-border/55 bg-primary/10 p-1.5 text-primary">
@@ -233,6 +275,7 @@ const Sidebar = ({
                         </div>
                       </CollapsibleContent>
                     </Collapsible>
+                    </>
                   )}
                 </div>
               </section>
@@ -252,6 +295,14 @@ const Sidebar = ({
           {collapsed ? "Open" : "Close"}
         </span>
       </button>
+
+      {debugImages && (
+        <DebugPanel
+          images={debugImages}
+          open={debugOpen}
+          onClose={() => setDebugOpen(false)}
+        />
+      )}
     </div>
   );
 };

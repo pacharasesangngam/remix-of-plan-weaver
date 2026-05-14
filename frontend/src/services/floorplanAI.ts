@@ -34,12 +34,13 @@ interface RawWindow {
 }
 
 interface RawApiResponse {
-  meta: { unit: string; scale: number };
+  meta: { unit: string; scale: number; pipeline?: string; stages?: unknown[] };
   rooms: RawRoom[];
   walls: DetectFloorPlanResult["walls"];
   doors: RawDoor[];
   windows: RawWindow[];
   image?: string;
+  debug?: Record<string, string>;
 }
 
 function polygonCentroid(points: RawPoint[]): RawPoint | null {
@@ -120,11 +121,15 @@ function polygonToRoom(raw: RawRoom): Room {
   };
 }
 
-export async function detectFloorPlan(file: File): Promise<DetectFloorPlanResult> {
+export async function detectFloorPlan(file: File, debug = false): Promise<DetectFloorPlanResult> {
   const formData = new FormData();
   formData.append("file", file);
 
-  const res = await fetch(`${API_BASE_URL}/api/detect-floorplan`, {
+  const url = debug
+    ? `${API_BASE_URL}/api/detect-floorplan?debug=true`
+    : `${API_BASE_URL}/api/detect-floorplan`;
+
+  const res = await fetch(url, {
     method: "POST",
     body: formData,
   });
@@ -143,5 +148,6 @@ export async function detectFloorPlan(file: File): Promise<DetectFloorPlanResult
     doors: json.doors ?? [],
     windows: json.windows ?? [],
     image: json.image,
+    debugImages: json.debug,
   };
 }

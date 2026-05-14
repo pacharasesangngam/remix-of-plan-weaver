@@ -42,4 +42,5 @@ export interface DetectFloorPlanResult extends DetectionResult {
   usedModel?: string;
   usedMock?: boolean;
   image?: string;
+  debugImages?: Record<string, string>;
 }
