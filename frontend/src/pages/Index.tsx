@@ -15,6 +15,7 @@ const Index = () => {
   const [showSplash, setShowSplash]   = useState(true);
   const [mode, setMode]               = useState<AppMode>("simple");
   const [imageUrl, setImageUrl]       = useState<string | null>(null);
+  const [originalImageUrl, setOriginalImageUrl] = useState<string | null>(null);
   const [fileType, setFileType]       = useState<string | null>(null);
   const [imageFile, setImageFile]     = useState<File | null>(null);
   const [rooms, setRooms]             = useState<Room[]>([]);
@@ -39,6 +40,7 @@ const Index = () => {
   const handleImageUpload = useCallback((file: File) => {
     const url = URL.createObjectURL(file);
     setImageUrl(url);
+    setOriginalImageUrl(url);
     setFileType(file.type || null);
     setImageFile(file);
     setDetected(false);
@@ -57,6 +59,7 @@ const Index = () => {
     setImageUrl(null);
     setFileType(null);
     setImageFile(null);
+    setOriginalImageUrl(null);
     setRooms([]);
     setWalls([]);
     setDoors([]);
@@ -77,7 +80,6 @@ const Index = () => {
       const result = await detectFloorPlan(imageFile, debugMode);
       if (result.image) {
         setImageUrl(result.image);
-        setFileType("image/png");
       }
       setRooms(result.rooms);
       setWalls(result.walls);
@@ -141,6 +143,9 @@ const Index = () => {
   const handleGenerate = useCallback(() => setGenerated(true), []);
 
   const floorPlanData: FloorPlanData = { meta: { unit, scale }, rooms };
+  const wallReviewBackgroundUrl =
+    debugImages?.original ??
+    (fileType === "application/pdf" ? imageUrl : originalImageUrl ?? imageUrl);
 
   return (
     <>
@@ -212,6 +217,7 @@ const Index = () => {
               rooms={rooms}
               unit={unit}
               imageUrl={imageUrl}
+              backgroundImageUrl={wallReviewBackgroundUrl}
               walls={walls}
               doors={doors}
               windows={windows}

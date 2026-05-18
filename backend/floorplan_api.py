@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Optional
 
 import cv2
+from django import conf
 import fitz
 import numpy as np
 from fastapi import FastAPI, File, HTTPException, Query, UploadFile
@@ -37,8 +38,7 @@ WIN_MAX_AREA = 0.05
 MIN_SEG = 0.018
 MIN_ROOM_AREA = 0.008
 
-WALL_EXT_CLR = (200, 80, 30)
-WALL_INT_CLR = (80, 160, 60)
+WALL_CLR = (80, 160, 60)
 DOOR_CLR = (0, 140, 255)
 WIN_CLR = (220, 200, 0)
 
@@ -68,7 +68,7 @@ def health():
 
 
 @app.post("/api/detect-floorplan")
-async def analyze(file: UploadFile = File(...), debug: bool = Query(False)):
+async def analyze(file: UploadFile = File(...), debug: bool = Query(True)):
     try:
         raw = await file.read()
         return run_pipeline(raw, file.filename or "", debug=debug)
@@ -256,60 +256,283 @@ def _rotate(image: np.ndarray, angle: float) -> np.ndarray:
         borderValue=(255, 255, 255),
     )
 
+def _build_outer_walls_from_rooms(room_masks, h_walls, v_walls, cfg):
+    if not room_masks:
+        return h_walls, v_walls
+
+    snap = cfg["snap"]
+
+    try:
+        room_union = unary_union([m["polygon"] for m in room_masks])
+        outer = room_union.buffer(0.01).simplify(0.008, preserve_topology=True)
+        outer = _largest_poly(outer)
+        if outer is None:
+            return h_walls, v_walls
+    except Exception:
+        return h_walls, v_walls
+
+    coords = list(outer.exterior.coords)
+    new_h, new_v = [], []
+
+    for i in range(len(coords) - 1):
+        x1, y1 = coords[i]
+        x2, y2 = coords[i + 1]
+        dx = abs(x2 - x1)
+        dy = abs(y2 - y1)
+
+        if dx < 1e-4 and dy < 1e-4:
+            continue
+
+        if dx >= dy and dy <= 0.03:  # ✅ ขยาย threshold รับ edge ที่เอียงเล็กน้อย
+            ex1, ex2 = min(x1, x2), max(x1, x2)
+            ey = (y1 + y2) / 2
+
+            # ✅ covered = มี YOLO wall ที่ overlap บางส่วน ไม่ต้องครอบทั้งหมด
+            covered = any(
+                abs(w.get("y", 999) - ey) <= snap * 2
+                and w.get("x2", -999) >= ex1 - snap   # overlap ซ้าย
+                and w.get("x1", 999) <= ex2 + snap    # overlap ขวา
+                for w in h_walls
+                if w.get("source") == "yolo"
+            )
+
+            if not covered:
+                new_h.append({
+                    "x1": float(ex1), "x2": float(ex2),
+                    "y": float(ey),
+                    "t": cfg["thickness"],
+                    "source": "room_shell",
+                    "synthetic": True,
+                })
+            else:
+                # ✅ มี YOLO wall แล้วแต่อาจขาดช่วง — bridge ส่วนที่ขาด
+                yolo_on_axis = sorted(
+                    [w for w in h_walls
+                     if w.get("source") == "yolo"
+                     and abs(w.get("y", 999) - ey) <= snap * 2
+                     and w.get("x2", -999) >= ex1 - snap
+                     and w.get("x1", 999) <= ex2 + snap],
+                    key=lambda w: w.get("x1", 0)
+                )
+                # เติม gap ระหว่าง YOLO walls บน axis เดียวกัน
+                prev_x2 = ex1
+                for w in yolo_on_axis:
+                    wx1 = w.get("x1", ex2)
+                    if wx1 - prev_x2 > snap:
+                        new_h.append({
+                            "x1": float(prev_x2), "x2": float(wx1),
+                            "y": float(ey),
+                            "t": cfg["thickness"],
+                            "source": "room_shell",
+                            "synthetic": True,
+                        })
+                    prev_x2 = max(prev_x2, w.get("x2", prev_x2))
+                # เติม gap หลัง YOLO wall สุดท้าย
+                if ex2 - prev_x2 > snap:
+                    new_h.append({
+                        "x1": float(prev_x2), "x2": float(ex2),
+                        "y": float(ey),
+                        "t": cfg["thickness"],
+                        "source": "room_shell",
+                        "synthetic": True,
+                    })
+
+        elif dy > dx and dx <= 0.03:  # ✅ ขยาย threshold เช่นกัน
+            ey1, ey2 = min(y1, y2), max(y1, y2)
+            ex = (x1 + x2) / 2
+
+            covered = any(
+                abs(w.get("x", 999) - ex) <= snap * 2
+                and w.get("y2", -999) >= ey1 - snap
+                and w.get("y1", 999) <= ey2 + snap
+                for w in v_walls
+                if w.get("source") == "yolo"
+            )
+
+            if not covered:
+                new_v.append({
+                    "x": float(ex),
+                    "y1": float(ey1), "y2": float(ey2),
+                    "t": cfg["thickness"],
+                    "source": "room_shell",
+                    "synthetic": True,
+                })
+            else:
+                # bridge ส่วนที่ขาดใน vertical axis
+                yolo_on_axis = sorted(
+                    [w for w in v_walls
+                     if w.get("source") == "yolo"
+                     and abs(w.get("x", 999) - ex) <= snap * 2
+                     and w.get("y2", -999) >= ey1 - snap
+                     and w.get("y1", 999) <= ey2 + snap],
+                    key=lambda w: w.get("y1", 0)
+                )
+                prev_y2 = ey1
+                for w in yolo_on_axis:
+                    wy1 = w.get("y1", ey2)
+                    if wy1 - prev_y2 > snap:
+                        new_v.append({
+                            "x": float(ex),
+                            "y1": float(prev_y2), "y2": float(wy1),
+                            "t": cfg["thickness"],
+                            "source": "room_shell",
+                            "synthetic": True,
+                        })
+                    prev_y2 = max(prev_y2, w.get("y2", prev_y2))
+                if ey2 - prev_y2 > snap:
+                    new_v.append({
+                        "x": float(ex),
+                        "y1": float(prev_y2), "y2": float(ey2),
+                        "t": cfg["thickness"],
+                        "source": "room_shell",
+                        "synthetic": True,
+                    })
+
+    return h_walls + new_h, v_walls + new_v
 
 def build_geometry(image: np.ndarray, yolo_results, debug_images=None) -> dict:
     h, w = image.shape[:2]
+
     room_masks = _extract_room_masks(yolo_results, w, h)
-    yolo_h, yolo_v = _extract_walls_yolo(yolo_results, w, h)
-    cv_h, cv_v = _extract_walls_cv(image)
+
+    if debug_images is not None:
+
+        dbg_raw = image.copy()
+        dbg_fixed = image.copy()
+
+        for m in room_masks:
+
+            poly = m["polygon"]
+
+            polys = [poly] if isinstance(poly, Polygon) else list(poly.geoms)
+
+            for p in polys:
+
+                # ---------- RAW ----------
+                pts = np.array([
+                    [int(x * w), int(y * h)]
+                    for x, y in p.exterior.coords
+                ], np.int32)
+
+                cv2.fillPoly(dbg_raw, [pts], (0, 255, 0))
+
+                # ---------- FIXED ----------
+                repaired = (
+                    p
+                    .buffer(0.006, join_style=2)
+                    .buffer(-0.004, join_style=2)
+                    .simplify(0.003, preserve_topology=True)
+                )
+
+                repaired = _largest_poly(repaired)
+
+                if repaired is None:
+                    continue
+
+                pts_fixed = np.array([
+                    [int(x * w), int(y * h)]
+                    for x, y in repaired.exterior.coords
+                ], np.int32)
+
+                cv2.fillPoly(dbg_fixed, [pts_fixed], (255, 0, 0))
+
+    debug_images["room_masks"] = encode_preview(dbg_raw)
+    debug_images["room_masks_fixed"] = encode_preview(dbg_fixed)
+            
     doors = _extract_openings(yolo_results, w, h, "door")
     windows = _extract_openings(yolo_results, w, h, "window")
+    openings = doors + windows
+
+    yolo_h, yolo_v = _extract_walls_yolo(yolo_results, w, h)
+
+    # สร้าง cfg จาก YOLO walls ก่อน (ไม่รอ CV)
+    cfg = _wall_config(yolo_h, yolo_v)
+
+    # CV ช่วยแค่ bridge gap — ต้องมี cfg และ room_masks แล้ว
+    cv_h, cv_v = _extract_walls_cv(image, room_masks, yolo_h, yolo_v, cfg)
 
     all_h = yolo_h + cv_h
     all_v = yolo_v + cv_v
 
-    if debug_images is not None:
-        debug_images["03_yolo_walls"] = encode_preview(_debug_wall_image(image, yolo_h, yolo_v, "YOLO walls", (255, 100, 0), 4))
-        debug_images["04_cv_walls"] = encode_preview(_debug_wall_image(image, cv_h, cv_v, "CV dark-line walls", (0, 255, 255), 3))
+    # opening_requires_wall และ bridge_yolo_gaps ต้องมี cfg แล้ว
+    all_h, all_v = _opening_requires_wall(all_h, all_v, openings, cfg)
+    all_h, all_v = _bridge_yolo_gaps(all_h, all_v, cfg)
+    all_h, all_v = _build_outer_walls_from_rooms(room_masks, all_h, all_v, cfg) 
 
     boundary = _build_boundary(room_masks, all_h, all_v)
-    cfg = _wall_config(all_h, all_v)
+    
+    h_walls, v_walls = _process_wall_graph(
+        all_h,
+        all_v,
+        doors + windows,
+        boundary,
+        cfg,
+    )
 
-    # --- Stage 1: CV binary + door-close → connected components ---
-    cv_cells = _cv_room_segments(image, doors, boundary, w, h)
-    if cv_cells and _cells_valid(cv_cells, room_masks, boundary):
-        h_walls, v_walls = _process_wall_graph(all_h, all_v, doors + windows, boundary, cfg)
-        if debug_images is not None:
-            debug_images["05_final_walls"] = encode_preview(_debug_wall_image(image, h_walls, v_walls, "Final walls", (0, 255, 0), 4))
-        rooms = _assign_rooms(cv_cells, room_masks, boundary, cfg)
-        walls = _wall_output(h_walls, v_walls, boundary)
-        return {
-            "rooms": rooms, "walls": walls, "doors": doors, "windows": windows,
-            "meta": {"mode": "cv_binary", "roomMaskCount": len(room_masks),
-                     "roomCount": len(rooms), "wallCount": len(walls),
-                     "doorCount": len(doors), "windowCount": len(windows)},
-        }
 
-    # --- Stage 2: wall-graph polygonize ---
-    h_walls, v_walls = _process_wall_graph(all_h, all_v, doors + windows, boundary, cfg)
+    # กรอง wall ที่ไม่อยู่ใน room area ออก (ตอบโจทย์ "no room = no wall")
+    all_h, all_v = _filter_walls_by_rooms(all_h, all_v, room_masks, cfg)
+
 
     if debug_images is not None:
-        debug_images["05_final_walls"] = encode_preview(_debug_wall_image(image, h_walls, v_walls, "Final walls", (0, 255, 0), 4))
+        debug_images["03_yolo_walls"] = encode_preview(
+            _debug_wall_image(image, yolo_h, yolo_v, "YOLO walls", (255, 100, 0), 4)
+        )
 
-    cells = _polygonize_cells(h_walls, v_walls, boundary)
-    if _cells_valid(cells, room_masks, boundary):
-        rooms = _assign_rooms(cells, room_masks, boundary, cfg)
-        mode = "polygonize"
-    else:
-        rooms = _rooms_from_masks(room_masks, boundary)
-        mode = "mask_direct"
+        debug_images["04_cv_walls"] = encode_preview(
+            _debug_wall_image(image, cv_h, cv_v, "CV dark-line walls", (0, 255, 255), 3)
+        )
 
+
+    if debug_images is not None:
+        debug_images["05_final_walls"] = encode_preview(
+            _debug_wall_image(image, h_walls, v_walls, "Final walls", (0, 255, 0), 4)
+        )
+
+    rooms = _rooms_from_masks(room_masks, boundary)
+
+    mode = "mask_direct"
+    
+    if len(rooms) <= 1 and len(room_masks) > 1:
+
+        cells = _polygonize_cells(
+            h_walls,
+            v_walls,
+            boundary,
+            room_masks
+        )
+
+        cells = _merge_fragmented_cells(cells, cfg)
+
+        if _cells_valid(cells, room_masks, boundary):
+            rooms = _assign_rooms(cells, room_masks, boundary, cfg)
+            mode = "polygonize"
+
+    if not rooms:
+
+        cv_cells = _cv_room_segments(
+            image,
+            doors,
+            boundary,
+            w,
+            h,
+        )
+
+        if cv_cells:
+            rooms = _assign_rooms(
+                cv_cells,
+                room_masks,
+                boundary,
+                cfg,
+            )
+            mode = "cv_binary"
     if not rooms:
         fallback = _make_room("Floor", 1, boundary)
         rooms = [fallback] if fallback else []
         mode = "boundary_fallback"
 
     walls = _wall_output(h_walls, v_walls, boundary)
+
     return {
         "rooms": rooms,
         "walls": walls,
@@ -325,6 +548,54 @@ def build_geometry(image: np.ndarray, yolo_results, debug_images=None) -> dict:
         },
     }
 
+def _filter_walls_by_rooms(h_walls, v_walls, room_masks, cfg) -> tuple:
+    """
+    ลบผนังที่ไม่ได้อยู่ใกล้ room mask ออก
+    แก้ปัญหาเส้นบันได / furniture / title block ที่ CV จับผิด
+    """
+    
+    if not room_masks:
+        return h_walls, v_walls  # ถ้าไม่มี mask เลย ไม่กรอง
+
+    try:
+        room_union = unary_union([m["polygon"] for m in room_masks])
+        # buffer ให้ครอบผนังที่อยู่รอบๆ room
+        room_area = room_union.buffer(cfg["snap"] * 3)
+    except Exception:
+        return h_walls, v_walls
+
+    def wall_near_room(line: LineString) -> bool:
+        try:
+            return line.distance(room_area) <= cfg["snap"] * 2
+        except Exception:
+            return True  # ถ้า error ให้เก็บไว้ก่อน (safe fallback)
+
+    out_h = [
+        seg for seg in h_walls
+        if seg.get("source") == "yolo"
+        or wall_near_room(
+            LineString([
+                (seg["x1"], seg["y"]),
+                (seg["x2"], seg["y"])
+            ])
+        )
+    ]
+    out_v = [
+        seg for seg in v_walls
+        if seg.get("source") in (
+            "yolo",
+            "room_shell",
+            "opening_inferred"
+        )
+        or wall_near_room(
+            LineString([
+                (seg["x"], seg["y1"]),
+                (seg["x"], seg["y2"])
+            ])
+        )
+    ]
+
+    return out_h, out_v
 
 def _clip(v: float) -> float:
     return float(np.clip(v, 0.0, 1.0))
@@ -345,6 +616,16 @@ def _extract_room_masks(results, w, h) -> list[dict]:
             continue
         norm = [(_clip(x / w), _clip(y / h)) for x, y in pts]
         poly = _clean_poly(Polygon(norm))
+
+        if poly is None:
+            continue
+
+        # ---- repair jagged / missing chunks ----
+        poly = poly.buffer(0.006, join_style=2)
+        poly = poly.buffer(-0.004, join_style=2)
+        poly = poly.simplify(0.003, preserve_topology=True)
+
+        poly = _largest_poly(poly)
         if poly is None or poly.area < 0.0002:
             continue
         c = poly.centroid
@@ -379,7 +660,7 @@ def _extract_openings(results, w, h, kind: str) -> list[dict]:
                     "w": _clip(float(np.ptp(arr[:, 0])) / w),
                     "h": _clip(float(np.ptp(arr[:, 1])) / h),
                 }
-        out.append({"id": f"{kind}-{i}", "bbox": bbox, "polygon": polygon, "widthPx": float(max(bbox["w"] * w, bbox["h"] * h)), "widthM": None})
+        out.append({"id": f"{kind}-{i}", "bbox": bbox, "polygon": polygon, "widthPx": float(max(bbox["w"] * w, bbox["h"] * h)), "widthM": None, "confidence": float(conf)})
     return out
 
 
@@ -406,37 +687,137 @@ def _extract_walls_yolo(results, w, h):
             length, thick, theta = rh, rw, np.deg2rad(angle + 90)
         t = float(np.clip(thick / max(w, h), 0.005, 0.035))
         if abs(np.cos(theta)) >= abs(np.sin(theta)):
-            h_walls.append({"x1": _clip((cx - length / 2) / w), "x2": _clip((cx + length / 2) / w), "y": _clip(cy / h), "t": t, "source": "yolo"})
+            h_walls.append({
+                "x1": _clip((cx - length / 2) / w),
+                "x2": _clip((cx + length / 2) / w),
+                "y": _clip(cy / h),
+                "t": t,
+                "source": "yolo",
+                "conf": conf
+            })        
         else:
-            v_walls.append({"x": _clip(cx / w), "y1": _clip((cy - length / 2) / h), "y2": _clip((cy + length / 2) / h), "t": t, "source": "yolo"})
+            v_walls.append({
+                "x": _clip(cx / w),
+                "y1": _clip((cy - length / 2) / h),
+                "y2": _clip((cy + length / 2) / h),
+                "t": t,
+                "source": "yolo",
+                "conf": conf
+            })    
     for seg in h_walls:
         if seg["x1"] > seg["x2"]:
-            seg["x1"], seg["x2"] = seg["x2"], seg["x1"]
+            seg["x  1"], seg["x2"] = seg["x2"], seg["x1"]
     for seg in v_walls:
         if seg["y1"] > seg["y2"]:
             seg["y1"], seg["y2"] = seg["y2"], seg["y1"]
     return h_walls, v_walls
 
+def _near_rooms(line: LineString, room_union, max_dist=0.05):
+    """
+    Keep only wall lines close to actual rooms.
+    Removes page border / title block / annotation lines.
+    """
+    try:
+        return line.distance(room_union) <= max_dist
+    except Exception:
+        return False
 
-def _extract_walls_cv(image: np.ndarray):
+def _extract_walls_cv(image, room_masks, yolo_h, yolo_v, cfg):
+    """
+    CV ทำหน้าที่เดียว: bridge micro-gap ในผนัง YOLO เท่านั้น
+    ไม่สร้างผนังใหม่, ไม่จับเส้นที่ไม่ใกล้ YOLO wall
+    """
+    if not yolo_h and not yolo_v:
+        return [], []
+
+    snap = cfg["snap"]
+    max_bridge = cfg.get("connect_gap", 0.035)  # gap สูงสุดที่จะ bridge (normalized)
+
+    # Room union สำหรับกรอง — เส้นต้องอยู่ใกล้ room area
+    room_union = None
+    if room_masks:
+        try:
+            room_union = unary_union([m["polygon"] for m in room_masks])
+            room_union = room_union.buffer(0.04)  # ขยายเล็กน้อยให้ครอบผนัง
+        except Exception:
+            pass
+
     h, w = image.shape[:2]
-    binary = _dark_line_mask(image)
-    h_m = cv2.morphologyEx(binary, cv2.MORPH_OPEN, cv2.getStructuringElement(cv2.MORPH_RECT, (max(24, w // 34), 1)))
-    v_m = cv2.morphologyEx(binary, cv2.MORPH_OPEN, cv2.getStructuringElement(cv2.MORPH_RECT, (1, max(24, h // 34))))
-    min_l = max(34, int(min(w, h) * 0.045))
-    h_walls, v_walls = [], []
-    for cnt in cv2.findContours(h_m, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)[0]:
-        bx, by, bw, bh = cv2.boundingRect(cnt)
-        if bw < min_l or bw < bh * 4.0 or bh > max(28, h * 0.045):
-            continue
-        h_walls.append({"x1": _clip(bx / w), "x2": _clip((bx + bw) / w), "y": _clip((by + bh / 2) / h), "t": float(np.clip(bh / max(w, h), 0.005, 0.03)), "source": "cv"})
-    for cnt in cv2.findContours(v_m, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)[0]:
-        bx, by, bw, bh = cv2.boundingRect(cnt)
-        if bh < min_l or bh < bw * 4.0 or bw > max(28, w * 0.045):
-            continue
-        v_walls.append({"x": _clip((bx + bw / 2) / w), "y1": _clip(by / h), "y2": _clip((by + bh) / h), "t": float(np.clip(bw / max(w, h), 0.005, 0.03)), "source": "cv"})
-    return _filter_staircase_walls(h_walls, v_walls)
+    out_h, out_v = [], []
 
+    # --- HORIZONTAL gaps ---
+    for seg in yolo_h:
+        # หาเส้น YOLO ที่อยู่ axis เดียวกัน แต่มี gap ระหว่างกัน
+        same_axis = [
+            s for s in yolo_h
+            if s is not seg
+            and abs(s["y"] - seg["y"]) <= snap
+            and s["x1"] > seg["x2"]  # อยู่ทางขวา
+        ]
+        for neighbor in same_axis:
+            if seg.get("source") != "yolo":
+                continue
+
+            if neighbor.get("source") != "yolo":
+                continue
+
+            gap = neighbor["x1"] - seg["x2"]
+            if gap <= 0 or gap > max_bridge:
+                continue
+
+            # กรอง: gap ต้องอยู่ใน room area
+            if room_union is not None:
+                mid_x = (seg["x2"] + neighbor["x1"]) / 2
+                mid_y = seg["y"]
+                if not room_union.contains(Point(mid_x, mid_y)):
+                    continue
+
+            # ตรวจว่า gap นี้ไม่ใช่ door/window opening
+            # (จะ bridge ผ่าน _bridge_openings แทน)
+            out_h.append({
+                "x1": seg["x2"],
+                "x2": neighbor["x1"],
+                "y": seg["y"],
+                "t": max(seg.get("t", 0.012), neighbor.get("t", 0.012)),
+                "source": "cv_bridge",
+                "synthetic": True,
+            })
+
+    # --- VERTICAL gaps ---
+    for seg in yolo_v:
+        same_axis = [
+            s for s in yolo_v
+            if s is not seg
+            and abs(s["x"] - seg["x"]) <= snap
+            and s["y1"] > seg["y2"]
+        ]
+        for neighbor in same_axis:
+            if seg.get("source") != "yolo":
+                continue
+
+            if neighbor.get("source") != "yolo":
+                continue
+
+            gap = neighbor["y1"] - seg["y2"]
+            if gap <= 0 or gap > max_bridge:
+                continue
+
+            if room_union is not None:
+                mid_x = seg["x"]
+                mid_y = (seg["y2"] + neighbor["y1"]) / 2
+                if not room_union.contains(Point(mid_x, mid_y)):
+                    continue
+
+            out_v.append({
+                "x": seg["x"],
+                "y1": seg["y2"],
+                "y2": neighbor["y1"],
+                "t": max(seg.get("t", 0.012), neighbor.get("t", 0.012)),
+                "source": "cv_bridge",
+                "synthetic": True,
+            })
+
+    return out_h, out_v
 
 def _cv_room_segments(image: np.ndarray, doors: list, boundary: Polygon, w: int, h: int) -> list:
     """Detect room cells directly from binary wall mask + door-closing."""
@@ -465,9 +846,30 @@ def _cv_room_segments(image: np.ndarray, doors: list, boundary: Polygon, w: int,
     room_space = cv2.bitwise_and(255 - closed, mask)
 
     # Remove tiny noise (furniture symbols, fixture outlines)
-    open_px = max(8, min(w, h) // 65)
-    room_space = cv2.morphologyEx(room_space, cv2.MORPH_OPEN,
-                                  cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (open_px, open_px)))
+    kernel_size = max(7, min(w, h) // 90)
+
+    kernel = cv2.getStructuringElement(
+        cv2.MORPH_ELLIPSE,
+        (kernel_size, kernel_size)
+    )
+
+    # ปิดรูดำเล็ก ๆ ภายในห้อง
+    room_space = cv2.morphologyEx(
+        room_space,
+        cv2.MORPH_CLOSE,
+        kernel,
+        iterations=2
+    )
+
+    # flood fill เติมพื้นที่ที่แหว่ง
+    flood = room_space.copy()
+    mask = np.zeros((h + 2, w + 2), np.uint8)
+
+    cv2.floodFill(flood, mask, (0, 0), 255)
+
+    holes = cv2.bitwise_not(flood)
+
+    room_space = cv2.bitwise_or(room_space, holes)
 
     n, labels, stats, _ = cv2.connectedComponentsWithStats(room_space)
     if n < 3:
@@ -483,7 +885,7 @@ def _cv_room_segments(image: np.ndarray, doors: list, boundary: Polygon, w: int,
         if not cnts:
             continue
         cnt = max(cnts, key=cv2.contourArea)
-        eps = max(3.0, cv2.arcLength(cnt, True) * 0.018)
+        eps = max(1.2, cv2.arcLength(cnt, True) * 0.006)
         approx = cv2.approxPolyDP(cnt, eps, True)
         if len(approx) < 3:
             continue
@@ -491,7 +893,7 @@ def _cv_room_segments(image: np.ndarray, doors: list, boundary: Polygon, w: int,
                                     for p in approx]))
         if poly is None or poly.area < 0.001:
             continue
-        poly = _largest_poly(poly.simplify(0.005, preserve_topology=True))
+        poly = _largest_poly(poly.simplify(0.0015, preserve_topology=True))
         if poly:
             cells.append(poly)
 
@@ -534,21 +936,81 @@ def _wall_config(h_walls, v_walls) -> dict:
         "thickness": median,
         "snap": snap,
         "merge_gap": float(np.clip(snap * 1.6, 0.018, 0.045)),
-        "connect_gap": float(np.clip(snap * 3.5, 0.040, 0.10)),
-        "bnd_pad": float(np.clip(snap * 1.5, 0.012, 0.04)),
+        "connect_gap": float(np.clip(snap * 2.0, 0.020, 0.055)), 
+        "min_real_door": 12,"bnd_pad": float(np.clip(snap * 1.5, 0.012, 0.04)),
     }
 
+def _debug_wall_connectivity(h_walls, v_walls, cfg):
+
+    snap = cfg["snap"]
+
+    broken_h = []
+    broken_v = []
+
+    for seg in h_walls:
+
+        left_ok = any(
+            abs(v["x"] - seg["x1"]) <= snap and
+            v["y1"] - snap <= seg["y"] <= v["y2"] + snap
+            for v in v_walls
+        )
+
+        right_ok = any(
+            abs(v["x"] - seg["x2"]) <= snap and
+            v["y1"] - snap <= seg["y"] <= v["y2"] + snap
+            for v in v_walls
+        )
+
+        if not left_ok or not right_ok:
+            broken_h.append(seg)
+
+    for seg in v_walls:
+
+        top_ok = any(
+            abs(h["y"] - seg["y1"]) <= snap and
+            h["x1"] - snap <= seg["x"] <= h["x2"] + snap
+            for h in h_walls
+        )
+
+        bottom_ok = any(
+            abs(h["y"] - seg["y2"]) <= snap and
+            h["x1"] - snap <= seg["x"] <= h["x2"] + snap
+            for h in h_walls
+        )
+
+        if not top_ok or not bottom_ok:
+            broken_v.append(seg)
+
+    print("\n========== WALL GRAPH ==========")
+    print(f"h walls: {len(h_walls)}")
+    print(f"v walls: {len(v_walls)}")
+    print(f"broken h: {len(broken_h)}")
+    print(f"broken v: {len(broken_v)}")
+
+    return broken_h, broken_v
 
 def _process_wall_graph(h_raw, v_raw, openings, boundary, cfg):
     h_walls, v_walls = [dict(seg) for seg in h_raw], [dict(seg) for seg in v_raw]
     h_walls, v_walls = _snap_merge(h_walls, v_walls, cfg)
+    h_walls, v_walls = _filter_staircase_walls(h_walls, v_walls)
     _heal(h_walls, v_walls, cfg)
+    _infer_walls_from_openings(
+        h_walls,
+        v_walls,
+        openings,
+        cfg
+    )
     _bridge_openings(h_walls, v_walls, openings, cfg)
     _snap_anchors(h_walls, v_walls, cfg)
     h_walls, v_walls = _snap_merge(h_walls, v_walls, cfg)
+    broken_h, broken_v = _debug_wall_connectivity(
+        h_walls,
+        v_walls,
+        cfg
+    )
     h_walls, v_walls = _clip_to_boundary(h_walls, v_walls, boundary, cfg)
     h_walls, v_walls = _filter_structural(h_walls, v_walls, boundary, cfg)
-    h_walls, v_walls = _ensure_outer_edges(h_walls, v_walls, boundary, cfg)
+    # h_walls, v_walls = _ensure_outer_edges(h_walls, v_walls, boundary, cfg)
     _snap_anchors(h_walls, v_walls, cfg)
     h_walls, v_walls = _split_at_junctions(h_walls, v_walls)
     return h_walls, v_walls
@@ -666,42 +1128,405 @@ def _heal(h_walls, v_walls, cfg):
                         hit["x1"] = min(hit["x1"], x)
                         hit["x2"] = max(hit["x2"], x)
 
+def _is_real_door_gap(gap, opening_size):
+    """
+    Prevent bridging actual room door openings.
+    Only repair tiny segmentation gaps.
+    """
+    return gap >= opening_size * 0.65
+
 
 def _bridge_openings(h_walls, v_walls, openings, cfg):
-    snap, connect = cfg["snap"], cfg["connect_gap"]
+
+    snap = cfg["snap"]
+    connect = cfg["connect_gap"]
+
+    # ---------------------------------------------------------
+    # IMPORTANT:
+    # bridge เฉพาะ micro-gap เท่านั้น
+    # ---------------------------------------------------------
+
+    min_real_door = cfg.get("min_real_door", 0.012)
+
     for opening in openings:
+
         bbox = opening.get("bbox", {})
+
         ox = float(bbox.get("x", 0)) + float(bbox.get("w", 0)) / 2
         oy = float(bbox.get("y", 0)) + float(bbox.get("h", 0)) / 2
-        ow, oh = float(bbox.get("w", 0)), float(bbox.get("h", 0))
+
+        ow = float(bbox.get("w", 0))
+        oh = float(bbox.get("h", 0))
+
         if ow <= 0 or oh <= 0:
             continue
+
+        # =====================================================
+        # HORIZONTAL OPENING
+        # =====================================================
+
         if ow >= oh:
-            candidates = [seg for seg in h_walls if abs(seg["y"] - oy) <= connect]
+
+            candidates = [
+                seg for seg in h_walls
+                if abs(seg["y"] - oy) <= connect
+            ]
+
             if not candidates:
                 continue
-            y = min(candidates, key=lambda seg: abs(seg["y"] - oy))["y"]
-            left = [seg for seg in candidates if abs(seg["y"] - y) <= snap and seg["x2"] <= ox]
-            right = [seg for seg in candidates if abs(seg["y"] - y) <= snap and seg["x1"] >= ox]
-            if left and right:
-                lw, rw = max(left, key=lambda seg: seg["x2"]), min(right, key=lambda seg: seg["x1"])
-                gap = rw["x1"] - lw["x2"]
-                if 0 < gap <= max(connect, ow * 1.9 + snap):
-                    h_walls.append({"x1": lw["x2"], "x2": rw["x1"], "y": y, "t": max(lw["t"], rw["t"]), "source": "bridge"})
+
+            y = min(
+                candidates,
+                key=lambda seg: abs(seg["y"] - oy)
+            )["y"]
+
+            left = [
+                seg for seg in candidates
+                if (
+                    abs(seg["y"] - y) <= snap
+                    and seg["x2"] <= ox
+                )
+            ]
+
+            right = [
+                seg for seg in candidates
+                if (
+                    abs(seg["y"] - y) <= snap
+                    and seg["x1"] >= ox
+                )
+            ]
+
+            if not left or not right:
+                continue
+
+            lw = max(left, key=lambda seg: seg["x2"])
+            rw = min(right, key=lambda seg: seg["x1"])
+
+            gap = rw["x1"] - lw["x2"]
+
+            # -------------------------------------------------
+            # invalid gap
+            # -------------------------------------------------
+
+            if gap <= 0:
+                continue
+
+            # -------------------------------------------------
+            # real door/window opening
+            # DON'T BRIDGE
+            # -------------------------------------------------
+
+            if gap >= min_real_door:
+                continue
+
+            # -------------------------------------------------
+            # too large for repair
+            # -------------------------------------------------
+
+            max_bridge = min(connect * 0.55, ow * 0.7)
+
+            if gap > max_bridge:
+                continue
+
+            # -------------------------------------------------
+            # opening size matches gap
+            # probably intentional opening
+            # -------------------------------------------------
+
+            if abs(gap - ow) <= max(0.004, ow * 0.25):
+                continue
+
+            h_walls.append({
+                "x1": lw["x2"],
+                "x2": rw["x1"],
+                "y": y,
+                "t": max(lw["t"], rw["t"]),
+                "source": "bridge",
+                "synthetic": True
+            })
+
+        # =====================================================
+        # VERTICAL OPENING
+        # =====================================================
+
         else:
-            candidates = [seg for seg in v_walls if abs(seg["x"] - ox) <= connect]
+
+            candidates = [
+                seg for seg in v_walls
+                if abs(seg["x"] - ox) <= connect
+            ]
+
             if not candidates:
                 continue
-            x = min(candidates, key=lambda seg: abs(seg["x"] - ox))["x"]
-            top = [seg for seg in candidates if abs(seg["x"] - x) <= snap and seg["y2"] <= oy]
-            bottom = [seg for seg in candidates if abs(seg["x"] - x) <= snap and seg["y1"] >= oy]
-            if top and bottom:
-                tw, bw = max(top, key=lambda seg: seg["y2"]), min(bottom, key=lambda seg: seg["y1"])
-                gap = bw["y1"] - tw["y2"]
-                if 0 < gap <= max(connect, oh * 1.9 + snap):
-                    v_walls.append({"x": x, "y1": tw["y2"], "y2": bw["y1"], "t": max(tw["t"], bw["t"]), "source": "bridge"})
 
+            x = min(
+                candidates,
+                key=lambda seg: abs(seg["x"] - ox)
+            )["x"]
 
+            top = [
+                seg for seg in candidates
+                if (
+                    abs(seg["x"] - x) <= snap
+                    and seg["y2"] <= oy
+                )
+            ]
+
+            bottom = [
+                seg for seg in candidates
+                if (
+                    abs(seg["x"] - x) <= snap
+                    and seg["y1"] >= oy
+                )
+            ]
+
+            if not top or not bottom:
+                continue
+
+            tw = max(top, key=lambda seg: seg["y2"])
+            bw = min(bottom, key=lambda seg: seg["y1"])
+
+            gap = bw["y1"] - tw["y2"]
+
+            # -------------------------------------------------
+            # invalid gap
+            # -------------------------------------------------
+
+            if gap <= 0:
+                continue
+
+            # -------------------------------------------------
+            # real opening
+            # DON'T BRIDGE
+            # -------------------------------------------------
+
+            if gap >= min_real_door:
+                continue
+
+            # -------------------------------------------------
+            # only tiny repair allowed
+            # -------------------------------------------------
+
+            max_bridge = min(connect * 0.55, oh * 0.7)
+
+            if gap > max_bridge:
+                continue
+
+            # -------------------------------------------------
+            # likely intentional opening
+            # -------------------------------------------------
+
+            if abs(gap - oh) <= max(0.004, oh * 0.25):
+                continue
+
+            v_walls.append({
+                "x": x,
+                "y1": tw["y2"],
+                "y2": bw["y1"],
+                "t": max(tw["t"], bw["t"]),
+                "source": "bridge",
+                "synthetic": True
+            })
+            
+def _opening_requires_wall(h_walls, v_walls, openings, cfg):
+
+    snap = cfg["snap"]
+
+    for op in openings:
+
+        bbox = op.get("bbox", {})
+
+        x = float(bbox.get("x", 0))
+        y = float(bbox.get("y", 0))
+        w = float(bbox.get("w", 0))
+        h = float(bbox.get("h", 0))
+
+        conf = float(op.get("confidence", 1.0))
+
+        # high confidence opening only
+        if conf < 0.55:
+            continue
+
+        cx = x + w / 2
+        cy = y + h / 2
+
+        # -----------------------------------------------------
+        # HORIZONTAL OPENING
+        # -----------------------------------------------------
+
+        if w >= h:
+
+            nearby = [
+                seg for seg in h_walls
+                if abs(seg["y"] - cy) <= snap * 2
+            ]
+
+            if nearby:
+                continue
+
+            h_walls.append({
+                "x1": x,
+                "x2": x + w,
+                "y": cy,
+                "t": 1,
+                "source": "opening_inferred",
+                "synthetic": True
+            })
+
+        # -----------------------------------------------------
+        # VERTICAL OPENING
+        # -----------------------------------------------------
+
+        else:
+
+            nearby = [
+                seg for seg in v_walls
+                if abs(seg["x"] - cx) <= snap * 2
+            ]
+
+            if nearby:
+                continue
+
+            v_walls.append({
+                "x": cx,
+                "y1": y,
+                "y2": y + h,
+                "t": 1,
+                "source": "opening_inferred",
+                "synthetic": True
+            })
+
+    return h_walls, v_walls
+
+def _bridge_yolo_gaps(h_walls, v_walls, cfg):
+
+    snap = cfg["snap"]
+    max_gap = cfg.get("connect_gap", 12)
+
+    # ---------------------------------------------------------
+    # HORIZONTAL
+    # ---------------------------------------------------------
+
+    new_h = []
+
+    for a in h_walls:
+
+        for b in h_walls:
+
+            if a is b:
+                continue
+
+            if abs(a["y"] - b["y"]) > snap:
+                continue
+
+            gap = b["x1"] - a["x2"]
+
+            if gap <= 0 or gap > max_gap:
+                continue
+
+            new_h.append({
+                "x1": a["x2"],
+                "x2": b["x1"],
+                "y": a["y"],
+                "t": max(a["t"], b["t"]),
+                "source": "gap_bridge",
+                "synthetic": True
+            })
+
+    # ---------------------------------------------------------
+    # VERTICAL
+    # ---------------------------------------------------------
+
+    new_v = []
+
+    for a in v_walls:
+
+        for b in v_walls:
+
+            if a is b:
+                continue
+
+            if abs(a["x"] - b["x"]) > snap:
+                continue
+
+            gap = b["y1"] - a["y2"]
+
+            if gap <= 0 or gap > max_gap:
+                continue
+
+            new_v.append({
+                "x": a["x"],
+                "y1": a["y2"],
+                "y2": b["y1"],
+                "t": max(a["t"], b["t"]),
+                "source": "gap_bridge",
+                "synthetic": True
+            })
+
+    return h_walls + new_h, v_walls + new_v
+
+def _infer_walls_from_openings(
+    h_walls,
+    v_walls,
+    openings,
+    cfg
+):
+    snap = cfg["snap"]
+
+    for op in openings:
+
+        bbox = op.get("bbox", {})
+
+        ox = float(bbox.get("x", 0)) + float(bbox.get("w", 0)) / 2
+        oy = float(bbox.get("y", 0)) + float(bbox.get("h", 0)) / 2
+
+        ow = float(bbox.get("w", 0))
+        oh = float(bbox.get("h", 0))
+
+        if ow <= 0 or oh <= 0:
+            continue
+
+        # horizontal opening
+        if ow >= oh:
+
+            nearby = [
+                s for s in h_walls
+                if abs(s["y"] - oy) <= snap * 2
+            ]
+
+            if nearby:
+                continue
+
+            h_walls.append({
+                "x1": max(0.0, ox - ow * 0.9),
+                "x2": min(1.0, ox + ow * 0.9),
+                "y": oy,
+                "t": cfg["thickness"],
+                "source": "opening_inferred",
+                "synthetic": True,
+                "conf": 1.0
+            })
+
+        else:
+
+            nearby = [
+                s for s in v_walls
+                if abs(s["x"] - ox) <= snap * 2
+            ]
+
+            if nearby:
+                continue
+
+            v_walls.append({
+                "x": ox,
+                "y1": max(0.0, oy - oh * 0.9),
+                "y2": min(1.0, oy + oh * 0.9),
+                "t": cfg["thickness"],
+                "source": "opening_inferred",
+                "synthetic": True,
+                "conf": 1.0
+            })
+    
 def _snap_anchors(h_walls, v_walls, cfg):
     snap = cfg["snap"]
     for _ in range(2):
@@ -772,62 +1597,147 @@ def _filter_structural(h_walls, v_walls, boundary, cfg):
     snap = cfg["snap"]
     minx, miny, maxx, maxy = boundary.bounds
     min_keep = max(0.045, snap * 2.2)
-    interior_keep = max(0.075, snap * 3.5)
+    interior_keep = max(0.05, snap * 2.2)
 
     def on_h(seg):
-        return abs(seg["y"] - miny) <= snap * 1.5 or abs(seg["y"] - maxy) <= snap * 1.5
+        
+        # ชิดขอบ AND มาจาก YOLO จริงๆ (ไม่ใช่ shell/boundary-derived)
+        if seg.get("source") in ("shell", "boundary"):
+            return False
+        return (
+            abs(seg["y"] - miny) <= snap * 1.5
+            or abs(seg["y"] - maxy) <= snap * 1.5
+        )
 
     def on_v(seg):
-        return abs(seg["x"] - minx) <= snap * 1.5 or abs(seg["x"] - maxx) <= snap * 1.5
+        if seg.get("source") in ("shell", "boundary"):
+            return False
+        return (
+            abs(seg["x"] - minx) <= snap * 1.5
+            or abs(seg["x"] - maxx) <= snap * 1.5
+        )
 
     def h_conn(seg):
         y = seg["y"]
-        return sum(1 for v in v_walls if seg["x1"] - snap <= v["x"] <= seg["x2"] + snap and v["y1"] - snap <= y <= v["y2"] + snap)
+        return sum(
+            1 for v in v_walls
+            if "x" in v and "y1" in v and "y2" in v  # guard
+            and seg["x1"] - snap <= v["x"] <= seg["x2"] + snap
+            and v["y1"] - snap <= y <= v["y2"] + snap
+        )
 
     def v_conn(seg):
         x = seg["x"]
-        return sum(1 for h in h_walls if seg["y1"] - snap <= h["y"] <= seg["y2"] + snap and h["x1"] - snap <= x <= h["x2"] + snap)
+        return sum(
+            1 for h in h_walls
+            if "y" in h and "x1" in h and "x2" in h  # guard
+            and seg["y1"] - snap <= h["y"] <= seg["y2"] + snap
+            and h["x1"] - snap <= x <= h["x2"] + snap
+        )
 
-    out_h = [
-        seg for seg in h_walls
-        if seg.get("synthetic")
+    out_h = []
+    for seg in h_walls:
+        seg_len = seg["x2"] - seg["x1"]
+
+        # ตัด shell wall ออกก่อนเลย ไม่ต้องผ่าน logic อื่น
+        if seg.get("source") == "shell":
+            continue
+
+        if seg.get("source") == "yolo" and seg.get("conf", 0) >= 0.40:
+            out_h.append(seg)
+            continue
+
+        if seg.get("source") == "cv_bridge":
+            supported = any(
+                abs(w["y"] - seg["y"]) <= snap * 2
+                for w in h_walls
+                if w.get("source") != "cv_bridge"
+            )
+            if not supported:
+                continue
+
+        keep = (
+        seg.get("source") in ("opening_inferred", "room_shell")  # เพิ่ม room_shell
         or on_h(seg)
-        or seg["x2"] - seg["x1"] >= interior_keep
-        or (seg["x2"] - seg["x1"] >= min_keep and h_conn(seg) >= 1)
-    ]
-    out_v = [
-        seg for seg in v_walls
-        if seg.get("synthetic")
-        or on_v(seg)
-        or seg["y2"] - seg["y1"] >= interior_keep
-        or (seg["y2"] - seg["y1"] >= min_keep and v_conn(seg) >= 1)
-    ]
+        or seg_len >= interior_keep
+        or (seg_len >= min_keep and h_conn(seg) >= 1)
+        )
+        if keep:
+            out_h.append(seg)
+
+    out_v = []
+    for seg in v_walls:
+        seg_len = seg["y2"] - seg["y1"]
+
+        if seg.get("source") == "shell":
+            continue
+
+        if seg.get("source") == "yolo" and seg.get("conf", 0) >= 0.40:
+            out_v.append(seg)
+            continue
+
+        if seg.get("source") == "cv_bridge":
+            supported = any(
+                abs(w["x"] - seg["x"]) <= snap * 2
+                for w in v_walls
+                if w.get("source") != "cv_bridge"
+            )
+            if not supported:
+                continue
+
+        keep = (
+            seg.get("synthetic")
+            or seg.get("source") in ("opening_inferred", "room_shell")
+            or on_v(seg)  
+            or seg_len >= interior_keep
+            or (seg_len >= min_keep and v_conn(seg) >= 1)  # ✅ v_conn ไม่ใช่ h_conn
+        )
+        if keep:
+            out_v.append(seg)
+
     return out_h, out_v
 
 
-def _ensure_outer_edges(h_walls, v_walls, boundary, cfg):
-    minx, miny, maxx, maxy = boundary.bounds
-    snap, thickness = cfg["snap"], cfg["thickness"]
+# def _ensure_outer_edges(h_walls, v_walls, boundary, cfg , room_masks=None):
+    
+#     if room_masks:
+#         minx, miny, maxx, maxy = boundary.bounds
+#         edge_tol = cfg["snap"] * 4
+        
+#         rooms_near_top = any(
+#             m["polygon"].bounds[1] <= miny + edge_tol 
+#             for m in room_masks
+#         )
+#         rooms_near_bottom = any(
+#             m["polygon"].bounds[3] >= maxy - edge_tol 
+#             for m in room_masks
+#         )
+#         # ถ้าไม่มี room ชิดขอบ ไม่ต้องเพิ่มผนัง
+#         if not rooms_near_top and not rooms_near_bottom:
+#             return h_walls, v_walls
+        
+#     minx, miny, maxx, maxy = boundary.bounds
+#     snap, thickness = cfg["snap"], cfg["thickness"]
 
-    def h_cover(y):
-        span = maxx - minx
-        if span <= 0:
-            return 1.0
-        return sum(max(0, min(seg["x2"], maxx) - max(seg["x1"], minx)) for seg in h_walls if abs(seg["y"] - y) <= snap) / span
+#     def h_cover(y):
+#         span = maxx - minx
+#         if span <= 0:
+#             return 1.0
+#         return sum(max(0, min(seg["x2"], maxx) - max(seg["x1"], minx)) for seg in h_walls if abs(seg["y"] - y) <= snap) / span
 
-    def v_cover(x):
-        span = maxy - miny
-        if span <= 0:
-            return 1.0
-        return sum(max(0, min(seg["y2"], maxy) - max(seg["y1"], miny)) for seg in v_walls if abs(seg["x"] - x) <= snap) / span
+#     def v_cover(x):
+#         span = maxy - miny
+#         if span <= 0:
+#             return 1.0
+#         return sum(max(0, min(seg["y2"], maxy) - max(seg["y1"], miny)) for seg in v_walls if abs(seg["x"] - x) <= snap) / span
 
-    for y in [miny, maxy]:
-        if h_cover(y) < 0.75:
-            h_walls.append({"x1": float(minx), "x2": float(maxx), "y": float(y), "t": thickness, "synthetic": True, "source": "shell"})
-    for x in [minx, maxx]:
-        if v_cover(x) < 0.75:
-            v_walls.append({"x": float(x), "y1": float(miny), "y2": float(maxy), "t": thickness, "synthetic": True, "source": "shell"})
-    return h_walls, v_walls
+#     for y in [miny, maxy]:
+#         if h_cover(y) < 0.75:
+#             h_walls.append({"x1": float(minx), "x2": float(maxx), "y": float(y), "t": thickness, "synthetic": True, "source": "shell"})
+#     for x in [minx, maxx]:
+#         if v_cover(x) < 0.75:
+#             v_walls.append({"x": float(x), "y1": float(miny), "y2": float(maxy), "t": thickness, "synthetic": True, "source": "shell"})
+#     return h_walls, v_walls
 
 
 def _split_at_junctions(h_walls, v_walls):
@@ -850,79 +1760,313 @@ def _split_at_junctions(h_walls, v_walls):
 
 
 def _build_boundary(room_masks, h_walls, v_walls) -> Polygon:
-    candidates = []
+    """
+    Build house boundary mainly from room masks.
+    Avoid using page border / drawing frame.
+    """
 
     if room_masks:
-        union = unary_union([mask["polygon"] for mask in room_masks])
-        poly = _largest_poly(union)
-        if poly and poly.area > 0.001:
-            shell = _largest_poly(poly.buffer(0.018, join_style=2).simplify(0.006, preserve_topology=True))
-            if shell:
-                candidates.append(shell)
+        try:
+            room_union = unary_union([m["polygon"] for m in room_masks])
 
-    xs = [seg["x1"] for seg in h_walls] + [seg["x2"] for seg in h_walls] + [seg["x"] for seg in v_walls]
-    ys = [seg["y"] for seg in h_walls] + [seg["y1"] for seg in v_walls] + [seg["y2"] for seg in v_walls]
-    if xs and ys:
-        pad = 0.012
-        candidates.append(Polygon([
-            (_clip(min(xs) - pad), _clip(min(ys) - pad)),
-            (_clip(max(xs) + pad), _clip(min(ys) - pad)),
-            (_clip(max(xs) + pad), _clip(max(ys) + pad)),
-            (_clip(min(xs) - pad), _clip(max(ys) + pad)),
-        ]))
+            # Expand slightly to include walls around rooms
+            shell = room_union.buffer(0.025, join_style=2)
 
-    if candidates:
-        merged = _largest_poly(unary_union(candidates))
-        if merged:
-            return merged
+            # Smooth small artifacts
+            shell = shell.simplify(0.004, preserve_topology=True)
 
-    return Polygon([(0.02, 0.02), (0.98, 0.02), (0.98, 0.98), (0.02, 0.98)])
+            shell = _largest_poly(shell)
+
+            if shell and shell.area > 0.001:
+                return shell
+
+        except Exception:
+            pass
+
+    # fallback only
+    return Polygon([
+        (0.02, 0.02),
+        (0.98, 0.02),
+        (0.98, 0.98),
+        (0.02, 0.98),
+    ])
 
 
-def _polygonize_cells(h_walls, v_walls, boundary) -> list:
+def _polygonize_cells(h_walls, v_walls, boundary, room_masks=None) -> list:
+
     lines = [_seg_line(seg, "h") for seg in h_walls if seg["x2"] - seg["x1"] > 1e-5]
+
     lines += [_seg_line(seg, "v") for seg in v_walls if seg["y2"] - seg["y1"] > 1e-5]
+
     boundary_line = boundary.boundary
+
     lines += list(boundary_line.geoms) if hasattr(boundary_line, "geoms") else [boundary_line]
+
     try:
         raw = list(polygonize(unary_union(lines)))
     except Exception:
         return []
+
+    room_union = None
+
+    if room_masks:
+        try:
+            room_union = unary_union([m["polygon"] for m in room_masks])
+        except Exception:
+            room_union = None
+
     min_area = max(boundary.area * 0.018, 0.0008)
-    cells, occupied = [], GeometryCollection()
+
+    cells = []
+
+    occupied = GeometryCollection()
+
     for cell in sorted(raw, key=lambda item: -item.area):
+
         clipped = _largest_poly(cell.intersection(boundary))
-        if not clipped or clipped.area < min_area:
+
+        if not clipped:
             continue
-        if not occupied.is_empty:
-            clipped = _largest_poly(clipped.difference(occupied.buffer(1e-6)))
-            if not clipped or clipped.area < min_area:
+
+        if clipped.area < min_area:
+            continue
+
+        # IMPORTANT FILTER
+        if room_union is not None:
+
+            overlap = clipped.intersection(room_union).area
+
+            ratio = overlap / max(clipped.area, 1e-6)
+
+            min_overlap = 0.12
+
+            if ratio < min_overlap:
                 continue
+
+        if not occupied.is_empty:
+
+            clipped = _largest_poly(
+                clipped.difference(occupied.buffer(1e-5))
+            )
+
+            if not clipped:
+                continue
+
+            if clipped.area < min_area:
+                continue
+
+        clipped = _largest_poly(
+            clipped.buffer(0.002)
+            .buffer(-0.002)
+        )
+
+        if not clipped:
+            continue
+
         cells.append(clipped)
-        occupied = unary_union([occupied, clipped]) if not occupied.is_empty else clipped
+
+        occupied = unary_union([occupied, clipped]) \
+            if not occupied.is_empty else clipped
+
+    return cells
+def _merge_fragmented_cells(cells, cfg):
+    """
+    รวม cell ที่แตะกันหรือห่างกันน้อยมาก
+    แก้ปัญหาห้องแตกเป็นชิ้น
+    """
+
+    if len(cells) <= 1:
+        return cells
+
+    merged = []
+    used = set()
+
+    merge_gap = cfg["snap"] * 2.5
+
+    for i, cell in enumerate(cells):
+
+        if i in used:
+            continue
+
+        current = cell
+
+        changed = True
+
+        while changed:
+            changed = False
+
+            for j, other in enumerate(cells):
+
+                if j == i or j in used:
+                    continue
+
+                try:
+                    should_merge = (
+                        current.touches(other)
+                        or current.distance(other) <= merge_gap
+                    )
+
+                    if should_merge:
+                        current = unary_union([current, other]).buffer(0)
+                        used.add(j)
+                        changed = True
+
+                except Exception:
+                    pass
+
+        merged.append(current)
+
+    return merged
+
+def _room_guided_cells(room_masks, h_walls, v_walls, boundary, cfg):
+
+    snap = cfg["snap"]
+
+    cells = []
+
+    for mask in room_masks:
+
+        poly = mask["polygon"]
+
+        if poly is None or poly.area < 0.0005:
+            continue
+
+        minx, miny, maxx, maxy = poly.bounds
+
+        # ---------- snap LEFT ----------
+        left_candidates = [
+            v["x"]
+            for v in v_walls
+            if v["y1"] <= (miny + maxy) / 2 <= v["y2"]
+            and abs(v["x"] - minx) <= snap * 4
+        ]
+
+        if left_candidates:
+            minx = min(left_candidates, key=lambda x: abs(x - minx))
+
+        # ---------- snap RIGHT ----------
+        right_candidates = [
+            v["x"]
+            for v in v_walls
+            if v["y1"] <= (miny + maxy) / 2 <= v["y2"]
+            and abs(v["x"] - maxx) <= snap * 4
+        ]
+
+        if right_candidates:
+            maxx = min(right_candidates, key=lambda x: abs(x - maxx))
+
+        # ---------- snap TOP ----------
+        top_candidates = [
+            h["y"]
+            for h in h_walls
+            if h["x1"] <= (minx + maxx) / 2 <= h["x2"]
+            and abs(h["y"] - miny) <= snap * 4
+        ]
+
+        if top_candidates:
+            miny = min(top_candidates, key=lambda y: abs(y - miny))
+
+        # ---------- snap BOTTOM ----------
+        bottom_candidates = [
+            h["y"]
+            for h in h_walls
+            if h["x1"] <= (minx + maxx) / 2 <= h["x2"]
+            and abs(h["y"] - maxy) <= snap * 4
+        ]
+
+        if bottom_candidates:
+            maxy = min(bottom_candidates, key=lambda y: abs(y - maxy))
+
+        repaired = Polygon([
+            (minx, miny),
+            (maxx, miny),
+            (maxx, maxy),
+            (minx, maxy),
+        ])
+
+        repaired = repaired.intersection(boundary)
+
+        repaired = _largest_poly(repaired)
+
+        if repaired is None:
+            continue
+
+        if repaired.area < 0.0005:
+            continue
+
+        cells.append(repaired)
+
     return cells
 
+def _cells_valid(cells, room_masks, boundary):
 
-def _cells_valid(cells, room_masks, boundary) -> bool:
+    print("\n========== VALIDATE CELLS ==========")
+    print("raw cells:", len(cells))
+    print("room masks:", len(room_masks))
+
     if not cells:
+        print("❌ FAIL: no cells")
         return False
+
     if not room_masks:
         return len(cells) > 0
+
     count = len(room_masks)
+
     min_area = max(boundary.area * 0.018, 0.0008)
-    large_cells = [c for c in cells if c.area >= min_area]
-    if len(large_cells) < max(1, int(count * 0.45)) or len(large_cells) > max(count * 3 + 4, 14):
+
+    large_cells = [
+        c for c in cells
+        if c.area >= min_area
+    ]
+
+    print("large cells:", len(large_cells))
+    print("expected masks:", count)
+
+    if len(large_cells) < max(1, int(count * 0.45)):
+        print("❌ FAIL: too few cells")
         return False
+
+    if len(large_cells) > max(count * 3 + 4, 14):
+        print("❌ FAIL: too many cells")
+        return False
+
     cell_area = sum(c.area for c in large_cells)
-    mask_area = unary_union([mask["polygon"] for mask in room_masks]).intersection(boundary).area
-    if mask_area <= 0 or not (0.45 <= cell_area / mask_area <= 1.55):
+
+    mask_area = unary_union([
+        mask["polygon"]
+        for mask in room_masks
+    ]).intersection(boundary).area
+
+    if mask_area <= 0:
+        print("❌ FAIL: invalid mask area")
         return False
+
+    ratio = cell_area / mask_area
+
+    print("cell/mask ratio:", ratio)
+
+    if not (0.45 <= ratio <= 1.55):
+        print("❌ FAIL: area mismatch")
+        return False
+
     hits = sum(
         1
         for mask in room_masks
-        if any(c.contains(Point(mask["centroid"])) or c.distance(Point(mask["centroid"])) <= 0.025 for c in large_cells)
+        if any(
+            c.contains(Point(mask["centroid"]))
+            or c.distance(Point(mask["centroid"])) <= 0.025
+            for c in large_cells
+        )
     )
-    return hits >= max(1, int(count * 0.60))
+
+    print("mask hits:", hits)
+
+    ok = hits >= max(1, int(count * 0.60))
+
+    print("VALID:", ok)
+
+    return ok
 
 
 def _assign_rooms(cells, room_masks, boundary, cfg) -> list:
@@ -1014,20 +2158,45 @@ def _deoverlap(rooms, boundary) -> list:
 
 
 def _wall_output(h_walls, v_walls, boundary) -> list:
-    minx, miny, maxx, maxy = boundary.bounds
-    tol, walls, index = 0.024, [], 1
+
+    walls = []
+
+    index = 1
+
     for seg in h_walls:
+
         if seg["x2"] - seg["x1"] <= 1e-5:
             continue
-        wall_type = "exterior" if seg.get("synthetic") or abs(seg["y"] - miny) <= tol or abs(seg["y"] - maxy) <= tol else "interior"
-        walls.append({"id": f"w{index}", "type": wall_type, "x1": float(seg["x1"]), "y1": float(seg["y"]), "x2": float(seg["x2"]), "y2": float(seg["y"]), "thicknessRatio": float(seg.get("t", 0.012))})
+
+        walls.append({
+            "id": f"w{index}",
+            "type": "wall",
+            "x1": float(seg["x1"]),
+            "y1": float(seg["y"]),
+            "x2": float(seg["x2"]),
+            "y2": float(seg["y"]),
+            "thicknessRatio": float(seg.get("t", 0.012))
+        })
+
         index += 1
+
     for seg in v_walls:
+
         if seg["y2"] - seg["y1"] <= 1e-5:
             continue
-        wall_type = "exterior" if seg.get("synthetic") or abs(seg["x"] - minx) <= tol or abs(seg["x"] - maxx) <= tol else "interior"
-        walls.append({"id": f"w{index}", "type": wall_type, "x1": float(seg["x"]), "y1": float(seg["y1"]), "x2": float(seg["x"]), "y2": float(seg["y2"]), "thicknessRatio": float(seg.get("t", 0.012))})
+
+        walls.append({
+            "id": f"w{index}",
+            "type": "wall",
+            "x1": float(seg["x"]),
+            "y1": float(seg["y1"]),
+            "x2": float(seg["x"]),
+            "y2": float(seg["y2"]),
+            "thicknessRatio": float(seg.get("t", 0.012))
+        })
+
         index += 1
+
     return walls
 
 
@@ -1116,7 +2285,7 @@ def draw_preview(image: np.ndarray, geometry: dict) -> np.ndarray:
     for wall in geometry.get("walls", []):
         x1, y1 = px(wall["x1"], wall["y1"])
         x2, y2 = px(wall["x2"], wall["y2"])
-        color = WALL_EXT_CLR if wall.get("type") == "exterior" else WALL_INT_CLR
+        color = WALL_CLR
         thick = max(1, int(wall.get("thicknessRatio", 0.012) * min(w, h) * 0.8))
         cv2.line(out, (x1, y1), (x2, y2), color, thick)
 
@@ -1156,8 +2325,7 @@ def _draw_box(img, bbox, w, h, color, label=""):
 
 def _draw_legend(img):
     for i, (color, text) in enumerate([
-        (WALL_EXT_CLR, "exterior wall"),
-        (WALL_INT_CLR, "interior wall"),
+        (WALL_CLR, "wall"),
         (DOOR_CLR, "door"),
         (WIN_CLR, "window"),
     ]):

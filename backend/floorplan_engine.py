@@ -1,3 +1,4 @@
+
 import re
 from collections import defaultdict
 
@@ -325,50 +326,319 @@ def _is_h_endpoint_anchored(x, y, v_walls, tol):
 def _is_v_endpoint_anchored(x, y, h_walls, tol):
     return any(abs(wall["y"] - y) <= tol and wall["x1"] - tol <= x <= wall["x2"] + tol for wall in h_walls)
 
+def _has_blocking_wall(start, end, axis_value, walls, orientation, tol):
+    """
+    Check if another wall blocks the path between two endpoints.
+    Prevents illegal healing through existing structure.
+    """
+
+    if orientation == "h":
+        x1 = min(start, end)
+        x2 = max(start, end)
+
+        for wall in walls:
+            wx = wall["x"]
+
+            if x1 + tol < wx < x2 - tol:
+                if wall["y1"] - tol <= axis_value <= wall["y2"] + tol:
+                    return True
+
+    else:
+        y1 = min(start, end)
+        y2 = max(start, end)
+
+        for wall in walls:
+            wy = wall["y"]
+
+            if y1 + tol < wy < y2 - tol:
+                if wall["x1"] - tol <= axis_value <= wall["x2"] + tol:
+                    return True
+
+    return False
+
+def _find_best_connection(endpoint, candidates, orientation, cfg):
+    """
+    Choose best wall candidate for healing.
+
+    Score priority:
+    1. smallest gap
+    2. strongest overlap
+    3. thicker wall preferred
+    """
+
+    if not candidates:
+        return None
+
+    scored = []
+
+    for wall, gap, overlap in candidates:
+        thickness = wall.get("t", cfg["thickness"])
+
+        score = (
+            gap * 8.0
+            - overlap * 3.0
+            - thickness
+        )
+
+        scored.append((score, wall))
+
+    scored.sort(key=lambda x: x[0])
+
+    return scored[0][1] if scored else None
 
 def _directional_healing(h_walls, v_walls, cfg):
     snap = cfg["snap"]
     connect = cfg["connect_gap"]
 
     for _ in range(2):
+
+        # -------------------------
+        # Heal Horizontal Walls
+        # -------------------------
         for wall in h_walls:
             y = wall["y"]
-            if not _is_h_endpoint_anchored(wall["x1"], y, v_walls, snap):
-                candidates = [item for item in v_walls if item["x"] < wall["x1"] and item["y1"] - snap <= y <= item["y2"] + snap]
-                if candidates:
-                    hit = max(candidates, key=lambda item: item["x"])
-                    if wall["x1"] - hit["x"] <= connect:
-                        wall["x1"] = hit["x"]
-                        hit["y1"] = min(hit["y1"], y)
-                        hit["y2"] = max(hit["y2"], y)
-            if not _is_h_endpoint_anchored(wall["x2"], y, v_walls, snap):
-                candidates = [item for item in v_walls if item["x"] > wall["x2"] and item["y1"] - snap <= y <= item["y2"] + snap]
-                if candidates:
-                    hit = min(candidates, key=lambda item: item["x"])
-                    if hit["x"] - wall["x2"] <= connect:
-                        wall["x2"] = hit["x"]
-                        hit["y1"] = min(hit["y1"], y)
-                        hit["y2"] = max(hit["y2"], y)
 
+            # LEFT endpoint
+            if not _is_h_endpoint_anchored(
+                wall["x1"], y, v_walls, snap
+            ):
+                candidates = []
+
+                for v_wall in v_walls:
+
+                    if v_wall["x"] >= wall["x1"]:
+                        continue
+
+                    if not (
+                        v_wall["y1"] - snap
+                        <= y
+                        <= v_wall["y2"] + snap
+                    ):
+                        continue
+
+                    gap = wall["x1"] - v_wall["x"]
+
+                    if gap > connect:
+                        continue
+
+                    if _has_blocking_wall(
+                        v_wall["x"],
+                        wall["x1"],
+                        y,
+                        v_walls,
+                        "h",
+                        snap
+                    ):
+                        continue
+
+                    overlap = (
+                        min(v_wall["y2"], y + snap)
+                        - max(v_wall["y1"], y - snap)
+                    )
+
+                    candidates.append(
+                        (v_wall, gap, overlap)
+                    )
+
+                best = _find_best_connection(
+                    wall["x1"],
+                    candidates,
+                    "h",
+                    cfg
+                )
+
+                if best:
+                    wall["x1"] = best["x"]
+
+                    best["y1"] = min(
+                        best["y1"], y
+                    )
+                    best["y2"] = max(
+                        best["y2"], y
+                    )
+
+            # RIGHT endpoint
+            if not _is_h_endpoint_anchored(
+                wall["x2"], y, v_walls, snap
+            ):
+                candidates = []
+
+                for v_wall in v_walls:
+
+                    if v_wall["x"] <= wall["x2"]:
+                        continue
+
+                    if not (
+                        v_wall["y1"] - snap
+                        <= y
+                        <= v_wall["y2"] + snap
+                    ):
+                        continue
+
+                    gap = v_wall["x"] - wall["x2"]
+
+                    if gap > connect:
+                        continue
+
+                    if _has_blocking_wall(
+                        wall["x2"],
+                        v_wall["x"],
+                        y,
+                        v_walls,
+                        "h",
+                        snap
+                    ):
+                        continue
+
+                    overlap = (
+                        min(v_wall["y2"], y + snap)
+                        - max(v_wall["y1"], y - snap)
+                    )
+
+                    candidates.append(
+                        (v_wall, gap, overlap)
+                    )
+
+                best = _find_best_connection(
+                    wall["x2"],
+                    candidates,
+                    "h",
+                    cfg
+                )
+
+                if best:
+                    wall["x2"] = best["x"]
+
+                    best["y1"] = min(
+                        best["y1"], y
+                    )
+                    best["y2"] = max(
+                        best["y2"], y
+                    )
+
+        # -------------------------
+        # Heal Vertical Walls
+        # -------------------------
         for wall in v_walls:
             x = wall["x"]
-            if not _is_v_endpoint_anchored(x, wall["y1"], h_walls, snap):
-                candidates = [item for item in h_walls if item["y"] < wall["y1"] and item["x1"] - snap <= x <= item["x2"] + snap]
-                if candidates:
-                    hit = max(candidates, key=lambda item: item["y"])
-                    if wall["y1"] - hit["y"] <= connect:
-                        wall["y1"] = hit["y"]
-                        hit["x1"] = min(hit["x1"], x)
-                        hit["x2"] = max(hit["x2"], x)
-            if not _is_v_endpoint_anchored(x, wall["y2"], h_walls, snap):
-                candidates = [item for item in h_walls if item["y"] > wall["y2"] and item["x1"] - snap <= x <= item["x2"] + snap]
-                if candidates:
-                    hit = min(candidates, key=lambda item: item["y"])
-                    if hit["y"] - wall["y2"] <= connect:
-                        wall["y2"] = hit["y"]
-                        hit["x1"] = min(hit["x1"], x)
-                        hit["x2"] = max(hit["x2"], x)
 
+            # TOP endpoint
+            if not _is_v_endpoint_anchored(
+                x, wall["y1"], h_walls, snap
+            ):
+                candidates = []
+
+                for h_wall in h_walls:
+
+                    if h_wall["y"] >= wall["y1"]:
+                        continue
+
+                    if not (
+                        h_wall["x1"] - snap
+                        <= x
+                        <= h_wall["x2"] + snap
+                    ):
+                        continue
+
+                    gap = wall["y1"] - h_wall["y"]
+
+                    if gap > connect:
+                        continue
+
+                    if _has_blocking_wall(
+                        h_wall["y"],
+                        wall["y1"],
+                        x,
+                        h_walls,
+                        "v",
+                        snap
+                    ):
+                        continue
+
+                    overlap = (
+                        min(h_wall["x2"], x + snap)
+                        - max(h_wall["x1"], x - snap)
+                    )
+
+                    candidates.append(
+                        (h_wall, gap, overlap)
+                    )
+
+                best = _find_best_connection(
+                    wall["y1"],
+                    candidates,
+                    "v",
+                    cfg
+                )
+
+                if best:
+                    wall["y1"] = best["y"]
+
+                    best["x1"] = min(
+                        best["x1"], x
+                    )
+                    best["x2"] = max(
+                        best["x2"], x
+                    )
+
+            # BOTTOM endpoint
+            if not _is_v_endpoint_anchored(
+                x, wall["y2"], h_walls, snap
+            ):
+                candidates = []
+
+                for h_wall in h_walls:
+
+                    if h_wall["y"] <= wall["y2"]:
+                        continue
+
+                    if not (
+                        h_wall["x1"] - snap
+                        <= x
+                        <= h_wall["x2"] + snap
+                    ):
+                        continue
+
+                    gap = h_wall["y"] - wall["y2"]
+
+                    if gap > connect:
+                        continue
+
+                    if _has_blocking_wall(
+                        wall["y2"],
+                        h_wall["y"],
+                        x,
+                        h_walls,
+                        "v",
+                        snap
+                    ):
+                        continue
+
+                    overlap = (
+                        min(h_wall["x2"], x + snap)
+                        - max(h_wall["x1"], x - snap)
+                    )
+
+                    candidates.append(
+                        (h_wall, gap, overlap)
+                    )
+
+                best = _find_best_connection(
+                    wall["y2"],
+                    candidates,
+                    "v",
+                    cfg
+                )
+
+                if best:
+                    wall["y2"] = best["y"]
+
+                    best["x1"] = min(
+                        best["x1"], x
+                    )
+                    best["x2"] = max(
+                        best["x2"], x
+                    )
 
 def _bridge_openings(h_walls, v_walls, openings, cfg):
     snap = cfg["snap"]
@@ -532,72 +802,70 @@ def _filter_structural_walls(h_walls, v_walls, boundary, cfg):
         return int(top) + int(bottom) + crosses
 
     filtered_h = []
+
     for wall in h_walls:
         length = wall["x2"] - wall["x1"]
-        if wall.get("synthetic") or on_boundary_h(wall) or length >= min_keep or h_connections(wall) >= 2:
-            filtered_h.append(wall)
+
+        if (
+            length > 0.85
+            and (
+                wall["y"] < 0.02
+                or wall["y"] > 0.98
+            )
+        ):
+            continue
+
+        filtered_h.append(wall)
 
     filtered_v = []
+
     for wall in v_walls:
         length = wall["y2"] - wall["y1"]
-        if wall.get("synthetic") or on_boundary_v(wall) or length >= min_keep or v_connections(wall) >= 2:
-            filtered_v.append(wall)
+
+        if (
+            length > 0.85
+            and (
+                wall["x"] < 0.02
+                or wall["x"] > 0.98
+            )
+        ):
+            continue
+
+        filtered_v.append(wall)
 
     return filtered_h, filtered_v
 
 
 def _ensure_boundary_edges(h_walls, v_walls, boundary, cfg):
-    minx, miny, maxx, maxy = boundary.bounds
-    shell_edges = [
-        {"x1": float(minx), "x2": float(maxx), "y": float(miny), "t": cfg["thickness"], "synthetic": True, "source": "virtual_shell"},
-        {"x1": float(minx), "x2": float(maxx), "y": float(maxy), "t": cfg["thickness"], "synthetic": True, "source": "virtual_shell"},
-    ]
-    shell_v = [
-        {"x": float(minx), "y1": float(miny), "y2": float(maxy), "t": cfg["thickness"], "synthetic": True, "source": "virtual_shell"},
-        {"x": float(maxx), "y1": float(miny), "y2": float(maxy), "t": cfg["thickness"], "synthetic": True, "source": "virtual_shell"},
-    ]
+    """
+    Boundary is a HARD CONSTRAINT only.
 
-    def h_cover(y):
-        span = maxx - minx
-        if span <= 0:
-            return 1.0
-        return sum(max(0.0, min(w["x2"], maxx) - max(w["x1"], minx)) for w in h_walls if abs(w["y"] - y) <= cfg["snap"]) / span
+    Do NOT synthesize fake exterior walls from the
+    virtual shell / room union footprint.
 
-    def v_cover(x):
-        span = maxy - miny
-        if span <= 0:
-            return 1.0
-        return sum(max(0.0, min(w["y2"], maxy) - max(w["y1"], miny)) for w in v_walls if abs(w["x"] - x) <= cfg["snap"]) / span
-
-    if h_cover(miny) < 0.75:
-        h_walls.append(shell_edges[0])
-    if h_cover(maxy) < 0.75:
-        h_walls.append(shell_edges[1])
-    if v_cover(minx) < 0.75:
-        v_walls.append(shell_v[0])
-    if v_cover(maxx) < 0.75:
-        v_walls.append(shell_v[1])
+    Keep only detected structural walls.
+    """
     return h_walls, v_walls
 
 
-def _trim_at_junctions(h_walls, v_walls, cfg):
-    snap = cfg["snap"] * 0.5
-    split_h = []
-    for wall in h_walls:
-        cuts = [item["x"] for item in v_walls if wall["x1"] < item["x"] < wall["x2"] and item["y1"] - snap <= wall["y"] <= item["y2"] + snap]
-        xs = sorted([wall["x1"], *cuts, wall["x2"]])
-        for idx in range(len(xs) - 1):
-            if xs[idx + 1] - xs[idx] >= MIN_SEGMENT / 2:
-                split_h.append({**wall, "x1": xs[idx], "x2": xs[idx + 1]})
+# def _trim_at_junctions(h_walls, v_walls, cfg):
+#     snap = cfg["snap"] * 0.5
+#     split_h = []
+#     for wall in h_walls:
+#         cuts = [item["x"] for item in v_walls if wall["x1"] < item["x"] < wall["x2"] and item["y1"] - snap <= wall["y"] <= item["y2"] + snap]
+#         xs = sorted([wall["x1"], *cuts, wall["x2"]])
+#         for idx in range(len(xs) - 1):
+#             if xs[idx + 1] - xs[idx] >= MIN_SEGMENT / 2:
+#                 split_h.append({**wall, "x1": xs[idx], "x2": xs[idx + 1]})
 
-    split_v = []
-    for wall in v_walls:
-        cuts = [item["y"] for item in split_h if wall["y1"] < item["y"] < wall["y2"] and item["x1"] - snap <= wall["x"] <= item["x2"] + snap]
-        ys = sorted([wall["y1"], *cuts, wall["y2"]])
-        for idx in range(len(ys) - 1):
-            if ys[idx + 1] - ys[idx] >= MIN_SEGMENT / 2:
-                split_v.append({**wall, "y1": ys[idx], "y2": ys[idx + 1]})
-    return split_h, split_v
+#     split_v = []
+#     for wall in v_walls:
+#         cuts = [item["y"] for item in split_h if wall["y1"] < item["y"] < wall["y2"] and item["x1"] - snap <= wall["x"] <= item["x2"] + snap]
+#         ys = sorted([wall["y1"], *cuts, wall["y2"]])
+#         for idx in range(len(ys) - 1):
+#             if ys[idx + 1] - ys[idx] >= MIN_SEGMENT / 2:
+#                 split_v.append({**wall, "y1": ys[idx], "y2": ys[idx + 1]})
+#     return split_h, split_v
 
 
 def _polygonize_cells(h_walls, v_walls, boundary, cfg):
@@ -625,9 +893,24 @@ def _polygonize_cells(h_walls, v_walls, boundary, cfg):
     cells = []
     occupied = GeometryCollection()
     for cell in sorted(raw_cells, key=lambda item: -item.area):
-        clipped = _largest_polygon(cell.intersection(boundary))
+        clipped = _largest_polygon(cell)
+
+        if clipped is None:
+            continue
+
+        # Cell must meaningfully belong to the building footprint.
+        intersection_area = clipped.intersection(boundary).area
+        inside_ratio = intersection_area / max(clipped.area, 1e-9)
+
+        # Reject cells mostly outside the house.
+        if inside_ratio < 0.55:
+            continue
+
+        clipped = _largest_polygon(clipped.intersection(boundary))
+
         if clipped is None or clipped.area < min_area:
             continue
+        
         if not occupied.is_empty:
             clipped = _largest_polygon(clipped.difference(occupied.buffer(1e-6)))
             if clipped is None or clipped.area < min_area:
@@ -856,7 +1139,7 @@ def _walls_from_rooms(rooms, boundary, thickness=0.012):
     h_walls, v_walls = _clip_walls_to_boundary(h_walls, v_walls, boundary, cfg)
     h_walls, v_walls = _filter_structural_walls(h_walls, v_walls, boundary, cfg)
     h_walls, v_walls = _ensure_boundary_edges(h_walls, v_walls, boundary, cfg)
-    h_walls, v_walls = _trim_at_junctions(h_walls, v_walls, cfg)
+    # h_walls, v_walls = _trim_at_junctions(h_walls, v_walls, cfg)
     return _wall_segments(h_walls, v_walls, boundary)
 
 
@@ -878,7 +1161,7 @@ def _walls_from_yolo_graph(yolo_h, yolo_v, boundary, cfg):
     if len(h_walls) + len(v_walls) >= 4:
         h_walls, v_walls = _ensure_boundary_edges(h_walls, v_walls, boundary, cfg)
     _anchor_snapping(h_walls, v_walls, cfg)
-    h_walls, v_walls = _trim_at_junctions(h_walls, v_walls, cfg)
+    # h_walls, v_walls = _trim_at_junctions(h_walls, v_walls, cfg)
     return _wall_segments(h_walls, v_walls, boundary)
 
 
@@ -889,8 +1172,29 @@ def _segment_bounds(h_walls, v_walls):
         return None
     return min(xs), max(xs), min(ys), max(ys)
 
+def _debug_draw_boundary(img, boundary):
+    debug = img.copy()
+    h, w = img.shape[:2]
+
+    if boundary is not None:
+        coords = np.array([
+            [int(x * w), int(y * h)]
+            for x, y in boundary.exterior.coords
+        ], dtype=np.int32)
+
+        cv2.polylines(
+            debug,
+            [coords],
+            True,
+            (0, 0, 255),
+            4
+        )
+
+    cv2.imwrite("debug_boundary.png", debug)
+
 
 def detect_floorplan_geometry(img, results, doors=None, windows=None, return_meta=False):
+    
     height, width = img.shape[:2]
     yolo_h, yolo_v = _extract_yolo_wall_segments(results, width, height)
     room_masks = _room_mask_polygons(results, width, height)
@@ -926,17 +1230,43 @@ def detect_floorplan_geometry(img, results, doors=None, windows=None, return_met
 
     cfg = _dynamic_config(h_walls, v_walls)
     boundary = _virtual_outer_shell(room_masks, fallback_bounds=_segment_bounds(h_walls, v_walls), margin=cfg["boundary_pad"])
-
+    print("\n=== BOUNDARY ===")
+    print("bounds:", boundary.bounds)
+    print("area:", boundary.area)
+        
     h_walls, v_walls = _snap_and_merge(h_walls, v_walls, cfg)
     _bridge_openings(h_walls, v_walls, (doors or []) + (windows or []), cfg)
     _directional_healing(h_walls, v_walls, cfg)
     _anchor_snapping(h_walls, v_walls, cfg)
     h_walls, v_walls = _snap_and_merge(h_walls, v_walls, cfg)
     h_walls, v_walls = _clip_walls_to_boundary(h_walls, v_walls, boundary, cfg)
+    _debug_draw_boundary(img, boundary)
     h_walls, v_walls = _filter_structural_walls(h_walls, v_walls, boundary, cfg)
+    print("\n=== FILTERED WALLS ===")
+    print("horizontal:", len(h_walls))
+    print("vertical:", len(v_walls))
+
+    long_h = sorted(
+        [(w["x2"] - w["x1"], w) for w in h_walls],
+        reverse=True
+    )[:10]
+
+    long_v = sorted(
+        [(w["y2"] - w["y1"], w) for w in v_walls],
+        reverse=True
+    )[:10]
+
+    print("\nTop H walls")
+    for length, wall in long_h:
+        print(round(length, 3), wall)
+
+    print("\nTop V walls")
+    for length, wall in long_v:
+        print(round(length, 3), wall)
+    
     h_walls, v_walls = _ensure_boundary_edges(h_walls, v_walls, boundary, cfg)
     _anchor_snapping(h_walls, v_walls, cfg)
-    h_walls, v_walls = _trim_at_junctions(h_walls, v_walls, cfg)
+    # h_walls, v_walls = _trim_at_junctions(h_walls, v_walls, cfg)
 
     cells = _polygonize_cells(h_walls, v_walls, boundary, cfg)
     if _cells_are_usable(cells, room_masks, boundary):

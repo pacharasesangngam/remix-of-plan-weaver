@@ -18,6 +18,7 @@ interface WallReviewProps {
     rooms: Room[];
     unit: DimensionUnit;
     imageUrl: string | null;
+    backgroundImageUrl?: string | null;
     walls?: DetectedWallSegment[];
     doors?: DetectedDoor[];
     windows?: DetectedWindow[];
@@ -74,6 +75,7 @@ const DRAG_HIT = 0.045;
 // ─────────────────────────────────────────────────────────────
 const WallReview = ({
     rooms, unit, imageUrl,
+    backgroundImageUrl,
     walls = [], doors = [], windows = [],
     scale, onScaleChange,
     onRoomUpdate, onWallUpdate, onWallAdd, onWallDelete, onGenerate,
@@ -629,11 +631,11 @@ const WallReview = ({
 
                 {/* LEFT: IMAGE */}
                 <div className="flex-1 relative bg-background flex items-center justify-center overflow-hidden">
-                    {imageUrl ? (
+                    {(backgroundImageUrl ?? imageUrl) ? (
                         <div className="relative w-full h-full flex items-center justify-center p-4">
                             <div className="relative inline-block" style={{ lineHeight: 0 }}>
 
-                                <img ref={imgRef} src={imageUrl} alt="Floor plan" draggable={false}
+                                <img ref={imgRef} src={backgroundImageUrl ?? imageUrl ?? ""} alt="Floor plan" draggable={false}
                                     className="block max-w-full max-h-[calc(100vh-160px)] rounded-lg shadow-2xl select-none transition-opacity duration-300"
                                     style={{ filter: "brightness(0.92) contrast(1.05)", opacity: layers.has("image") ? 1 : 0, pointerEvents: "none" }}
                                     onLoad={() => { if (imgRef.current) setImgSize({ w: imgRef.current.clientWidth, h: imgRef.current.clientHeight }); }}
@@ -1155,4 +1157,3 @@ const WallReview = ({
 };
 
 export default WallReview;
-
