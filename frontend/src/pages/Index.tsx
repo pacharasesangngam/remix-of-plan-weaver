@@ -86,9 +86,6 @@ const Index = () => {
     setDetectError(null);
     try {
       const result = await detectFloorPlan(imageFile, debugMode);
-      if (result.image) {
-        setImageUrl(result.image);
-      }
       if (result.cleanImage) {
         setCleanImageUrl(result.cleanImage);
       }

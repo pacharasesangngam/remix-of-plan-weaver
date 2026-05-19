@@ -1905,94 +1905,45 @@ def _assign_rooms(cells, room_masks, boundary, cfg) -> list:
 
 
 def _rooms_from_masks(room_masks, boundary, h_walls=None, v_walls=None, cfg=None) -> list:
-    rooms, counters = [], defaultdict(int)
+    """Use raw YOLO masks directly — clip to boundary, deoverlap, done.
 
-    shrink = 0.006
-    if cfg and cfg.get("thickness"):
-        shrink = float(np.clip(cfg["thickness"] * 0.4, 0.004, 0.010))
+    No shrinking, no gap-filling. _build_boundary already expands the mask
+    union by ~0.025, so any gap-fill against that boundary would re-inflate
+    room shapes back into the wall zone and recreate apparent overlap.
+    The thin wall-zone gap between adjacent rooms is intentional.
+    """
+    rooms: list = []
+    counters: dict = defaultdict(int)
 
+    # Largest mask wins contested pixels, so sort descending by area.
     clipped = []
     for mask in sorted(room_masks, key=lambda m: -m["polygon"].area):
         poly = _largest_poly(mask["polygon"].intersection(boundary))
-        if poly is None or poly.area < MIN_ROOM_AREA:
-            continue
-        shrunk = _largest_poly(poly.buffer(-shrink, join_style=2))
-        if shrunk is None or shrunk.area < MIN_ROOM_AREA * 0.5:
-            shrunk = poly
-        clipped.append((mask, shrunk, poly))
+        if poly and poly.area >= MIN_ROOM_AREA:
+            clipped.append((mask, poly))
 
     if not clipped:
         return []
 
-    deoverlapped = []
+    # Hard deoverlap: first (largest) room owns every contested pixel.
+    # If < 15 % of a room remains after subtraction it's a near-duplicate — drop.
     occupied = GeometryCollection()
-
-    for mask, shrunk_poly, original_poly in clipped:
+    for mask, poly in clipped:
         if not occupied.is_empty:
             try:
-                remaining = _largest_poly(shrunk_poly.difference(occupied.buffer(1e-6)))
+                diff = _largest_poly(poly.difference(occupied.buffer(1e-6)))
             except Exception:
-                remaining = None
-
-            if remaining is None or remaining.area < original_poly.area * 0.15:
+                diff = None
+            if diff is None or diff.area < poly.area * 0.15:
                 continue
+            poly = diff
 
-            if remaining.area < original_poly.area * 0.80:
-                alt = _largest_poly(original_poly.buffer(-shrink * 0.5, join_style=2))
-                if alt is not None:
-                    alt_remaining = _largest_poly(alt.difference(occupied.buffer(1e-6)))
-                    if alt_remaining and alt_remaining.area >= MIN_ROOM_AREA:
-                        remaining = alt_remaining
-
-            if remaining is None or remaining.area < MIN_ROOM_AREA:
-                continue
-
-            use_poly = remaining
-        else:
-            use_poly = shrunk_poly
-
-        deoverlapped.append((mask, use_poly))
-        occupied = unary_union([occupied, use_poly]) if not occupied.is_empty else use_poly
-
-    # ---- gap filling ----
-    if deoverlapped:
-        working_polys = [p for _, p in deoverlapped]
-        try:
-            covered = unary_union(working_polys)
-            uncovered_geom = boundary.difference(covered.buffer(shrink * 0.5))
-            if uncovered_geom and not uncovered_geom.is_empty:
-                pieces = (
-                    [g for g in uncovered_geom.geoms
-                     if isinstance(g, Polygon) and g.area > MIN_ROOM_AREA * 0.05]
-                    if hasattr(uncovered_geom, "geoms")
-                    else ([uncovered_geom]
-                          if isinstance(uncovered_geom, Polygon)
-                          and uncovered_geom.area > MIN_ROOM_AREA * 0.05
-                          else [])
-                )
-                for piece in pieces:
-                    if piece.area < MIN_ROOM_AREA * 0.03:
-                        continue
-                    nearest_idx = min(
-                        range(len(working_polys)),
-                        key=lambda i: working_polys[i].distance(piece)
-                    )
-                    merged = _largest_poly(
-                        unary_union([working_polys[nearest_idx], piece]).buffer(0)
-                    )
-                    if merged and merged.area >= MIN_ROOM_AREA:
-                        working_polys[nearest_idx] = merged
-                        mask_at_idx = deoverlapped[nearest_idx][0]
-                        deoverlapped[nearest_idx] = (mask_at_idx, merged)
-        except Exception:
-            pass
-
-    for mask, poly in deoverlapped:
         label = mask["label"]
         counters[label] += 1
         room = _make_room(label, counters[label], poly)
         if room:
             rooms.append(room)
+            occupied = unary_union([occupied, poly]) if not occupied.is_empty else poly
 
     return rooms
 
