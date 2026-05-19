@@ -43,6 +43,17 @@ WALL_CLR = (80, 160, 60)
 DOOR_CLR = (0, 140, 255)
 WIN_CLR = (220, 200, 0)
 
+ROOM_HEURISTICS = [
+    # (min_area_ratio, max_area_ratio, near_edge, has_door_nearby, name)
+    # near_edge: True = ชิดขอบ boundary (likely มุมบ้าน)
+    (0.18, 1.00, False, False, "Living Room"),   # ใหญ่สุด ไม่ชิดขอบ
+    (0.08, 0.20, False, True,  "Bedroom"),        # กลาง มีประตู
+    (0.08, 0.20, False, False, "Bedroom"),
+    (0.02, 0.10, True,  True,  "Bathroom"),       # เล็ก ชิดขอบ มีประตู
+    (0.02, 0.10, True,  False, "Storage"),
+    (0.04, 0.15, False, True,  "Kitchen"),        # กลาง มีประตู ไม่ชิดขอบ
+]
+
 
 app = FastAPI(title="Floor Plan Vision API", version="4.0.0")
 app.add_middleware(
@@ -85,7 +96,6 @@ def run_pipeline(file_bytes: bytes, filename: str = "", debug: bool = False) -> 
     debug_images = {}
     if debug:
         debug_images["01_preprocessed"] = encode_preview(clean_image)
-        debug_images["02_dark_threshold"] = encode_preview(cv2.cvtColor(_dark_line_mask(clean_image), cv2.COLOR_GRAY2BGR))
     geometry = build_geometry(clean_image, yolo_result, debug_images=debug_images if debug else None)
     geometry["rooms"] = [r for r in geometry["rooms"] if r.get("areaNorm", 0) >= MIN_ROOM_AREA]
     _estimate_widths(geometry)
@@ -393,7 +403,421 @@ def _build_outer_walls_from_rooms(room_masks, h_walls, v_walls, cfg):
 
     return h_walls + new_h, v_walls + new_v
 
+def _find_uncovered_gaps(ex1, ex2, h_walls, ey, snap):
+    """หาช่วง x ที่ยังไม่มี wall cover บน axis y=ey"""
+    walls_on_axis = sorted(
+        [w for w in h_walls
+         if abs(w["y"] - ey) <= snap * 2
+         and w["x2"] > ex1 and w["x1"] < ex2],
+        key=lambda w: w["x1"]
+    )
+    gaps = []
+    cursor = ex1
+    for w in walls_on_axis:
+        if w["x1"] - cursor > snap:
+            gaps.append((cursor, w["x1"]))
+        cursor = max(cursor, w["x2"])
+    if ex2 - cursor > snap:
+        gaps.append((cursor, ex2))
+    return gaps
 
+
+def _find_uncovered_gaps_v(ey1, ey2, v_walls, ex, snap):
+    """หาช่วง y ที่ยังไม่มี wall cover บน axis x=ex"""
+    walls_on_axis = sorted(
+        [w for w in v_walls
+         if abs(w["x"] - ex) <= snap * 2
+         and w["y2"] > ey1 and w["y1"] < ey2],
+        key=lambda w: w["y1"]
+    )
+    gaps = []
+    cursor = ey1
+    for w in walls_on_axis:
+        if w["y1"] - cursor > snap:
+            gaps.append((cursor, w["y1"]))
+        cursor = max(cursor, w["y2"])
+    if ey2 - cursor > snap:
+        gaps.append((cursor, ey2))
+    return gaps
+
+
+def _close_all_gaps(
+    h_walls: list,
+    v_walls: list,
+    cfg: dict,
+    room_masks=None,
+    doors=None,
+    windows=None,
+    image=None,
+) -> tuple:
+
+    snap = cfg["snap"]
+    max_bridge = cfg.get("connect_gap", 0.028)
+
+    room_union = None
+
+    if room_masks:
+        try:
+            polys = []
+
+            for m in room_masks:
+                poly = m.get("polygon")
+
+                if poly is not None and not poly.is_empty:
+                    polys.append(poly)
+
+            if polys:
+                room_union = unary_union(polys).buffer(snap * 2)
+
+        except Exception:
+            room_union = None
+
+    def _inside_room(x: float, y: float) -> bool:
+        if room_union is None:
+            return True
+
+        try:
+            return room_union.contains(Point(x, y))
+        except Exception:
+            return True
+
+    def _crosses_opening(x1, y1, x2, y2) -> bool:
+
+        objs = []
+
+        if doors:
+            objs.extend(doors)
+
+        if windows:
+            objs.extend(windows)
+
+        mx = (x1 + x2) / 2
+        my = (y1 + y2) / 2
+
+        for obj in objs:
+
+            if not isinstance(obj, dict):
+                continue
+
+            if "bbox" in obj and isinstance(obj["bbox"], dict):
+
+                bbox = obj["bbox"]
+
+                ox1 = bbox.get("x", 0)
+                oy1 = bbox.get("y", 0)
+
+                ox2 = ox1 + bbox.get("w", 0)
+                oy2 = oy1 + bbox.get("h", 0)
+
+            else:
+
+                ox1 = obj.get("x", 0)
+                oy1 = obj.get("y", 0)
+
+                ox2 = ox1 + obj.get("w", 0)
+                oy2 = oy1 + obj.get("h", 0)
+
+            if ox1 <= mx <= ox2 and oy1 <= my <= oy2:
+                return True
+
+        return False
+
+    def _has_dark_connection(
+        x1,
+        y1,
+        x2,
+        y2,
+        samples=12,
+        dark_thresh=90,
+        min_ratio=0.65,
+    ):
+
+        if image is None:
+            return True
+
+        try:
+
+            gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+
+            h, w = gray.shape[:2]
+
+            dark = 0
+
+            for i in range(samples):
+
+                t = i / max(samples - 1, 1)
+
+                x = x1 + (x2 - x1) * t
+                y = y1 + (y2 - y1) * t
+
+                px = int(np.clip(x * w, 0, w - 1))
+                py = int(np.clip(y * h, 0, h - 1))
+
+                if gray[py, px] <= dark_thresh:
+                    dark += 1
+
+            return (dark / samples) >= min_ratio
+
+        except Exception:
+            return True
+
+    new_h = []
+    seen_h = set()
+
+    for i, a in enumerate(h_walls):
+
+        for j, b in enumerate(h_walls):
+
+            if i >= j:
+                continue
+
+            y_delta = abs(a["y"] - b["y"])
+
+            if y_delta > min(
+                a.get("t", 0.012),
+                b.get("t", 0.012),
+            ) * 1.5:
+                continue
+
+            left = None
+            right = None
+
+            if a["x2"] <= b["x1"]:
+                left, right = a, b
+
+            elif b["x2"] <= a["x1"]:
+                left, right = b, a
+
+            if left is None:
+                continue
+
+            gap = right["x1"] - left["x2"]
+
+            if gap <= 0 or gap > max_bridge:
+                continue
+
+            mid_x = (left["x2"] + right["x1"]) / 2
+            mid_y = (left["y"] + right["y"]) / 2
+
+            if not _inside_room(mid_x, mid_y):
+                continue
+
+            if _crosses_opening(
+                left["x2"],
+                mid_y,
+                right["x1"],
+                mid_y,
+            ):
+                continue
+
+            if not _has_dark_connection(
+                left["x2"],
+                mid_y,
+                right["x1"],
+                mid_y,
+            ):
+                continue
+
+            key = (
+                round(left["x2"], 4),
+                round(right["x1"], 4),
+                round(mid_y, 4),
+            )
+
+            if key in seen_h:
+                continue
+
+            seen_h.add(key)
+
+            new_h.append({
+                "x1": float(left["x2"]),
+                "x2": float(right["x1"]),
+                "y": float(mid_y),
+                "t": max(
+                    left.get("t", 0.012),
+                    right.get("t", 0.012),
+                ),
+                "source": "gap_bridge",
+                "synthetic": True,
+            })
+
+    new_v = []
+    seen_v = set()
+
+    for i, a in enumerate(v_walls):
+
+        for j, b in enumerate(v_walls):
+
+            if i >= j:
+                continue
+
+            x_delta = abs(a["x"] - b["x"])
+
+            if x_delta > min(
+                a.get("t", 0.012),
+                b.get("t", 0.012),
+            ) * 1.5:
+                continue
+
+            top = None
+            bot = None
+
+            if a["y2"] <= b["y1"]:
+                top, bot = a, b
+
+            elif b["y2"] <= a["y1"]:
+                top, bot = b, a
+
+            if top is None:
+                continue
+
+            gap = bot["y1"] - top["y2"]
+
+            if gap <= 0 or gap > max_bridge:
+                continue
+
+            mid_x = (top["x"] + bot["x"]) / 2
+            mid_y = (top["y2"] + bot["y1"]) / 2
+
+            if not _inside_room(mid_x, mid_y):
+                continue
+
+            if _crosses_opening(
+                mid_x,
+                top["y2"],
+                mid_x,
+                bot["y1"],
+            ):
+                continue
+
+            if not _has_dark_connection(
+                mid_x,
+                top["y2"],
+                mid_x,
+                bot["y1"],
+            ):
+                continue
+
+            key = (
+                round(mid_x, 4),
+                round(top["y2"], 4),
+                round(bot["y1"], 4),
+            )
+
+            if key in seen_v:
+                continue
+
+            seen_v.add(key)
+
+            new_v.append({
+                "x": float(mid_x),
+                "y1": float(top["y2"]),
+                "y2": float(bot["y1"]),
+                "t": max(
+                    top.get("t", 0.012),
+                    bot.get("t", 0.012),
+                ),
+                "source": "gap_bridge",
+                "synthetic": True,
+            })
+
+    all_h, all_v = _snap_merge(
+        h_walls + new_h,
+        v_walls + new_v,
+        cfg,
+    )
+
+    return all_h, all_v
+
+def _graceful_fallback(
+    boundary: Polygon,
+    h_walls: list,
+    v_walls: list,
+    doors: list,
+    cfg: dict,
+) -> list:
+    """
+    Fallback 3 ระดับ:
+    1. ลอง polygonize บน boundary + walls อีกรอบหลัง dilate walls
+    2. Split boundary เป็นครึ่งๆ ตาม longest axis แล้ว name แต่ละซีก
+    3. Floor เดียว (last resort)
+    """
+    used_names: dict = {}
+
+    # --- Level 1: dilate walls แล้ว polygonize ใหม่ ---
+    try:
+        lines = [_seg_line(s, "h") for s in h_walls if s["x2"] - s["x1"] > 1e-5]
+        lines += [_seg_line(s, "v") for s in v_walls if s["y2"] - s["y1"] > 1e-5]
+        bline = boundary.boundary
+        lines += list(bline.geoms) if hasattr(bline, "geoms") else [bline]
+        # dilate ผนังเล็กน้อยเพื่อปิดช่องรั่ว
+        union = unary_union(lines).buffer(cfg["snap"] * 0.5)
+        raw = list(polygonize(union))
+        cells = [
+            _largest_poly(c.intersection(boundary))
+            for c in raw
+            if c.area >= boundary.area * 0.05
+        ]
+        cells = [c for c in cells if c is not None]
+        if len(cells) >= 2:
+            cells_sorted = sorted(cells, key=lambda c: -c.area)
+            rooms = []
+            for cell in cells_sorted:
+                label = _name_room_heuristic(
+                    cell, boundary, doors, used_names, cells_sorted
+                )
+                room = _make_room(label, 1, cell)
+                if room:
+                    rooms.append(room)
+            if rooms:
+                return _deoverlap(rooms, boundary)
+    except Exception:
+        pass
+
+    # --- Level 2: split ตาม longest axis ---
+    try:
+        minx, miny, maxx, maxy = boundary.bounds
+        is_wide = (maxx - minx) >= (maxy - miny)
+        if is_wide:
+            mid = (minx + maxx) / 2
+            left = _largest_poly(boundary.intersection(
+                Polygon([(minx-0.01, miny-0.01), (mid, miny-0.01),
+                         (mid, maxy+0.01), (minx-0.01, maxy+0.01)])
+            ))
+            right = _largest_poly(boundary.intersection(
+                Polygon([(mid, miny-0.01), (maxx+0.01, miny-0.01),
+                         (maxx+0.01, maxy+0.01), (mid, maxy+0.01)])
+            ))
+            halves = [p for p in [left, right] if p and p.area >= boundary.area * 0.1]
+        else:
+            mid = (miny + maxy) / 2
+            top = _largest_poly(boundary.intersection(
+                Polygon([(minx-0.01, miny-0.01), (maxx+0.01, miny-0.01),
+                         (maxx+0.01, mid), (minx-0.01, mid)])
+            ))
+            bot = _largest_poly(boundary.intersection(
+                Polygon([(minx-0.01, mid), (maxx+0.01, mid),
+                         (maxx+0.01, maxy+0.01), (minx-0.01, maxy+0.01)])
+            ))
+            halves = [p for p in [top, bot] if p and p.area >= boundary.area * 0.1]
+
+        if halves:
+            halves_sorted = sorted(halves, key=lambda p: -p.area)
+            rooms = []
+            for half in halves_sorted:
+                label = _name_room_heuristic(
+                    half, boundary, doors, used_names, halves_sorted
+                )
+                room = _make_room(label, 1, half)
+                if room:
+                    rooms.append(room)
+            return _deoverlap(rooms, boundary)
+    except Exception:
+        pass
+
+    # --- Level 3: Floor เดียว ---
+    room = _make_room("Floor", 1, boundary)
+    return [room] if room else []
 
 def build_geometry(image: np.ndarray, yolo_results, debug_images=None) -> dict:
     h, w = image.shape[:2]
@@ -410,9 +834,10 @@ def build_geometry(image: np.ndarray, yolo_results, debug_images=None) -> dict:
                 pts = np.array([[int(x * w), int(y * h)] for x, y in p.exterior.coords], np.int32)
                 cv2.fillPoly(dbg_raw, [pts], (0, 255, 0))
                 repaired = _largest_poly(
-                    p.buffer(0.006, join_style=2)
-                     .buffer(-0.004, join_style=2)
-                     .simplify(0.003, preserve_topology=True)
+                    p.buffer(0.005, join_style=2)
+                    .buffer(-0.003, join_style=2)
+                    .buffer(0)
+                    .simplify(0.0015, preserve_topology=True)
                 )
                 if repaired is None:
                     continue
@@ -425,49 +850,156 @@ def build_geometry(image: np.ndarray, yolo_results, debug_images=None) -> dict:
     windows = _extract_openings(yolo_results, w, h, "window")
     openings = doors + windows
 
-    yolo_h, yolo_v = _extract_walls_yolo(yolo_results, w, h)
-    cfg = _wall_config(yolo_h, yolo_v)
-    cv_h, cv_v = _extract_walls_cv(image, room_masks, yolo_h, yolo_v, cfg)
+    yolo_h, yolo_v = _extract_walls_yolo(
+        yolo_results,
+        w,
+        h,
+    )
 
-    all_h = yolo_h + cv_h
-    all_v = yolo_v + cv_v
+    cfg = _wall_config(
+        yolo_h,
+        yolo_v,
+    )
 
-    all_h, all_v = _opening_requires_wall(all_h, all_v, openings, cfg)
-    all_h, all_v = _bridge_yolo_gaps(all_h, all_v, cfg)
-    all_h, all_v = _build_outer_walls_from_rooms(room_masks, all_h, all_v, cfg)
+    all_h = list(yolo_h)
+    all_v = list(yolo_v)
 
-    boundary = _build_boundary(room_masks, all_h, all_v)
+    all_h, all_v = _opening_requires_wall(
+        all_h,
+        all_v,
+        openings,
+        cfg,
+    )
 
-    h_walls, v_walls = _process_wall_graph(all_h, all_v, doors + windows, boundary, cfg)
-    h_walls, v_walls = _filter_walls_by_rooms(h_walls, v_walls, room_masks, cfg)
+    all_h, all_v = _build_outer_walls_from_rooms(
+        room_masks,
+        all_h,
+        all_v,
+        cfg,
+    )
+
+    boundary = _build_boundary(
+        room_masks,
+        all_h,
+        all_v,
+    )
+
+    all_h, all_v = _close_all_gaps(
+        all_h,
+        all_v,
+        cfg,
+        room_masks=room_masks,
+        doors=doors,
+        windows=windows,
+        image=image,
+    )
+
+    h_walls, v_walls = _process_wall_graph(
+        all_h,
+        all_v,
+        doors + windows,
+        boundary,
+        cfg,
+    )
+
+    h_walls, v_walls = _filter_walls_by_rooms(
+        h_walls,
+        v_walls,
+        room_masks,
+        cfg,
+    )
 
     if debug_images is not None:
         debug_images["03_yolo_walls"] = encode_preview(
             _debug_wall_image(image, yolo_h, yolo_v, "YOLO walls", (255, 100, 0), 4)
         )
-        debug_images["04_cv_walls"] = encode_preview(
-            _debug_wall_image(image, cv_h, cv_v, "CV dark-line walls", (0, 255, 255), 3)
-        )
         debug_images["05_final_walls"] = encode_preview(
             _debug_wall_image(image, h_walls, v_walls, "Final walls", (0, 255, 0), 4)
         )
 
-    # ── Room extraction ──────────────────────────────────────────────────────
-    # Strategy: ใช้ YOLO mask โดยตรงเป็นหลัก ไม่ผ่าน polygonize/cv_binary
-    # เพราะ pipeline เหล่านั้นพึ่งพากำแพงที่อาจมีขยะ OpenCV ทำให้ห้องทับซ้อน
-    # หรือสลับชื่อกัน
-    # ─────────────────────────────────────────────────────────────────────────
-
-    rooms = _rooms_from_masks(room_masks, boundary, h_walls, v_walls, cfg)
     mode = "mask_direct"
+    rooms = []
 
-    # fallback เฉพาะกรณี mask ไม่มีเลย (YOLO ตรวจไม่เจอห้องเลยสักห้อง)
+    # Primary: polygonize แล้ว assign label จาก YOLO mask
+    cells = _polygonize_cells(
+        h_walls,
+        v_walls,
+        boundary,
+        room_masks,
+    )
+
+    cells = _cleanup_cells(
+        cells,
+        boundary,
+        cfg,
+    )
+
+    cells = _merge_fragmented_cells(
+        cells,
+        cfg,
+    )
+
+    if cells and _cells_valid(cells, room_masks, boundary):
+
+        rooms = _assign_rooms(
+            cells,
+            room_masks,
+            boundary,
+            cfg,
+            doors=doors,
+        )
+
+        rooms = _filter_room_area_outliers(
+            rooms,
+            boundary,
+        )
+
+    mode = "polygonize"
+
+    # Fallback: ใช้ YOLO mask โดยตรง
     if not rooms:
-        fallback = _make_room("Floor", 1, boundary)
-        rooms = [fallback] if fallback else []
-        mode = "boundary_fallback"
+        rooms = _rooms_from_masks(room_masks, boundary, h_walls, v_walls, cfg)
+        mode = "mask_direct"
+
+    # Last resort
+    if not rooms:
+        rooms = _graceful_fallback(boundary, h_walls, v_walls, doors, cfg)
+        mode = "graceful_fallback"
 
     walls = _wall_output(h_walls, v_walls, boundary)
+
+    if debug_images is not None:
+        dbg_rooms = image.copy()
+        h_img, w_img = dbg_rooms.shape[:2]
+        colors = [
+            (220, 80,  80),
+            (80,  180, 80),
+            (80,  120, 220),
+            (200, 140, 40),
+            (160, 60,  200),
+            (40,  180, 180),
+            (220, 100, 160),
+            (100, 200, 80),
+        ]
+        for i, room in enumerate(rooms):
+            pts_src = room.get("wallPolygon") or room.get("polygon") or []
+            if len(pts_src) < 3:
+                continue
+            arr = np.array([[int(p["x"] * w_img), int(p["y"] * h_img)] for p in pts_src], np.int32)
+            color = colors[i % len(colors)]
+            overlay = dbg_rooms.copy()
+            cv2.fillPoly(overlay, [arr], color)
+            cv2.addWeighted(overlay, 0.35, dbg_rooms, 0.65, 0, dbg_rooms)
+            cv2.polylines(dbg_rooms, [arr], True, color, 2)
+            cx = int(room["center"]["x"] * w_img)
+            cy = int(room["center"]["y"] * h_img)
+            label = room.get("name", "Room")
+            (tw, th), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.45, 1)
+            cv2.rectangle(dbg_rooms, (cx - tw // 2 - 3, cy - th - 4), (cx + tw // 2 + 3, cy + 4), (255, 255, 255), -1)
+            cv2.putText(dbg_rooms, label, (cx - tw // 2, cy), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (20, 20, 20), 1, cv2.LINE_AA)
+        cv2.putText(dbg_rooms, f"Final rooms ({mode}): {len(rooms)}", (12, 28),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 200), 2, cv2.LINE_AA)
+        debug_images["06_final_rooms"] = encode_preview(dbg_rooms)
 
     return {
         "rooms": rooms,
@@ -487,11 +1019,6 @@ def build_geometry(image: np.ndarray, yolo_results, debug_images=None) -> dict:
 
 
 def _filter_walls_by_rooms(h_walls, v_walls, room_masks, cfg) -> tuple:
-    """
-    กรอง wall ที่ไม่ได้อยู่ใกล้ room mask ออก
-    แก้ bug เดิม: line.distance(room_area) คืน 0 เสมอเมื่ออยู่ภายใน
-    → ใช้ room_area.distance(line) แทน และ guard source ที่ควรเก็บไว้เสมอ
-    """
     if not room_masks:
         return h_walls, v_walls
 
@@ -530,34 +1057,120 @@ def _clip(v: float) -> float:
 
 
 def _extract_room_masks(results, w, h) -> list[dict]:
+
     out = []
+
     if results.masks is None or results.boxes is None:
         return out
-    count = min(len(results.masks.xy), len(results.boxes.cls))
+
+    count = min(
+        len(results.masks.xy),
+        len(results.boxes.cls),
+    )
+
     for i in range(count):
+
         label = results.names[int(results.boxes.cls[i])]
         conf = float(results.boxes.conf[i])
+
         if "room" not in label.lower() or conf < ROOM_CONF:
             continue
+
         pts = results.masks.xy[i]
+
         if pts is None or len(pts) < 3:
             continue
-        norm = [(_clip(x / w), _clip(y / h)) for x, y in pts]
+
+        mask_img = np.zeros((h, w), dtype=np.uint8)
+
+        cv2.fillPoly(
+            mask_img,
+            [pts.astype(np.int32)],
+            255,
+        )
+
+        close_px = max(
+            5,
+            int(min(w, h) * 0.010),
+        )
+
+        kernel = cv2.getStructuringElement(
+            cv2.MORPH_ELLIPSE,
+            (close_px, close_px),
+        )
+
+        mask_img = cv2.morphologyEx(
+            mask_img,
+            cv2.MORPH_CLOSE,
+            kernel,
+            iterations=1,
+        )
+
+        cnts, _ = cv2.findContours(
+            mask_img,
+            cv2.RETR_EXTERNAL,
+            cv2.CHAIN_APPROX_SIMPLE,
+        )
+
+        if not cnts:
+            continue
+
+        cnt = max(cnts, key=cv2.contourArea)
+
+        norm = [
+            (_clip(x / w), _clip(y / h))
+            for x, y in cnt[:, 0]
+        ]
+
         poly = _clean_poly(Polygon(norm))
 
         if poly is None:
             continue
 
-        # ---- repair jagged / missing chunks ----
-        poly = poly.buffer(0.006, join_style=2)
-        poly = poly.buffer(-0.004, join_style=2)
-        poly = poly.simplify(0.003, preserve_topology=True)
+        gap_fill = 0.006
+
+        poly = poly.buffer(
+            gap_fill,
+            join_style=2,
+        )
+
+        shrink = min(
+            gap_fill * 0.6,
+            0.0025,
+        )
+
+        poly = poly.buffer(
+            -shrink,
+            join_style=2,
+        )
+
+        poly = poly.buffer(0)
+
+        poly = poly.simplify(
+            0.0012,
+            preserve_topology=True,
+        )
 
         poly = _largest_poly(poly)
-        if poly is None or poly.area < 0.0002:
+
+        if poly is None:
             continue
+
+        if poly.area < 0.0002:
+            continue
+
         c = poly.centroid
-        out.append({"label": label, "conf": conf, "polygon": poly, "centroid": (float(c.x), float(c.y))})
+
+        out.append({
+            "label": label,
+            "conf": conf,
+            "polygon": poly,
+            "centroid": (
+                float(c.x),
+                float(c.y),
+            ),
+        })
+
     return out
 
 
@@ -634,172 +1247,11 @@ def _extract_walls_yolo(results, w, h):
             })    
     for seg in h_walls:
         if seg["x1"] > seg["x2"]:
-            seg["x  1"], seg["x2"] = seg["x2"], seg["x1"]
+            seg["x1"], seg["x2"] = seg["x2"], seg["x1"]
     for seg in v_walls:
         if seg["y1"] > seg["y2"]:
             seg["y1"], seg["y2"] = seg["y2"], seg["y1"]
     return h_walls, v_walls
-
-
-def _extract_walls_cv(image, room_masks, yolo_h, yolo_v, cfg):
-    """
-    CV ทำหน้าที่เดียว: bridge micro-gap ในผนัง YOLO เท่านั้น
-    ไม่สร้างผนังใหม่, ไม่จับเส้นที่ไม่ใกล้ YOLO wall
-    """
-    if not yolo_h and not yolo_v:
-        return [], []
-
-    snap = cfg["snap"]
-    max_bridge = cfg.get("connect_gap", 0.035)  # gap สูงสุดที่จะ bridge (normalized)
-
-    # Room union สำหรับกรอง — เส้นต้องอยู่ใกล้ room area
-    room_union = None
-    if room_masks:
-        try:
-            room_union = unary_union([m["polygon"] for m in room_masks])
-            room_union = room_union.buffer(0.04)  # ขยายเล็กน้อยให้ครอบผนัง
-        except Exception:
-            pass
-
-    h, w = image.shape[:2]
-    out_h, out_v = [], []
-
-    # --- HORIZONTAL gaps ---
-    for seg in yolo_h:
-        # หาเส้น YOLO ที่อยู่ axis เดียวกัน แต่มี gap ระหว่างกัน
-        same_axis = [
-            s for s in yolo_h
-            if s is not seg
-            and abs(s["y"] - seg["y"]) <= snap
-            and s["x1"] > seg["x2"]  # อยู่ทางขวา
-        ]
-        for neighbor in same_axis:
-            if seg.get("source") != "yolo":
-                continue
-
-            if neighbor.get("source") != "yolo":
-                continue
-
-            gap = neighbor["x1"] - seg["x2"]
-            if gap <= 0 or gap > max_bridge:
-                continue
-
-            # กรอง: gap ต้องอยู่ใน room area
-            if room_union is not None:
-                mid_x = (seg["x2"] + neighbor["x1"]) / 2
-                mid_y = seg["y"]
-                if not room_union.contains(Point(mid_x, mid_y)):
-                    continue
-
-            # ตรวจว่า gap นี้ไม่ใช่ door/window opening
-            # (จะ bridge ผ่าน _bridge_openings แทน)
-            out_h.append({
-                "x1": seg["x2"],
-                "x2": neighbor["x1"],
-                "y": seg["y"],
-                "t": max(seg.get("t", 0.012), neighbor.get("t", 0.012)),
-                "source": "cv_bridge",
-                "synthetic": True,
-            })
-
-    # --- VERTICAL gaps ---
-    for seg in yolo_v:
-        same_axis = [
-            s for s in yolo_v
-            if s is not seg
-            and abs(s["x"] - seg["x"]) <= snap
-            and s["y1"] > seg["y2"]
-        ]
-        for neighbor in same_axis:
-            if seg.get("source") != "yolo":
-                continue
-
-            if neighbor.get("source") != "yolo":
-                continue
-
-            gap = neighbor["y1"] - seg["y2"]
-            if gap <= 0 or gap > max_bridge:
-                continue
-
-            if room_union is not None:
-                mid_x = seg["x"]
-                mid_y = (seg["y2"] + neighbor["y1"]) / 2
-                if not room_union.contains(Point(mid_x, mid_y)):
-                    continue
-
-            out_v.append({
-                "x": seg["x"],
-                "y1": seg["y2"],
-                "y2": neighbor["y1"],
-                "t": max(seg.get("t", 0.012), neighbor.get("t", 0.012)),
-                "source": "cv_bridge",
-                "synthetic": True,
-            })
-
-    return out_h, out_v
-
-def _cv_room_segments(image: np.ndarray, doors: list, boundary: Polygon, w: int, h: int) -> list:
-    binary = _dark_line_mask(image)
-
-    closed = binary.copy()
-    for opening in doors:
-        bbox = opening.get("bbox", {})
-        x1 = max(0, int(bbox.get("x", 0) * w) - 3)
-        y1 = max(0, int(bbox.get("y", 0) * h) - 3)
-        x2 = min(w, int((bbox.get("x", 0) + bbox.get("w", 0)) * w) + 3)
-        y2 = min(h, int((bbox.get("y", 0) + bbox.get("h", 0)) * h) + 3)
-        cv2.rectangle(closed, (x1, y1), (x2, y2), 255, -1)
-
-    closed = cv2.morphologyEx(closed, cv2.MORPH_CLOSE,
-                              cv2.getStructuringElement(cv2.MORPH_RECT, (5, 5)))
-
-    bx = int(boundary.bounds[0] * w)
-    by = int(boundary.bounds[1] * h)
-    bw = int((boundary.bounds[2] - boundary.bounds[0]) * w)
-    bh = int((boundary.bounds[3] - boundary.bounds[1]) * h)
-    boundary_mask = np.zeros((h, w), dtype=np.uint8)
-    boundary_mask[by:by + bh, bx:bx + bw] = 255
-    room_space = cv2.bitwise_and(255 - closed, boundary_mask)
-
-    # ใช้ MORPH_OPEN เหมือนเก่า — กรอง noise เล็กออก ไม่บิดรูปห้อง
-    open_px = max(8, min(w, h) // 65)
-    room_space = cv2.morphologyEx(
-        room_space, cv2.MORPH_OPEN,
-        cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (open_px, open_px))
-    )
-
-    n, labels, stats, _ = cv2.connectedComponentsWithStats(room_space)
-    if n < 3:
-        return []
-
-    min_px = max(int(w * h * 0.012), 400)
-    cells = []
-    for i in range(1, n):
-        if stats[i, cv2.CC_STAT_AREA] < min_px:
-            continue
-        comp = ((labels == i) * 255).astype(np.uint8)
-        cnts, _ = cv2.findContours(comp, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        if not cnts:
-            continue
-        cnt = max(cnts, key=cv2.contourArea)
-        # ใช้ epsilon เหมือนเก่า — approx หยาบกว่า ได้รูปสะอาดกว่า
-        eps = max(3.0, cv2.arcLength(cnt, True) * 0.018)
-        approx = cv2.approxPolyDP(cnt, eps, True)
-        if len(approx) < 3:
-            continue
-        poly = _clean_poly(Polygon([
-            (_clip(float(p[0][0]) / w), _clip(float(p[0][1]) / h))
-            for p in approx
-        ]))
-        if poly is None or poly.area < 0.001:
-            continue
-        # simplify หยาบกว่าเก่าเล็กน้อย
-        poly = _largest_poly(poly.simplify(0.005, preserve_topology=True))
-        if poly:
-            cells.append(poly)
-
-    return cells
-
 
 def _filter_staircase_walls(h_walls, v_walls):
     """Remove interior rungs from dense parallel line groups (staircase pattern)."""
@@ -1299,72 +1751,6 @@ def _opening_requires_wall(h_walls, v_walls, openings, cfg):
 
     return h_walls, v_walls
 
-def _bridge_yolo_gaps(h_walls, v_walls, cfg):
-
-    snap = cfg["snap"]
-    max_gap = cfg.get("connect_gap", 12)
-
-    # ---------------------------------------------------------
-    # HORIZONTAL
-    # ---------------------------------------------------------
-
-    new_h = []
-
-    for a in h_walls:
-
-        for b in h_walls:
-
-            if a is b:
-                continue
-
-            if abs(a["y"] - b["y"]) > snap:
-                continue
-
-            gap = b["x1"] - a["x2"]
-
-            if gap <= 0 or gap > max_gap:
-                continue
-
-            new_h.append({
-                "x1": a["x2"],
-                "x2": b["x1"],
-                "y": a["y"],
-                "t": max(a["t"], b["t"]),
-                "source": "gap_bridge",
-                "synthetic": True
-            })
-
-    # ---------------------------------------------------------
-    # VERTICAL
-    # ---------------------------------------------------------
-
-    new_v = []
-
-    for a in v_walls:
-
-        for b in v_walls:
-
-            if a is b:
-                continue
-
-            if abs(a["x"] - b["x"]) > snap:
-                continue
-
-            gap = b["y1"] - a["y2"]
-
-            if gap <= 0 or gap > max_gap:
-                continue
-
-            new_v.append({
-                "x": a["x"],
-                "y1": a["y2"],
-                "y2": b["y1"],
-                "t": max(a["t"], b["t"]),
-                "source": "gap_bridge",
-                "synthetic": True
-            })
-
-    return h_walls + new_h, v_walls + new_v
 
 def _infer_walls_from_openings(
     h_walls,
@@ -1770,6 +2156,124 @@ def _polygonize_cells(h_walls, v_walls, boundary, room_masks=None) -> list:
             if not occupied.is_empty else clipped
 
     return cells
+
+def _cleanup_cells(
+    cells,
+    boundary,
+    cfg,
+):
+
+    min_area = max(
+        boundary.area * 0.015,
+        0.0006,
+    )
+
+    cleaned = []
+
+    for cell in cells:
+
+        if cell is None:
+            continue
+
+        if cell.is_empty:
+            continue
+
+        if not cell.is_valid:
+            try:
+                cell = cell.buffer(0)
+            except Exception:
+                continue
+
+        if cell.area < min_area:
+            continue
+
+        try:
+            cell = _largest_poly(cell)
+        except Exception:
+            continue
+
+        if cell is None:
+            continue
+
+        if cell.area < min_area:
+            continue
+
+        compactness = (
+            4 * np.pi * cell.area
+        ) / max(
+            cell.length * cell.length,
+            1e-6,
+        )
+
+        if compactness < 0.015:
+            continue
+
+        cleaned.append(cell)
+
+    final_cells = []
+
+    for cell in sorted(
+        cleaned,
+        key=lambda c: -c.area
+    ):
+
+        duplicated = False
+
+        for prev in final_cells:
+
+            overlap = (
+                cell.intersection(prev).area
+                / max(cell.area, 1e-6)
+            )
+
+            if overlap > 0.90:
+                duplicated = True
+                break
+
+        if not duplicated:
+            final_cells.append(cell)
+
+    return final_cells
+
+def _filter_room_area_outliers(
+    rooms,
+    boundary,
+):
+
+    if not rooms:
+        return rooms
+
+    boundary_area = max(
+        boundary.area,
+        1e-6,
+    )
+
+    filtered = []
+
+    for room in rooms:
+
+        try:
+
+            poly = Polygon([
+                (p["x"], p["y"])
+                for p in room["polygon"]
+            ])
+
+        except Exception:
+            continue
+
+        ratio = poly.area / boundary_area
+
+        if ratio < 0.01:
+            continue
+
+        if ratio > 0.92:
+            continue
+
+        filtered.append(room)
+
+    return filtered
+
 def _merge_fragmented_cells(cells, cfg):
     """
     รวม cell ที่แตะกันหรือห่างกันน้อยมาก
@@ -1864,78 +2368,390 @@ def _cells_valid(cells, room_masks, boundary) -> bool:
     return ok
 
 
-def _assign_rooms(cells, room_masks, boundary, cfg) -> list:
-    used, rooms, counters = set(), [], defaultdict(int)
-    snap = cfg["snap"]
-    min_area = max(boundary.area * 0.018, 0.0008)
-    viable = [(i, c) for i, c in enumerate(cells) if c.area >= min_area]
-    for mask in room_masks:
-        point = Point(mask["centroid"])
-        choices = [(i, cell) for i, cell in viable if i not in used and (cell.contains(point) or cell.distance(point) <= snap)]
-        if not choices:
-            choices = [(i, cell) for i, cell in viable if i not in used]
-        if not choices:
-            continue
-        index, cell = min(choices, key=lambda item: item[1].centroid.distance(point))
-        used.add(index)
-        counters[mask["label"]] += 1
-        room = _make_room(mask["label"], counters[mask["label"]], cell)
-        if room:
-            rooms.append(room)
-    unnamed_min = max(boundary.area * 0.10, 0.005)
-    for i, cell in viable:
-        if i in used:
-            continue
-        if cell.area < unnamed_min:
-            continue
-        counters["Room"] += 1
-        room = _make_room("Room", counters["Room"], cell)
-        if room:
-            rooms.append(room)
-    return _deoverlap(rooms, boundary)
+def _name_room_heuristic(
+    cell: Polygon,
+    boundary: Polygon,
+    doors: list,
+    used_names: dict,
+    all_cells_sorted: list,
+) -> str:
 
+    area_ratio = cell.area / max(boundary.area, 1e-6)
 
-def _rooms_from_masks(room_masks, boundary, h_walls=None, v_walls=None, cfg=None):
+    bx, by, bx2, by2 = boundary.bounds
+    cx, cy, cx2, cy2 = cell.bounds
+
+    edge_tol = max(
+        (bx2 - bx) * 0.08,
+        (by2 - by) * 0.08,
+    )
+
+    near_edge = (
+        cx <= bx + edge_tol
+        or cx2 >= bx2 - edge_tol
+        or cy <= by + edge_tol
+        or cy2 >= by2 - edge_tol
+    )
+
+    has_door = False
+
+    for door in doors or []:
+
+        if not isinstance(door, dict):
+            continue
+
+        if "bbox" in door and isinstance(door["bbox"], dict):
+
+            bbox = door["bbox"]
+
+            dx = bbox.get("x", 0) + bbox.get("w", 0) / 2
+            dy = bbox.get("y", 0) + bbox.get("h", 0) / 2
+
+        else:
+
+            dx = door.get("x", 0) + door.get("w", 0) / 2
+            dy = door.get("y", 0) + door.get("h", 0) / 2
+
+        try:
+            if cell.distance(Point(dx, dy)) <= 0.04:
+                has_door = True
+                break
+        except Exception:
+            continue
+
+    rank = next(
+        (
+            i
+            for i, c in enumerate(all_cells_sorted)
+            if c.equals(cell)
+        ),
+        999,
+    )
+
+    if rank == 0 and area_ratio >= 0.15:
+        name = "Living Room"
+
+    elif area_ratio >= 0.20:
+        name = "Living Room"
+
+    elif area_ratio <= 0.055 and near_edge and has_door:
+        name = "Bathroom"
+
+    elif area_ratio <= 0.05 and near_edge:
+        name = "Storage"
+
+    elif 0.05 <= area_ratio <= 0.12 and has_door and not near_edge:
+        name = "Kitchen"
+
+    elif has_door:
+        name = "Bedroom"
+
+    else:
+        name = "Room"
+
+    used_names[name] = used_names.get(name, 0) + 1
+
+    count = used_names[name]
+
+    if count > 1:
+        return f"{name} {count}"
+
+    return name
+
+def _assign_rooms(
+    cells,
+    room_masks,
+    boundary,
+    cfg,
+    doors=None,
+) -> list:
+
+    doors = doors or []
+
+    used = set()
     rooms = []
     counters = defaultdict(int)
-    
-    # Sort ใหญ่ก่อน — ห้องใหญ่ได้พื้นที่ก่อน
+
+    used_heuristic_names = {}
+
+    snap = cfg["snap"]
+
+    min_area = max(boundary.area * 0.018, 0.0008)
+
+    viable = [
+        (i, c)
+        for i, c in enumerate(cells)
+        if c is not None
+        and not c.is_empty
+        and c.area >= min_area
+    ]
+
+    cells_sorted_by_size = [
+        c
+        for _, c in sorted(
+            viable,
+            key=lambda x: -x[1].area
+        )
+    ]
+
+    # ---------------------------------------------------
+    # Assign from masks
+    # ---------------------------------------------------
+
+    for mask in room_masks:
+
+        point = Point(mask["centroid"])
+
+        choices = [
+            (i, cell)
+            for i, cell in viable
+            if i not in used
+            and (
+                cell.contains(point)
+                or cell.distance(point) <= snap
+            )
+        ]
+
+        if not choices:
+
+            choices = [
+                (i, cell)
+                for i, cell in viable
+                if i not in used
+            ]
+
+        if not choices:
+            continue
+
+        index, cell = min(
+            choices,
+            key=lambda item: (
+                item[1].centroid.distance(point)
+            )
+        )
+
+        used.add(index)
+
+        raw_label = (
+            mask.get("label", "")
+            .strip()
+        )
+
+        # generic label → heuristic naming
+        if raw_label.lower() in (
+            "",
+            "room",
+            "space",
+            "area",
+        ):
+
+            label = _name_room_heuristic(
+                cell,
+                boundary,
+                doors,
+                used_heuristic_names,
+                cells_sorted_by_size,
+            )
+
+        else:
+
+            counters[raw_label] += 1
+
+            if counters[raw_label] == 1:
+                label = raw_label
+            else:
+                label = f"{raw_label} {counters[raw_label]}"
+
+        room = _make_room(
+            label,
+            counters.get(label, 1),
+            cell,
+        )
+
+        if room:
+            rooms.append(room)
+
+    # ---------------------------------------------------
+    # Unassigned large cells
+    # ---------------------------------------------------
+
+    unnamed_min = max(
+        boundary.area * 0.06,
+        0.003,
+    )
+
+    for i, cell in viable:
+
+        if i in used:
+            continue
+
+        if cell.area < unnamed_min:
+            continue
+
+        label = _name_room_heuristic(
+            cell,
+            boundary,
+            doors,
+            used_heuristic_names,
+            cells_sorted_by_size,
+        )
+
+        room = _make_room(
+            label,
+            1,
+            cell,
+        )
+
+        if room:
+            rooms.append(room)
+
+    # ---------------------------------------------------
+    # Geometry overlap dedup
+    # ---------------------------------------------------
+
+    filtered = []
+    seen_polys = []
+
+    for room in rooms:
+
+        try:
+
+            poly = Polygon([
+                (p["x"], p["y"])
+                for p in room["polygon"]
+            ])
+
+        except Exception:
+            filtered.append(room)
+            continue
+
+        duplicated = False
+
+        for prev in seen_polys:
+
+            try:
+
+                overlap = (
+                    poly.intersection(prev).area
+                    / max(poly.area, 1e-6)
+                )
+
+                if overlap > 0.85:
+                    duplicated = True
+                    break
+
+            except Exception:
+                pass
+
+        if duplicated:
+            continue
+
+        seen_polys.append(poly)
+        filtered.append(room)
+
+    return _deoverlap(filtered, boundary)
+
+
+def _rooms_from_masks(
+    room_masks,
+    boundary,
+    h_walls=None,
+    v_walls=None,
+    cfg=None,
+):
+
+    rooms = []
+    counters = defaultdict(int)
+
     clipped = []
-    for mask in sorted(room_masks, key=lambda m: -m["polygon"].area):
-        
-        # ── จุดสำคัญ: ปิดรูรั่วก่อน clip ──
-        # ใช้ค่าเล็กกว่า 0.015 เพื่อไม่ให้ขยายข้ามกำแพง
+
+    for mask in sorted(
+        room_masks,
+        key=lambda m: -m["polygon"].area,
+    ):
+
         poly = mask["polygon"]
-        gap_fill = 0.008  # ≈ ครึ่งนึงของ wall thickness เฉลี่ย
-        poly = poly.buffer(gap_fill, join_style=2).buffer(-gap_fill, join_style=2)
-        poly = poly.simplify(0.003, preserve_topology=True)
-        poly = _largest_poly(poly.intersection(boundary))
-        
-        if poly and poly.area >= MIN_ROOM_AREA:
-            clipped.append((mask, poly))
-    
+
+        gap_fill = 0.005
+
+        poly = poly.buffer(
+            gap_fill,
+            join_style=2,
+        )
+
+        poly = poly.buffer(
+            -gap_fill * 0.7,
+            join_style=2,
+        )
+
+        poly = poly.buffer(0)
+
+        poly = poly.simplify(
+            0.0012,
+            preserve_topology=True,
+        )
+
+        poly = _largest_poly(
+            poly.intersection(boundary)
+        )
+
+        if poly is None:
+            continue
+
+        if poly.area < MIN_ROOM_AREA:
+            continue
+
+        clipped.append((mask, poly))
+
     if not clipped:
         return []
-    
-    # Hard deoverlap — ห้องแรก (ใหญ่สุด) ได้พื้นที่ก่อนเสมอ
+
     occupied = GeometryCollection()
+
     for mask, poly in clipped:
+
         if not occupied.is_empty:
+
             try:
-                diff = _largest_poly(poly.difference(occupied.buffer(1e-6)))
+
+                diff = _largest_poly(
+                    poly.difference(
+                        occupied.buffer(0.0005)
+                    )
+                )
+
             except Exception:
+
                 diff = None
-            if diff is None or diff.area < poly.area * 0.15:
+
+            if diff is None:
                 continue
+
+            if diff.area < poly.area * 0.20:
+                continue
+
             poly = diff
 
         label = mask["label"]
+
         counters[label] += 1
-        room = _make_room(label, counters[label], poly)
+
+        room = _make_room(
+            label,
+            counters[label],
+            poly,
+        )
+
         if room:
+
             rooms.append(room)
-            occupied = unary_union([occupied, poly]) if not occupied.is_empty else poly
-    
+
+            occupied = (
+                unary_union([occupied, poly])
+                if not occupied.is_empty
+                else poly
+            )
+
     return rooms
 
 

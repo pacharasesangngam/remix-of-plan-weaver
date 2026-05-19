@@ -4,18 +4,22 @@ import { ArrowLeft, ZoomIn } from "lucide-react";
 
 const DEBUG_LABELS: Record<string, string> = {
   "01_preprocessed": "1. Preprocessed",
-  "02_dark_threshold": "2. Dark Threshold Mask",
   "03_yolo_walls": "3. YOLO Walls",
   "04_cv_walls": "4. CV Dark-Line Walls",
   "05_final_walls": "5. Final Walls",
+  "06_final_rooms": "6. Final Room Masks",
+  "room_masks": "YOLO Room Masks (raw)",
+  "room_masks_fixed": "YOLO Room Masks (repaired)",
 };
 
 const DEBUG_DESC: Record<string, string> = {
   "01_preprocessed": "ภาพหลัง resize / crop / deskew ก่อนส่งให้ YOLO",
-  "02_dark_threshold": "Mask ขาว-ดำของเส้นมืด — ขาว = ผนัง, ดำ = ห้องว่าง",
   "03_yolo_walls": "ผนังที่ YOLO model ตรวจพบ (สีส้ม)",
   "04_cv_walls": "ผนังที่ตรวจด้วย CV dark-line (สีฟ้า)",
   "05_final_walls": "ผนังสุดท้ายหลัง merge + snap + filter (สีเขียว)",
+  "06_final_rooms": "ห้องสุดท้ายหลัง deoverlap ทั้งหมด — แต่ละสีคือหนึ่งห้อง",
+  "room_masks": "YOLO room masks ดิบก่อน repair",
+  "room_masks_fixed": "YOLO room masks หลัง buffer repair",
 };
 
 interface DebugPanelProps {

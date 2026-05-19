@@ -331,7 +331,18 @@ const WallReview = ({
         setMousePos(null);
     };
 
-    const recalibrate = () => { setCalibPhase("ready"); setCalibLength(""); };
+    const recalibrate = () => {
+        setCalibLength("");
+        if (calibPts.length >= 2) {
+            // Points still exist → just re-enter distance
+            setCalibPhase("ready");
+        } else {
+            // Returning from 3D or points lost → restart from scratch
+            setCalibPts([]);
+            setMousePos(null);
+            setCalibPhase("placing");
+        }
+    };
 
     const inCalibMode = calibPhase === "placing" || calibPhase === "ready";
     const inPointerMode = inCalibMode || wallDrawMode;
@@ -884,7 +895,7 @@ const WallReview = ({
                                         <Crosshair className="w-3.5 h-3.5 shrink-0" />
                                         {calibPts.length === 0 && "คลิกวาง P1"}
                                         {calibPts.length === 1 && "คลิกวาง P2"}
-                                        {calibPts.length >= 2 && "ลาก P1/P2 เพื่อปรับ · ใส่ระยะจริงแล้วกด Apply"}
+                                        {calibPts.length >= 2 && "ใส่ระยะจริงแล้วกด Apply"}
                                     </div>
                                 )}
 
