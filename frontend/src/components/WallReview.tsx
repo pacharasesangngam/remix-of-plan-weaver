@@ -686,8 +686,9 @@ const WallReview = ({
                                     {/* WALLS */}
                                     {layers.has("walls") && walls.map(wall => {
                                         const isSel = selectedWallId === wall.id;
-                                        const sw = wall.thicknessRatio != null ? Math.max(0.004, wall.thicknessRatio) : wall.type === "exterior" ? 0.013 : 0.007;
-                                        const isManual = wall.id.startsWith("manual-wall-");
+                                        const sw = wall.thicknessRatio != null
+                                            ? Math.max(0.002, Math.min(wall.thicknessRatio * 0.35, 0.012))
+                                            : wall.type === "exterior" ? 0.006 : 0.003;                                        const isManual = wall.id.startsWith("manual-wall-");
                                         const col = isSel ? "#fbbf24" : isManual ? "#38bdf8" : wall.type === "exterior" ? "#1a1a1a" : "#2563eb";
                                         const mx = (wall.x1 + wall.x2) / 2, my = (wall.y1 + wall.y2) / 2;
 
