@@ -418,8 +418,8 @@ def build_geometry(image: np.ndarray, yolo_results, debug_images=None) -> dict:
                     continue
                 pts_fixed = np.array([[int(x * w), int(y * h)] for x, y in repaired.exterior.coords], np.int32)
                 cv2.fillPoly(dbg_fixed, [pts_fixed], (255, 0, 0))
-    debug_images["room_masks"] = encode_preview(dbg_raw)
-    debug_images["room_masks_fixed"] = encode_preview(dbg_fixed)
+        debug_images["room_masks"] = encode_preview(dbg_raw)
+        debug_images["room_masks_fixed"] = encode_preview(dbg_fixed)
 
     doors = _extract_openings(yolo_results, w, h, "door")
     windows = _extract_openings(yolo_results, w, h, "window")
@@ -439,8 +439,6 @@ def build_geometry(image: np.ndarray, yolo_results, debug_images=None) -> dict:
     boundary = _build_boundary(room_masks, all_h, all_v)
 
     h_walls, v_walls = _process_wall_graph(all_h, all_v, doors + windows, boundary, cfg)
-
-    # ✅ แก้ไข: filter บน h_walls/v_walls (หลัง process) ไม่ใช่ all_h/all_v
     h_walls, v_walls = _filter_walls_by_rooms(h_walls, v_walls, room_masks, cfg)
 
     if debug_images is not None:
@@ -454,23 +452,16 @@ def build_geometry(image: np.ndarray, yolo_results, debug_images=None) -> dict:
             _debug_wall_image(image, h_walls, v_walls, "Final walls", (0, 255, 0), 4)
         )
 
-    # ✅ แก้ไข: ส่ง h_walls, v_walls, cfg เข้าไปด้วย
+    # ── Room extraction ──────────────────────────────────────────────────────
+    # Strategy: ใช้ YOLO mask โดยตรงเป็นหลัก ไม่ผ่าน polygonize/cv_binary
+    # เพราะ pipeline เหล่านั้นพึ่งพากำแพงที่อาจมีขยะ OpenCV ทำให้ห้องทับซ้อน
+    # หรือสลับชื่อกัน
+    # ─────────────────────────────────────────────────────────────────────────
+
     rooms = _rooms_from_masks(room_masks, boundary, h_walls, v_walls, cfg)
     mode = "mask_direct"
 
-    if len(rooms) <= 1 and len(room_masks) > 1:
-        cells = _polygonize_cells(h_walls, v_walls, boundary, room_masks)
-        cells = _merge_fragmented_cells(cells, cfg)
-        if _cells_valid(cells, room_masks, boundary):
-            rooms = _assign_rooms(cells, room_masks, boundary, cfg)
-            mode = "polygonize"
-
-    if not rooms:
-        cv_cells = _cv_room_segments(image, doors, boundary, w, h)
-        if cv_cells:
-            rooms = _assign_rooms(cv_cells, room_masks, boundary, cfg)
-            mode = "cv_binary"
-
+    # fallback เฉพาะกรณี mask ไม่มีเลย (YOLO ตรวจไม่เจอห้องเลยสักห้อง)
     if not rooms:
         fallback = _make_room("Floor", 1, boundary)
         rooms = [fallback] if fallback else []
@@ -1904,29 +1895,29 @@ def _assign_rooms(cells, room_masks, boundary, cfg) -> list:
     return _deoverlap(rooms, boundary)
 
 
-def _rooms_from_masks(room_masks, boundary, h_walls=None, v_walls=None, cfg=None) -> list:
-    """Use raw YOLO masks directly — clip to boundary, deoverlap, done.
-
-    No shrinking, no gap-filling. _build_boundary already expands the mask
-    union by ~0.025, so any gap-fill against that boundary would re-inflate
-    room shapes back into the wall zone and recreate apparent overlap.
-    The thin wall-zone gap between adjacent rooms is intentional.
-    """
-    rooms: list = []
-    counters: dict = defaultdict(int)
-
-    # Largest mask wins contested pixels, so sort descending by area.
+def _rooms_from_masks(room_masks, boundary, h_walls=None, v_walls=None, cfg=None):
+    rooms = []
+    counters = defaultdict(int)
+    
+    # Sort ใหญ่ก่อน — ห้องใหญ่ได้พื้นที่ก่อน
     clipped = []
     for mask in sorted(room_masks, key=lambda m: -m["polygon"].area):
-        poly = _largest_poly(mask["polygon"].intersection(boundary))
+        
+        # ── จุดสำคัญ: ปิดรูรั่วก่อน clip ──
+        # ใช้ค่าเล็กกว่า 0.015 เพื่อไม่ให้ขยายข้ามกำแพง
+        poly = mask["polygon"]
+        gap_fill = 0.008  # ≈ ครึ่งนึงของ wall thickness เฉลี่ย
+        poly = poly.buffer(gap_fill, join_style=2).buffer(-gap_fill, join_style=2)
+        poly = poly.simplify(0.003, preserve_topology=True)
+        poly = _largest_poly(poly.intersection(boundary))
+        
         if poly and poly.area >= MIN_ROOM_AREA:
             clipped.append((mask, poly))
-
+    
     if not clipped:
         return []
-
-    # Hard deoverlap: first (largest) room owns every contested pixel.
-    # If < 15 % of a room remains after subtraction it's a near-duplicate — drop.
+    
+    # Hard deoverlap — ห้องแรก (ใหญ่สุด) ได้พื้นที่ก่อนเสมอ
     occupied = GeometryCollection()
     for mask, poly in clipped:
         if not occupied.is_empty:
@@ -1944,7 +1935,7 @@ def _rooms_from_masks(room_masks, boundary, h_walls=None, v_walls=None, cfg=None
         if room:
             rooms.append(room)
             occupied = unary_union([occupied, poly]) if not occupied.is_empty else poly
-
+    
     return rooms
 
 
