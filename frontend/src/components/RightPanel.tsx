@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { createContext, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { Canvas, useFrame, useThree } from "@react-three/fiber";
 import { OrbitControls, Grid, PointerLockControls, Text } from "@react-three/drei";
 import * as THREE from "three";
@@ -12,6 +12,8 @@ interface RightPanelProps {
   walls?: DetectedWallSegment[];
   doors?: DetectedDoor[];
   windows?: DetectedWindow[];
+  planWidth?: number;
+  planHeight?: number;
   onRoomUpdate?: (id: string, field: keyof Room, value: number | string) => void;
   onRoomPatch?: (id: string, patch: Partial<Room>) => void;
   onRoomDelete?: (id: string) => void;
@@ -46,6 +48,11 @@ const ROOM_PALETTE = [
 const FLOOR_HOVER_COLOR = "#f5e6c8";
 const PLAN_SIZE = 20;
 
+// Plan scale context — provides real-world metres per normalised unit.
+// Falls back to PLAN_SIZE (20 m) when calibration hasn't been applied.
+const PlanScaleCtx = createContext({ pw: PLAN_SIZE, ph: PLAN_SIZE });
+const usePlanScale = () => useContext(PlanScaleCtx);
+
 // ── Utilities ─────────────────────────────────────────────────────────────────
 
 const safeNum = (v: unknown, fallback = 0): number => {
@@ -53,9 +60,9 @@ const safeNum = (v: unknown, fallback = 0): number => {
   return isFinite(n) ? n : fallback;
 };
 
-const toPlanPoint = (point: NormalizedPoint): [number, number] => [
-  point.x * PLAN_SIZE - PLAN_SIZE / 2,
-  -(point.y * PLAN_SIZE - PLAN_SIZE / 2),
+const toPlanPoint = (point: NormalizedPoint, pw = PLAN_SIZE, ph = PLAN_SIZE): [number, number] => [
+  point.x * pw - pw / 2,
+  -(point.y * ph - ph / 2),
 ];
 
 const bboxToPolygon = (bbox?: BBox | null): NormalizedPoint[] | null => {
@@ -68,9 +75,17 @@ const bboxToPolygon = (bbox?: BBox | null): NormalizedPoint[] | null => {
   ];
 };
 
+// For 3D floor mesh & bounds: outer boundary so adjacent rooms stay flush.
 const getRoomPolygon = (room: Room): NormalizedPoint[] | null => {
   if (room.wallPolygon && room.wallPolygon.length >= 3) return room.wallPolygon;
   if (room.polygon && room.polygon.length >= 3) return room.polygon;
+  return bboxToPolygon(room.bbox);
+};
+
+// For area calculations: inner polygon (wall thickness subtracted by backend).
+const getRoomFloorPolygon = (room: Room): NormalizedPoint[] | null => {
+  if (room.polygon && room.polygon.length >= 3) return room.polygon;
+  if (room.wallPolygon && room.wallPolygon.length >= 3) return room.wallPolygon;
   return bboxToPolygon(room.bbox);
 };
 
@@ -91,7 +106,7 @@ const getRoomBounds = (room: Room): BBox | null => {
   };
 };
 
-const polygonArea = (polygon?: NormalizedPoint[] | null): number => {
+const polygonArea = (polygon?: NormalizedPoint[] | null, pw = PLAN_SIZE, ph = PLAN_SIZE): number => {
   if (!polygon || polygon.length < 3) return 0;
   let area = 0;
   for (let i = 0; i < polygon.length; i += 1) {
@@ -99,7 +114,7 @@ const polygonArea = (polygon?: NormalizedPoint[] | null): number => {
     const p2 = polygon[(i + 1) % polygon.length];
     area += p1.x * p2.y - p2.x * p1.y;
   }
-  return Math.abs(area) * 0.5 * PLAN_SIZE * PLAN_SIZE;
+  return Math.abs(area) * 0.5 * pw * ph;
 };
 
 const polygonCentroid = (polygon?: NormalizedPoint[] | null): NormalizedPoint | null => {
@@ -143,19 +158,19 @@ const getRoomCenter = (room: Room): NormalizedPoint | null =>
 
 // ── Wall thickness helper ─────────────────────────────────────────────────────
 
-const getWallThicknessM = (wall: DetectedWallSegment): number => {
+const getWallThicknessM = (wall: DetectedWallSegment, pw = PLAN_SIZE): number => {
   if (typeof wall.thickness === "number" && wall.thickness > 0) return wall.thickness;
   if (typeof wall.thicknessRatio === "number" && wall.thicknessRatio > 0) {
-    return wall.thicknessRatio * PLAN_SIZE;
+    return wall.thicknessRatio * pw;
   }
   return wall.type === "exterior" ? 0.3 : 0.18;
 };
 
 // ── Opening width helper ──────────────────────────────────────────────────────
 
-const getWidthM = (bboxW?: number, real?: number): number => {
+const getWidthM = (bboxW?: number, real?: number, pw = PLAN_SIZE): number => {
   if (typeof real === "number" && real > 0) return real;
-  if (typeof bboxW === "number" && bboxW > 0) return bboxW * PLAN_SIZE;
+  if (typeof bboxW === "number" && bboxW > 0) return bboxW * pw;
   return 0;
 };
 
@@ -201,10 +216,10 @@ const boundsFromPolygon = (polygon: NormalizedPoint[]): BBox => {
   return { x, y, w: Math.max(...xs) - x, h: Math.max(...ys) - y };
 };
 
-const getWallLengthM = (wall: DetectedWallSegment): number =>
+const getWallLengthM = (wall: DetectedWallSegment, pw = PLAN_SIZE, ph = PLAN_SIZE): number =>
   Math.sqrt(
-    Math.pow((wall.x2 - wall.x1) * PLAN_SIZE, 2) +
-      Math.pow((wall.y2 - wall.y1) * PLAN_SIZE, 2),
+    Math.pow((wall.x2 - wall.x1) * pw, 2) +
+      Math.pow((wall.y2 - wall.y1) * ph, 2),
   );
 
 const snapPointToWalls = (
@@ -352,13 +367,14 @@ interface GapInterval {
 const projectOpeningEdgesOntoWall = (
   bbox: BBox,
   wall: DetectedWallSegment,
-  wallLengthM: number
+  wallLengthM: number,
+  pw = PLAN_SIZE,
+  ph = PLAN_SIZE,
 ): { tStart: number; tEnd: number } | null => {
-  // ── World wall vector ──
-  const wx1 = wall.x1 * PLAN_SIZE;
-  const wz1 = wall.y1 * PLAN_SIZE;
-  const wx2 = wall.x2 * PLAN_SIZE;
-  const wz2 = wall.y2 * PLAN_SIZE;
+  const wx1 = wall.x1 * pw;
+  const wz1 = wall.y1 * ph;
+  const wx2 = wall.x2 * pw;
+  const wz2 = wall.y2 * ph;
 
   const dx = wx2 - wx1;
   const dz = wz2 - wz1;
@@ -368,53 +384,28 @@ const projectOpeningEdgesOntoWall = (
   const ux = dx / wallLen;
   const uz = dz / wallLen;
 
-  // ── BBOX edges (world space) ──
-  const leftX = bbox.x * PLAN_SIZE;
-  const rightX = (bbox.x + bbox.w) * PLAN_SIZE;
-  const topZ = bbox.y * PLAN_SIZE;
-  const bottomZ = (bbox.y + bbox.h) * PLAN_SIZE;
+  const leftX  = bbox.x * pw;
+  const rightX = (bbox.x + bbox.w) * pw;
+  const topZ   = bbox.y * ph;
+  const bottomZ = (bbox.y + bbox.h) * ph;
 
-  // 4 corners
-  const points = [
-    [leftX, topZ],
-    [rightX, topZ],
-    [rightX, bottomZ],
-    [leftX, bottomZ],
-  ];
-
-  // project all points → take min/max
-  let minT = Infinity;
-  let maxT = -Infinity;
-
-  for (const [px, pz] of points) {
-    const vx = px - wx1;
-    const vz = pz - wz1;
-    const t = vx * ux + vz * uz;
+  const corners = [[leftX, topZ], [rightX, topZ], [rightX, bottomZ], [leftX, bottomZ]];
+  let minT = Infinity, maxT = -Infinity;
+  for (const [px, pz] of corners) {
+    const t = (px - wx1) * ux + (pz - wz1) * uz;
     minT = Math.min(minT, t);
     maxT = Math.max(maxT, t);
   }
 
-  // reject if not on wall
-  const thickness = getWallThicknessM(wall);
+  const thickness = getWallThicknessM(wall, pw);
   const tolerance = Math.max(thickness, 0.2);
-
-  // check perpendicular distance using center
-  const cx = (bbox.x + bbox.w / 2) * PLAN_SIZE;
-  const cz = (bbox.y + bbox.h / 2) * PLAN_SIZE;
-
-  const vx = cx - wx1;
-  const vz = cz - wz1;
-
-  const perp = Math.abs(vx * (-uz) + vz * ux);
+  const cx = (bbox.x + bbox.w / 2) * pw;
+  const cz = (bbox.y + bbox.h / 2) * ph;
+  const perp = Math.abs((cx - wx1) * (-uz) + (cz - wz1) * ux);
   if (perp > tolerance) return null;
-
-  // clamp
   if (maxT < 0 || minT > wallLengthM) return null;
 
-  return {
-    tStart: Math.max(0, minT),
-    tEnd: Math.min(wallLengthM, maxT),
-  };
+  return { tStart: Math.max(0, minT), tEnd: Math.min(wallLengthM, maxT) };
 };
 
 /**
@@ -427,12 +418,14 @@ const computeGapIntervals = (
   wallHeightM: number,
   doors: DetectedDoor[],
   windows: DetectedWindow[],
+  pw = PLAN_SIZE,
+  ph = PLAN_SIZE,
 ): GapInterval[] => {
   const raw: GapInterval[] = [];
 
   for (const door of doors) {
     if (!door.bbox) continue;
-    const proj = projectOpeningEdgesOntoWall(door.bbox, wall, wallLengthM);
+    const proj = projectOpeningEdgesOntoWall(door.bbox, wall, wallLengthM, pw, ph);
     if (!proj) continue;
     raw.push({
       ...proj,
@@ -443,7 +436,7 @@ const computeGapIntervals = (
 
   for (const win of windows) {
     if (!win.bbox) continue;
-    const proj = projectOpeningEdgesOntoWall(win.bbox, wall, wallLengthM);
+    const proj = projectOpeningEdgesOntoWall(win.bbox, wall, wallLengthM, pw, ph);
     if (!proj) continue;
     raw.push({
       ...proj,
@@ -544,26 +537,26 @@ interface OpeningTransform {
 function getOpeningTransform(
   bbox: BBox,
   wall: DetectedWallSegment,
+  pw = PLAN_SIZE,
+  ph = PLAN_SIZE,
 ): OpeningTransform | null {
-  // World-space wall endpoints (same coordinate transforms as WallSegmentMesh)
-  const x1 = wall.x1 * PLAN_SIZE - PLAN_SIZE / 2;
-  const z1 = wall.y1 * PLAN_SIZE - PLAN_SIZE / 2;
-  const x2 = wall.x2 * PLAN_SIZE - PLAN_SIZE / 2;
-  const z2 = wall.y2 * PLAN_SIZE - PLAN_SIZE / 2;
+  const x1 = wall.x1 * pw - pw / 2;
+  const z1 = wall.y1 * ph - ph / 2;
+  const x2 = wall.x2 * pw - pw / 2;
+  const z2 = wall.y2 * ph - ph / 2;
 
   const dx = x2 - x1;
   const dz = z2 - z1;
   const wallLengthM = Math.sqrt(
-    Math.pow((wall.x2 - wall.x1) * PLAN_SIZE, 2) +
-    Math.pow((wall.y2 - wall.y1) * PLAN_SIZE, 2),
+    Math.pow((wall.x2 - wall.x1) * pw, 2) +
+    Math.pow((wall.y2 - wall.y1) * ph, 2),
   );
 
   if (wallLengthM < 0.001) return null;
 
   const angle = Math.atan2(dz, dx);
 
-  // Project opening bbox onto wall axis — identical to the gap system
-  const proj = projectOpeningEdgesOntoWall(bbox, wall, wallLengthM);
+  const proj = projectOpeningEdgesOntoWall(bbox, wall, wallLengthM, pw, ph);
   if (!proj) return null;
 
   // Width along the wall axis = exactly the gap width the wall uses
@@ -595,15 +588,17 @@ function getOpeningTransform(
 function findBestWall(
   bbox: BBox,
   walls: DetectedWallSegment[],
+  pw = PLAN_SIZE,
+  ph = PLAN_SIZE,
 ): DetectedWallSegment | null {
   let best: DetectedWallSegment | null = null;
   let bestPerp = Infinity;
 
   for (const wall of walls) {
-    const wx1 = wall.x1 * PLAN_SIZE;
-    const wz1 = wall.y1 * PLAN_SIZE;
-    const wx2 = wall.x2 * PLAN_SIZE;
-    const wz2 = wall.y2 * PLAN_SIZE;
+    const wx1 = wall.x1 * pw;
+    const wz1 = wall.y1 * ph;
+    const wx2 = wall.x2 * pw;
+    const wz2 = wall.y2 * ph;
 
     const ddx = wx2 - wx1;
     const ddz = wz2 - wz1;
@@ -613,8 +608,8 @@ function findBestWall(
     const ux = ddx / wallLen;
     const uz = ddz / wallLen;
 
-    const cx = (bbox.x + bbox.w / 2) * PLAN_SIZE;
-    const cz = (bbox.y + bbox.h / 2) * PLAN_SIZE;
+    const cx = (bbox.x + bbox.w / 2) * pw;
+    const cz = (bbox.y + bbox.h / 2) * ph;
 
     const vx = cx - wx1;
     const vz = cz - wz1;
@@ -622,7 +617,7 @@ function findBestWall(
     const t = vx * ux + vz * uz;
     const perp = Math.abs(vx * (-uz) + vz * ux);
 
-    const thickness = getWallThicknessM(wall);
+    const thickness = getWallThicknessM(wall, pw);
     const tolerance = Math.max(thickness, 0.2);
 
     if (perp > tolerance) continue;
@@ -641,6 +636,7 @@ function findBestWall(
 
 function FirstPersonController({ enabled }: { enabled: boolean }) {
   const { camera } = useThree();
+  const { pw, ph } = usePlanScale();
   const controlsRef = useRef<any>(null);
   const keysRef = useRef({
     KeyW: false,
@@ -656,7 +652,7 @@ function FirstPersonController({ enabled }: { enabled: boolean }) {
       return;
     }
 
-    camera.position.set(0, 1.7, Math.max(PLAN_SIZE * 0.65, 8));
+    camera.position.set(0, 1.7, Math.max(Math.max(pw, ph) * 0.65, 8));
     camera.lookAt(0, 1.7, 0);
 
     const onKeyDown = (event: KeyboardEvent) => {
@@ -770,32 +766,33 @@ function RoomPolygonMesh({
   const baseColorRef = useRef(new THREE.Color(floorColor));
   const hoverColorRef = useRef(new THREE.Color(FLOOR_HOVER_COLOR));
 
+  const { pw, ph } = usePlanScale();
   const polygon = useMemo(() => getRoomPolygon(room), [room]);
 
   const shape = useMemo(() => {
     if (!polygon || polygon.length < 3) return null;
-    const pts = polygon.map(toPlanPoint);
+    const pts = polygon.map((p) => toPlanPoint(p, pw, ph));
     const s = new THREE.Shape();
     s.moveTo(pts[0][0], pts[0][1]);
     for (let i = 1; i < pts.length; i++) s.lineTo(pts[i][0], pts[i][1]);
     s.closePath();
     return s;
-  }, [polygon]);
+  }, [polygon, pw, ph]);
 
   const labelPoint = useMemo(() => {
     const center = getRoomCenter(room);
     if (!center) return [0, 0] as [number, number];
-    return toPlanPoint(center);
-  }, [room]);
+    return toPlanPoint(center, pw, ph);
+  }, [room, pw, ph]);
 
   const sizeHint = useMemo(() => {
     const bounds = getRoomBounds(room);
     if (!bounds) return { w: 0, d: 0 };
     return {
-      w: Math.max(bounds.w * PLAN_SIZE, 0.5),
-      d: Math.max(bounds.h * PLAN_SIZE, 0.5),
+      w: Math.max(bounds.w * pw, 0.5),
+      d: Math.max(bounds.h * ph, 0.5),
     };
-  }, [room]);
+  }, [room, pw, ph]);
 
   useFrame((_, delta) => {
     if (!groupRef.current) return;
@@ -906,19 +903,20 @@ function WallSegmentMesh({
   onPlacementLeave?: () => void;
   onTargetHover?: (selection: Selection) => void;
 }) {
+  const { pw, ph } = usePlanScale();
   const resolvedHeight = safeNum(wall.wallHeight, wallHeight);
-  const thickness = getWallThicknessM(wall);
+  const thickness = getWallThicknessM(wall, pw);
 
-  const x1 = wall.x1 * PLAN_SIZE - PLAN_SIZE / 2;
-  const z1 = wall.y1 * PLAN_SIZE - PLAN_SIZE / 2;
-  const x2 = wall.x2 * PLAN_SIZE - PLAN_SIZE / 2;
-  const z2 = wall.y2 * PLAN_SIZE - PLAN_SIZE / 2;
+  const x1 = wall.x1 * pw - pw / 2;
+  const z1 = wall.y1 * ph - ph / 2;
+  const x2 = wall.x2 * pw - pw / 2;
+  const z2 = wall.y2 * ph - ph / 2;
 
   const dx = x2 - x1;
   const dz = z2 - z1;
   const wallLengthM = Math.sqrt(
-    Math.pow((wall.x2 - wall.x1) * PLAN_SIZE, 2) +
-    Math.pow((wall.y2 - wall.y1) * PLAN_SIZE, 2),
+    Math.pow((wall.x2 - wall.x1) * pw, 2) +
+    Math.pow((wall.y2 - wall.y1) * ph, 2),
   );
 
   if (wallLengthM < 0.001) return null;
@@ -927,7 +925,7 @@ function WallSegmentMesh({
   const cx = (x1 + x2) / 2;
   const cz = (z1 + z2) / 2;
 
-  const gaps = computeGapIntervals(wall, wallLengthM, resolvedHeight, doors, windows);
+  const gaps = computeGapIntervals(wall, wallLengthM, resolvedHeight, doors, windows, pw, ph);
   const solids = computeSolidSegments(wallLengthM, resolvedHeight, gaps);
 
   const ext = thickness / 2;
@@ -948,8 +946,8 @@ function WallSegmentMesh({
         const localY = seg.yStart + segH / 2;
 
         const getEventPoint = (point: THREE.Vector3): NormalizedPoint => ({
-          x: clamp01((point.x + PLAN_SIZE / 2) / PLAN_SIZE),
-          y: clamp01((point.z + PLAN_SIZE / 2) / PLAN_SIZE),
+          x: clamp01((point.x + pw / 2) / pw),
+          y: clamp01((point.z + ph / 2) / ph),
         });
 
         return (
@@ -1006,23 +1004,20 @@ function DoorMesh({
   onSelect: (id: string) => void;
   onHover?: (selection: Selection) => void;
 }) {
+  const { pw, ph } = usePlanScale();
   if (!door.bbox) return null;
 
-  const wall = findBestWall(door.bbox, walls);
+  const wall = findBestWall(door.bbox, walls, pw, ph);
   if (!wall) return null;
 
-  const transform = getOpeningTransform(door.bbox, wall);
+  const transform = getOpeningTransform(door.bbox, wall, pw, ph);
   if (!transform) return null;
 
   const { center, angle, localX, projectedWidth } = transform;
 
-  // Use the projected wall-axis width (same value the gap system cuts) so the
-  // door frame exactly matches the hole. Fall back to bbox-derived width only
-  // when projection returns zero (shouldn't happen in practice).
-  const doorW = projectedWidth > 0.05 ? projectedWidth : Math.max(getWidthM(door.bbox.w, door.widthM), 0.8);
-  // Match gap height: Math.min(wallHeightM * 0.9, 2.2)
+  const doorW = projectedWidth > 0.05 ? projectedWidth : Math.max(getWidthM(door.bbox.w, door.widthM, pw), 0.8);
   const doorH = Math.min(wallHeight * 0.9, 2.2);
-  const wallThickness = getWallThicknessM(wall);
+  const wallThickness = getWallThicknessM(wall, pw);
   const frameDepth = wallThickness + 0.08;
   const slabDepth = Math.min(wallThickness + 0.03, 0.24);
   const faceOffsets = [-(slabDepth / 2 + 0.004), slabDepth / 2 + 0.004];
@@ -1121,18 +1116,18 @@ function WindowMesh({
   onSelect: (id: string) => void;
   onHover?: (selection: Selection) => void;
 }) {
+  const { pw, ph } = usePlanScale();
   if (!win.bbox) return null;
 
-  const wall = findBestWall(win.bbox, walls);
+  const wall = findBestWall(win.bbox, walls, pw, ph);
   if (!wall) return null;
 
-  const transform = getOpeningTransform(win.bbox, wall);
+  const transform = getOpeningTransform(win.bbox, wall, pw, ph);
   if (!transform) return null;
 
   const { center, angle, localX, projectedWidth } = transform;
 
-  // Width: use the projected wall-axis span — identical to gap tEnd-tStart
-  const winW = projectedWidth > 0.05 ? projectedWidth : Math.max(getWidthM(win.bbox.w, win.widthM), 0.6);
+  const winW = projectedWidth > 0.05 ? projectedWidth : Math.max(getWidthM(win.bbox.w, win.widthM, pw), 0.6);
   // Height & sill: must exactly mirror computeGapIntervals window values
   const winH = Math.min(wallHeight * 0.45, 1.2);
   const winD = 0.08;
@@ -1286,6 +1281,7 @@ function DeletePreviewMesh({
   wallHeight: number;
   color?: string;
 }) {
+  const { pw, ph } = usePlanScale();
   if (!target) return null;
 
   if (target.type === "room") {
@@ -1294,7 +1290,7 @@ function DeletePreviewMesh({
     if (!polygon || polygon.length < 3) return null;
 
     const shape = new THREE.Shape();
-    const points = polygon.map(toPlanPoint);
+    const points = polygon.map((p) => toPlanPoint(p, pw, ph));
     shape.moveTo(points[0][0], points[0][1]);
     for (let i = 1; i < points.length; i += 1) shape.lineTo(points[i][0], points[i][1]);
     shape.closePath();
@@ -1313,17 +1309,17 @@ function DeletePreviewMesh({
     const wall = walls.find((item) => item.id === target.id);
     if (!wall) return null;
 
-    const x1 = wall.x1 * PLAN_SIZE - PLAN_SIZE / 2;
-    const z1 = wall.y1 * PLAN_SIZE - PLAN_SIZE / 2;
-    const x2 = wall.x2 * PLAN_SIZE - PLAN_SIZE / 2;
-    const z2 = wall.y2 * PLAN_SIZE - PLAN_SIZE / 2;
+    const x1 = wall.x1 * pw - pw / 2;
+    const z1 = wall.y1 * ph - ph / 2;
+    const x2 = wall.x2 * pw - pw / 2;
+    const z2 = wall.y2 * ph - ph / 2;
     const length = Math.sqrt((x2 - x1) ** 2 + (z2 - z1) ** 2);
     if (length < 0.001) return null;
 
     const angle = Math.atan2(z2 - z1, x2 - x1);
     const cx = (x1 + x2) / 2;
     const cz = (z1 + z2) / 2;
-    const thickness = getWallThicknessM(wall) + 0.08;
+    const thickness = getWallThicknessM(wall, pw) + 0.08;
     const height = safeNum(wall.wallHeight, wallHeight);
 
     return (
@@ -1346,10 +1342,10 @@ function DeletePreviewMesh({
       : windows.find((item) => item.id === target.id);
   if (!opening?.bbox) return null;
 
-  const wall = findBestWall(opening.bbox, walls);
+  const wall = findBestWall(opening.bbox, walls, pw, ph);
   if (!wall) return null;
 
-  const transform = getOpeningTransform(opening.bbox, wall);
+  const transform = getOpeningTransform(opening.bbox, wall, pw, ph);
   if (!transform) return null;
 
   const { center, angle, localX, projectedWidth } = transform;
@@ -1357,7 +1353,7 @@ function DeletePreviewMesh({
   const width = Math.max(projectedWidth, isDoor ? 0.75 : 0.9);
   const height = isDoor ? Math.min(wallHeight * 0.9, 2.2) : Math.min(wallHeight * 0.45, 1.2);
   const bottomY = isDoor ? 0 : wallHeight * 0.35;
-  const depth = getWallThicknessM(wall) + 0.16;
+  const depth = getWallThicknessM(wall, pw) + 0.16;
 
   return (
     <group position={[center[0], 0, center[1]]} rotation={[0, -angle, 0]}>
@@ -1382,6 +1378,7 @@ function WallDraftPreviewMesh({
 }) {
   if (!draft) return null;
 
+  const { pw, ph } = usePlanScale();
   const wall: DetectedWallSegment = {
     id: "wall-draft-preview",
     x1: draft.start.x,
@@ -1393,17 +1390,17 @@ function WallDraftPreviewMesh({
     wallHeight,
   };
 
-  const x1 = wall.x1 * PLAN_SIZE - PLAN_SIZE / 2;
-  const z1 = wall.y1 * PLAN_SIZE - PLAN_SIZE / 2;
-  const x2 = wall.x2 * PLAN_SIZE - PLAN_SIZE / 2;
-  const z2 = wall.y2 * PLAN_SIZE - PLAN_SIZE / 2;
+  const x1 = wall.x1 * pw - pw / 2;
+  const z1 = wall.y1 * ph - ph / 2;
+  const x2 = wall.x2 * pw - pw / 2;
+  const z2 = wall.y2 * ph - ph / 2;
   const length = Math.sqrt((x2 - x1) ** 2 + (z2 - z1) ** 2);
   if (length < 0.05) return null;
 
   const angle = Math.atan2(z2 - z1, x2 - x1);
   const cx = (x1 + x2) / 2;
   const cz = (z1 + z2) / 2;
-  const thickness = getWallThicknessM(wall);
+  const thickness = getWallThicknessM(wall, pw);
 
   return (
     <group position={[cx, 0, cz]} rotation={[0, -angle, 0]}>
@@ -1428,11 +1425,12 @@ function WallBuildPlane({
   onPointMove: (point: NormalizedPoint) => void;
   onPointClick: (point: NormalizedPoint) => void;
 }) {
+  const { pw, ph } = usePlanScale();
   if (!enabled) return null;
 
   const toNormalized = (point: THREE.Vector3): NormalizedPoint => ({
-    x: clamp01((point.x + PLAN_SIZE / 2) / PLAN_SIZE),
-    y: clamp01((point.z + PLAN_SIZE / 2) / PLAN_SIZE),
+    x: clamp01((point.x + pw / 2) / pw),
+    y: clamp01((point.z + ph / 2) / ph),
   });
 
   return (
@@ -1448,7 +1446,7 @@ function WallBuildPlane({
         onPointClick(toNormalized(e.point));
       }}
     >
-      <planeGeometry args={[PLAN_SIZE, PLAN_SIZE]} />
+      <planeGeometry args={[pw, ph]} />
       <meshBasicMaterial transparent opacity={0} depthWrite={false} />
     </mesh>
   );
@@ -1469,23 +1467,24 @@ function WallEditGizmo({
   onHeightDrag: (id: string, deltaM: number) => void;
   onDragStateChange: (dragging: boolean) => void;
 }) {
+  const { pw, ph } = usePlanScale();
   const [dragMode, setDragMode] = useState<"start" | "end" | "move" | "height" | null>(null);
 
-  const x1 = wall.x1 * PLAN_SIZE - PLAN_SIZE / 2;
-  const z1 = wall.y1 * PLAN_SIZE - PLAN_SIZE / 2;
-  const x2 = wall.x2 * PLAN_SIZE - PLAN_SIZE / 2;
-  const z2 = wall.y2 * PLAN_SIZE - PLAN_SIZE / 2;
+  const x1 = wall.x1 * pw - pw / 2;
+  const z1 = wall.y1 * ph - ph / 2;
+  const x2 = wall.x2 * pw - pw / 2;
+  const z2 = wall.y2 * ph - ph / 2;
   const cx = (x1 + x2) / 2;
   const cz = (z1 + z2) / 2;
-  const length = getWallLengthM(wall);
+  const length = getWallLengthM(wall, pw, ph);
   const height = safeNum(wall.wallHeight, wallHeight);
   const angle = Math.atan2(z2 - z1, x2 - x1);
-  const thickness = getWallThicknessM(wall);
+  const thickness = getWallThicknessM(wall, pw);
   const faceOffset = thickness / 2 + 0.18;
 
   const toNormalized = (point: THREE.Vector3): NormalizedPoint => ({
-    x: clamp01((point.x + PLAN_SIZE / 2) / PLAN_SIZE),
-    y: clamp01((point.z + PLAN_SIZE / 2) / PLAN_SIZE),
+    x: clamp01((point.x + pw / 2) / pw),
+    y: clamp01((point.z + ph / 2) / ph),
   });
 
   const beginDrag = (
@@ -1526,7 +1525,7 @@ function WallEditGizmo({
             finishDrag(e);
           }}
         >
-          <planeGeometry args={[PLAN_SIZE, PLAN_SIZE]} />
+          <planeGeometry args={[pw, ph]} />
           <meshBasicMaterial transparent opacity={0} depthWrite={false} />
         </mesh>
       )}
@@ -1609,11 +1608,12 @@ function WallEditGizmo({
 }
 
 function RoomInfoCard({ room }: { room: Room }) {
+  const { pw, ph } = usePlanScale();
   const bounds = getRoomBounds(room);
-  const w = Math.max(safeNum(bounds?.w) * PLAN_SIZE, 0);
-  const d = Math.max(safeNum(bounds?.h) * PLAN_SIZE, 0);
+  const w = Math.max(safeNum(bounds?.w) * pw, 0);
+  const d = Math.max(safeNum(bounds?.h) * ph, 0);
   const h = safeNum(room.wallHeight, 2.8);
-  const area = polygonArea(getRoomPolygon(room));
+  const area = polygonArea(getRoomFloorPolygon(room), pw, ph);
 
   return (
     <div className="absolute bottom-16 left-4 z-20 px-4 py-2.5 rounded-2xl bg-card/90 backdrop-blur-md border border-border shadow-2xl flex items-center gap-4 min-w-[280px] pointer-events-none">
@@ -1914,6 +1914,8 @@ const RightPanel = ({
   walls = [],
   doors = [],
   windows = [],
+  planWidth = 0,
+  planHeight = 0,
   onRoomUpdate,
   onRoomPatch,
   onRoomDelete,
@@ -1926,6 +1928,10 @@ const RightPanel = ({
   onWindowDelete,
   onBack,
 }: RightPanelProps) => {
+  // Resolve real-world plan dimensions. Fall back to PLAN_SIZE when not calibrated.
+  const pw = planWidth  > 0 ? planWidth  : PLAN_SIZE;
+  const ph = planHeight > 0 ? planHeight : PLAN_SIZE;
+  const planScale = useMemo(() => ({ pw, ph }), [pw, ph]);
   const [hoveredId, setHoveredId] = useState<string | null>(null);
   const [walkMode, setWalkMode] = useState(false);
   const [viewPreset, setViewPreset] = useState<ViewPreset>("perspective");
@@ -1947,13 +1953,13 @@ const RightPanel = ({
   const planSpan = rooms.reduce((max, room) => {
     const bounds = getRoomBounds(room);
     if (!bounds) return max;
-    return Math.max(max, Math.max(bounds.w, bounds.h) * PLAN_SIZE);
-  }, PLAN_SIZE);
+    return Math.max(max, bounds.w * pw, bounds.h * ph);
+  }, Math.max(pw, ph));
 
   const camDist = Math.max(planSpan * 1.4, 15);
 
   const totalArea = rooms.reduce(
-    (s, room) => s + polygonArea(getRoomPolygon(room)),
+    (s, room) => s + polygonArea(getRoomFloorPolygon(room), pw, ph),
     0,
   );
 
@@ -2073,7 +2079,6 @@ const RightPanel = ({
 
   const updateSelectedWallLength = (lengthM: number) => {
     if (!selectedWall || !onWallUpdate) return;
-    const nextLength = Math.max(0.1, lengthM) / PLAN_SIZE;
     const dx = selectedWall.x2 - selectedWall.x1;
     const dy = selectedWall.y2 - selectedWall.y1;
     const currentLength = Math.sqrt(dx * dx + dy * dy);
@@ -2081,9 +2086,11 @@ const RightPanel = ({
 
     const ux = dx / currentLength;
     const uy = dy / currentLength;
+    // metric scale factor for this direction given non-uniform pw/ph
+    const metricScale = Math.sqrt((ux * pw) ** 2 + (uy * ph) ** 2);
     const cx = (selectedWall.x1 + selectedWall.x2) / 2;
     const cy = (selectedWall.y1 + selectedWall.y2) / 2;
-    const half = nextLength / 2;
+    const half = Math.max(0.1, lengthM) / (2 * metricScale);
 
     onWallUpdate(selectedWall.id, "x1", clamp01(cx - ux * half));
     onWallUpdate(selectedWall.id, "y1", clamp01(cy - uy * half));
@@ -2169,7 +2176,7 @@ const RightPanel = ({
           </div>
         </div>
       ) : (
-        <>
+        <PlanScaleCtx.Provider value={planScale}>
           <Canvas
             camera={{
               position: [camDist * 0.7, camDist * 0.5, camDist * 0.7],
@@ -2423,7 +2430,7 @@ const RightPanel = ({
           </div>
 
           {hoveredRoom && <RoomInfoCard room={hoveredRoom} />}
-        </>
+        </PlanScaleCtx.Provider>
       )}
     </div>
   );

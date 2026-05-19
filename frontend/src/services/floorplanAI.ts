@@ -40,6 +40,7 @@ interface RawApiResponse {
   doors: RawDoor[];
   windows: RawWindow[];
   image?: string;
+  cleanImage?: string;
   debug?: Record<string, string>;
 }
 
@@ -148,6 +149,7 @@ export async function detectFloorPlan(file: File, debug = false): Promise<Detect
     doors: json.doors ?? [],
     windows: json.windows ?? [],
     image: json.image,
+    cleanImage: json.cleanImage,
     debugImages: json.debug,
   };
 }

@@ -24,6 +24,7 @@ interface WallReviewProps {
     windows?: DetectedWindow[];
     scale: number;
     onScaleChange: (s: number) => void;
+    onPlanSizeChange?: (pw: number, ph: number) => void;
     onRoomUpdate: (id: string, field: keyof Room, value: number | string) => void;
     onWallUpdate?: (id: string, field: keyof DetectedWallSegment, value: number | string) => void;
     onWallAdd?: (wall: DetectedWallSegment) => void;
@@ -77,7 +78,7 @@ const WallReview = ({
     rooms, unit, imageUrl,
     backgroundImageUrl,
     walls = [], doors = [], windows = [],
-    scale, onScaleChange,
+    scale, onScaleChange, onPlanSizeChange,
     onRoomUpdate, onWallUpdate, onWallAdd, onWallDelete, onGenerate,
 }: WallReviewProps) => {
 
@@ -91,8 +92,8 @@ const WallReview = ({
         new Set(["walls", "doors", "windows", "image"])
     );
 
-    // Calibration
-    const [calibPhase,  setCalibPhase]  = useState<CalibPhase>("idle");
+    // Calibration — restore "applied" state when returning from 3D view
+    const [calibPhase,  setCalibPhase]  = useState<CalibPhase>(() => scale > 0 ? "applied" : "idle");
     const [calibPts,    setCalibPts]    = useState<CalibPoint[]>([]);
     const [calibLength, setCalibLength] = useState("");
     const [mousePos,    setMousePos]    = useState<CalibPoint | null>(null);
@@ -304,7 +305,10 @@ const WallReview = ({
         const real = parseFloat(calibLength);
         const px   = pixelDist(calibPts[0], calibPts[1]);
         if (!real || real <= 0 || px === 0) return;
-        onScaleChange(real / px);
+        const s = real / px;
+        onScaleChange(s);
+        // Provide real-world plan dimensions to 3D view.
+        onPlanSizeChange?.(imgSize.w * s, imgSize.h * s);
         setCalibPhase("applied");
     };
 
@@ -316,6 +320,7 @@ const WallReview = ({
         draggingIdx.current = null;
         setIsDragging(false);
         onScaleChange(0);
+        onPlanSizeChange?.(0, 0);
     };
 
     const startCalibration = () => {

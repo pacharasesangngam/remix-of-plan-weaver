@@ -32,6 +32,9 @@ const Index = () => {
   const [unit, setUnit]               = useState<DimensionUnit>("m");
   const [debugMode, setDebugMode]     = useState(false);
   const [debugImages, setDebugImages] = useState<Record<string, string> | null>(null);
+  const [cleanImageUrl, setCleanImageUrl] = useState<string | null>(null);
+  const [planW, setPlanW]             = useState(0);
+  const [planH, setPlanH]             = useState(0);
 
   useEffect(() => {
     setMounted(true);
@@ -51,8 +54,10 @@ const Index = () => {
     setDoors([]);
     setWindows([]);
     setDebugImages(null);
-    // FIX: reset scale ทุกครั้งที่อัปโหลดรูปใหม่
+    setCleanImageUrl(null);
     setScale(0);
+    setPlanW(0);
+    setPlanH(0);
   }, []);
 
   const handleClear = useCallback(() => {
@@ -69,7 +74,10 @@ const Index = () => {
     setDetectError(null);
     setGenerated(false);
     setDebugImages(null);
+    setCleanImageUrl(null);
     setScale(0);
+    setPlanW(0);
+    setPlanH(0);
   }, []);
 
   const handleDetect = useCallback(async () => {
@@ -80,6 +88,9 @@ const Index = () => {
       const result = await detectFloorPlan(imageFile, debugMode);
       if (result.image) {
         setImageUrl(result.image);
+      }
+      if (result.cleanImage) {
+        setCleanImageUrl(result.cleanImage);
       }
       setRooms(result.rooms);
       setWalls(result.walls);
@@ -143,9 +154,9 @@ const Index = () => {
   const handleGenerate = useCallback(() => setGenerated(true), []);
 
   const floorPlanData: FloorPlanData = { meta: { unit, scale }, rooms };
-  const wallReviewBackgroundUrl =
-    debugImages?.original ??
-    (fileType === "application/pdf" ? imageUrl : originalImageUrl ?? imageUrl);
+  // Use the clean preprocessed image (same coordinate space as detected walls/rooms).
+  // Falls back to the annotated preview, then the original uploaded image.
+  const wallReviewBackgroundUrl = cleanImageUrl ?? imageUrl;
 
   return (
     <>
@@ -223,6 +234,7 @@ const Index = () => {
               windows={windows}
               scale={scale}
               onScaleChange={setScale}
+              onPlanSizeChange={(w, h) => { setPlanW(w); setPlanH(h); }}
               onRoomUpdate={handleRoomUpdate}
               onWallUpdate={handleWallUpdate}
               onWallAdd={handleWallAdd}
@@ -244,6 +256,8 @@ const Index = () => {
               walls={walls}
               doors={doors}
               windows={windows}
+              planWidth={planW}
+              planHeight={planH}
               onRoomUpdate={handleRoomUpdate}
               onRoomPatch={handleRoomPatch}
               onRoomDelete={handleRoomDelete}
