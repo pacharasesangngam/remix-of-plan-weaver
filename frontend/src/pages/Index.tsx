@@ -15,6 +15,7 @@ const Index = () => {
   const [showSplash, setShowSplash]   = useState(true);
   const [mode, setMode]               = useState<AppMode>("simple");
   const [imageUrl, setImageUrl]       = useState<string | null>(null);
+  const [originalImageUrl, setOriginalImageUrl] = useState<string | null>(null);
   const [fileType, setFileType]       = useState<string | null>(null);
   const [imageFile, setImageFile]     = useState<File | null>(null);
   const [rooms, setRooms]             = useState<Room[]>([]);
@@ -29,6 +30,11 @@ const Index = () => {
   // scale จะถูก set จริงเมื่อผู้ใช้กด Apply ใน calibration flow เท่านั้น
   const [scale, setScale]             = useState(0);
   const [unit, setUnit]               = useState<DimensionUnit>("m");
+  const [debugMode, setDebugMode]     = useState(false);
+  const [debugImages, setDebugImages] = useState<Record<string, string> | null>(null);
+  const [cleanImageUrl, setCleanImageUrl] = useState<string | null>(null);
+  const [planW, setPlanW]             = useState(0);
+  const [planH, setPlanH]             = useState(0);
 
   useEffect(() => {
     setMounted(true);
@@ -37,6 +43,7 @@ const Index = () => {
   const handleImageUpload = useCallback((file: File) => {
     const url = URL.createObjectURL(file);
     setImageUrl(url);
+    setOriginalImageUrl(url);
     setFileType(file.type || null);
     setImageFile(file);
     setDetected(false);
@@ -46,14 +53,18 @@ const Index = () => {
     setWalls([]);
     setDoors([]);
     setWindows([]);
-    // FIX: reset scale ทุกครั้งที่อัปโหลดรูปใหม่
+    setDebugImages(null);
+    setCleanImageUrl(null);
     setScale(0);
+    setPlanW(0);
+    setPlanH(0);
   }, []);
 
   const handleClear = useCallback(() => {
     setImageUrl(null);
     setFileType(null);
     setImageFile(null);
+    setOriginalImageUrl(null);
     setRooms([]);
     setWalls([]);
     setDoors([]);
@@ -62,7 +73,11 @@ const Index = () => {
     setDetecting(false);
     setDetectError(null);
     setGenerated(false);
+    setDebugImages(null);
+    setCleanImageUrl(null);
     setScale(0);
+    setPlanW(0);
+    setPlanH(0);
   }, []);
 
   const handleDetect = useCallback(async () => {
@@ -70,15 +85,15 @@ const Index = () => {
     setDetecting(true);
     setDetectError(null);
     try {
-      const result = await detectFloorPlan(imageFile);
-      if (result.image) {
-        setImageUrl(result.image);
-        setFileType("image/png");
+      const result = await detectFloorPlan(imageFile, debugMode);
+      if (result.cleanImage) {
+        setCleanImageUrl(result.cleanImage);
       }
       setRooms(result.rooms);
       setWalls(result.walls);
       setDoors(result.doors);
       setWindows(result.windows);
+      setDebugImages(result.debugImages ?? null);
       setDetected(true);
       setGenerated(false);
     } catch (err: unknown) {
@@ -86,7 +101,7 @@ const Index = () => {
     } finally {
       setDetecting(false);
     }
-  }, [imageFile]);
+  }, [imageFile, debugMode]);
 
   const handleRoomUpdate = useCallback((id: string, field: keyof Room, value: number | string) => {
     setRooms(prev =>
@@ -97,13 +112,48 @@ const Index = () => {
     );
   }, []);
 
+  const handleRoomPatch = useCallback((id: string, patch: Partial<Room>) => {
+    setRooms(prev => prev.map(r => r.id === id ? { ...r, ...patch } : r));
+  }, []);
+
+  const handleRoomDelete = useCallback((id: string) => {
+    setRooms(prev => prev.filter(r => r.id !== id));
+  }, []);
+
   const handleWallUpdate = useCallback((id: string, field: keyof DetectedWallSegment, value: number | string) => {
     setWalls(prev => prev.map(w => w.id === id ? { ...w, [field]: value } : w));
+  }, []);
+
+  const handleWallAdd = useCallback((wall: DetectedWallSegment) => {
+    setWalls(prev => [...prev, wall]);
+  }, []);
+
+  const handleWallDelete = useCallback((id: string) => {
+    setWalls(prev => prev.filter(w => w.id !== id));
+  }, []);
+
+  const handleDoorAdd = useCallback((door: DetectedDoor) => {
+    setDoors(prev => [...prev, door]);
+  }, []);
+
+  const handleDoorDelete = useCallback((id: string) => {
+    setDoors(prev => prev.filter(d => d.id !== id));
+  }, []);
+
+  const handleWindowAdd = useCallback((windowItem: DetectedWindow) => {
+    setWindows(prev => [...prev, windowItem]);
+  }, []);
+
+  const handleWindowDelete = useCallback((id: string) => {
+    setWindows(prev => prev.filter(w => w.id !== id));
   }, []);
 
   const handleGenerate = useCallback(() => setGenerated(true), []);
 
   const floorPlanData: FloorPlanData = { meta: { unit, scale }, rooms };
+  // Use the clean preprocessed image (same coordinate space as detected walls/rooms).
+  // Falls back to the annotated preview, then the original uploaded image.
+  const wallReviewBackgroundUrl = cleanImageUrl ?? imageUrl;
 
   return (
     <>
@@ -144,6 +194,8 @@ const Index = () => {
             detected={detected}
             detecting={detecting}
             scale={scale}
+            debugMode={debugMode}
+            debugImages={debugImages}
             onImageUpload={handleImageUpload}
             onClear={handleClear}
             onDetect={handleDetect}
@@ -151,6 +203,7 @@ const Index = () => {
             onScaleChange={setScale}
             onUnitChange={setUnit}
             onGenerate={handleGenerate}
+            onDebugToggle={() => setDebugMode((v) => !v)}
             floorPlanData={floorPlanData}
           />
 
@@ -172,13 +225,17 @@ const Index = () => {
               rooms={rooms}
               unit={unit}
               imageUrl={imageUrl}
+              backgroundImageUrl={wallReviewBackgroundUrl}
               walls={walls}
               doors={doors}
               windows={windows}
               scale={scale}
               onScaleChange={setScale}
+              onPlanSizeChange={(w, h) => { setPlanW(w); setPlanH(h); }}
               onRoomUpdate={handleRoomUpdate}
               onWallUpdate={handleWallUpdate}
+              onWallAdd={handleWallAdd}
+              onWallDelete={handleWallDelete}
               onGenerate={handleGenerate}
             />
           ) : imageUrl && !generated ? (
@@ -193,10 +250,21 @@ const Index = () => {
             <RightPanel
               rooms={rooms}
               generated={generated}
-              scale={scale}
               walls={walls}
               doors={doors}
               windows={windows}
+              planWidth={planW}
+              planHeight={planH}
+              onRoomUpdate={handleRoomUpdate}
+              onRoomPatch={handleRoomPatch}
+              onRoomDelete={handleRoomDelete}
+              onWallUpdate={handleWallUpdate}
+              onWallAdd={handleWallAdd}
+              onWallDelete={handleWallDelete}
+              onDoorAdd={handleDoorAdd}
+              onDoorDelete={handleDoorDelete}
+              onWindowAdd={handleWindowAdd}
+              onWindowDelete={handleWindowDelete}
               onBack={() => setGenerated(false)}
             />
           )}
