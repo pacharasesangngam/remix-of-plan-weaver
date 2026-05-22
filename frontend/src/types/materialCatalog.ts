@@ -25,6 +25,19 @@ export interface ScgDoorOption {
   panelHex: string;
   frameHex: string;
   style: "flat" | "panel" | "groove" | "modern";
+  modelUrl?: string;
+}
+
+export interface ScgWindowOption {
+  code: string;
+  name: string;
+  material: "Vinyl" | "Aluminum" | "UPVC";
+  usage: "sliding" | "casement" | "fixed" | "awning";
+  sizeCm: string;
+  frameHex: string;
+  glassHex: string;
+  style: "sliding" | "casement" | "fixed" | "awning";
+  modelUrl?: string;
 }
 
 export const SCG_PAINT_CATALOG: ScgPaintOption[] = [
@@ -86,6 +99,7 @@ export const SCG_DOOR_CATALOG: ScgDoorOption[] = [
     panelHex: "#d39a5c",
     frameHex: "#7c4a24",
     style: "groove",
+    modelUrl: "/models/doors/scg-door-wpc-riga-80200.glb",
   },
   {
     code: "SCG-DOOR-HDF-6MV1-80200",
@@ -97,6 +111,7 @@ export const SCG_DOOR_CATALOG: ScgDoorOption[] = [
     panelHex: "#f4efe6",
     frameHex: "#b9aa98",
     style: "panel",
+    modelUrl: "/models/doors/scg-door-hdf-6mv1-80200.glb",
   },
   {
     code: "SCG-DOOR-UPVC-WHITE-70200",
@@ -108,6 +123,7 @@ export const SCG_DOOR_CATALOG: ScgDoorOption[] = [
     panelHex: "#ffffff",
     frameHex: "#c7d1d4",
     style: "flat",
+    modelUrl: "/models/doors/scg-door-upvc-white-70200.glb",
   },
   {
     code: "SCG-DOOR-FG-TEAK-90200",
@@ -119,6 +135,7 @@ export const SCG_DOOR_CATALOG: ScgDoorOption[] = [
     panelHex: "#b8743c",
     frameHex: "#5f351d",
     style: "panel",
+    modelUrl: "/models/doors/scg-door-fg-teak-90200.glb",
   },
   {
     code: "SCG-DOOR-MEL-WALNUT-80200",
@@ -130,6 +147,7 @@ export const SCG_DOOR_CATALOG: ScgDoorOption[] = [
     panelHex: "#8b5a3c",
     frameHex: "#4f2f1e",
     style: "modern",
+    modelUrl: "/models/doors/scg-door-mel-walnut-80200.glb",
   },
   {
     code: "SCG-DOOR-PS-BEECH-90200",
@@ -141,6 +159,54 @@ export const SCG_DOOR_CATALOG: ScgDoorOption[] = [
     panelHex: "#e0b37a",
     frameHex: "#8a5f36",
     style: "groove",
+    modelUrl: "/models/doors/scg-door-ps-beech-90200.glb",
+  },
+];
+
+export const SCG_WINDOW_CATALOG: ScgWindowOption[] = [
+  {
+    code: "SCG-WIN-VIN-SLIDE-120110",
+    name: "Windsor Vinyl Sliding Window",
+    material: "Vinyl",
+    usage: "sliding",
+    sizeCm: "120x110",
+    frameHex: "#e8edf0",
+    glassHex: "#7dd3fc",
+    style: "sliding",
+    modelUrl: "/models/windows/scg-win-vin-slide-120110.glb",
+  },
+  {
+    code: "SCG-WIN-VIN-CASE-80110",
+    name: "Windsor Vinyl Casement Window",
+    material: "Vinyl",
+    usage: "casement",
+    sizeCm: "80x110",
+    frameHex: "#f1f5f7",
+    glassHex: "#93c5fd",
+    style: "casement",
+    modelUrl: "/models/windows/scg-win-vin-case-80110.glb",
+  },
+  {
+    code: "SCG-WIN-ALU-BLK-FIX-12060",
+    name: "Black Aluminum Fixed Window",
+    material: "Aluminum",
+    usage: "fixed",
+    sizeCm: "120x60",
+    frameHex: "#1f2933",
+    glassHex: "#67e8f9",
+    style: "fixed",
+    modelUrl: "/models/windows/scg-win-alu-blk-fix-12060.glb",
+  },
+  {
+    code: "SCG-WIN-UPVC-AWN-8060",
+    name: "UPVC Awning Window",
+    material: "UPVC",
+    usage: "awning",
+    sizeCm: "80x60",
+    frameHex: "#f8fafc",
+    glassHex: "#bae6fd",
+    style: "awning",
+    modelUrl: "/models/windows/scg-win-upvc-awn-8060.glb",
   },
 ];
 
@@ -152,3 +218,6 @@ export const findScgTile = (code?: string) =>
 
 export const findScgDoor = (code?: string) =>
   SCG_DOOR_CATALOG.find((item) => item.code === code) ?? SCG_DOOR_CATALOG[0];
+
+export const findScgWindow = (code?: string) =>
+  SCG_WINDOW_CATALOG.find((item) => item.code === code) ?? SCG_WINDOW_CATALOG[0];

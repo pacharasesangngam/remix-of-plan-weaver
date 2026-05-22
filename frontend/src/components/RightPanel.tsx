@@ -1,6 +1,6 @@
-import { createContext, useContext, useEffect, useMemo, useRef, useState } from "react";
+import { Component, Suspense, createContext, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Canvas, useFrame, useThree } from "@react-three/fiber";
-import { OrbitControls, Grid, PointerLockControls, Text } from "@react-three/drei";
+import { OrbitControls, Grid, PointerLockControls, Text, useGLTF } from "@react-three/drei";
 import * as THREE from "three";
 import { Box, ChevronLeft, Info, Move3D, Palette, Plus, Trash2 } from "lucide-react";
 import type { BBox, NormalizedPoint, Room } from "@/types/floorplan";
@@ -9,9 +9,11 @@ import {
   SCG_DOOR_CATALOG,
   SCG_PAINT_CATALOG,
   SCG_TILE_CATALOG,
+  SCG_WINDOW_CATALOG,
   findScgDoor,
   findScgPaint,
   findScgTile,
+  findScgWindow,
   type ScgTileOption,
 } from "@/types/materialCatalog";
 
@@ -33,6 +35,7 @@ interface RightPanelProps {
   onDoorUpdate?: (id: string, field: keyof DetectedDoor, value: number | string) => void;
   onDoorDelete?: (id: string) => void;
   onWindowAdd?: (win: DetectedWindow) => void;
+  onWindowUpdate?: (id: string, field: keyof DetectedWindow, value: number | string) => void;
   onWindowDelete?: (id: string) => void;
   onBack?: () => void;
 }
@@ -428,6 +431,80 @@ const snapRenderedWallJunctions = (
 };
 
 // ── Opening gap types & projection ───────────────────────────────────────────
+
+class DoorModelBoundary extends Component<{ fallback: ReactNode; children: ReactNode }, { failed: boolean }> {
+  state = { failed: false };
+
+  static getDerivedStateFromError() {
+    return { failed: true };
+  }
+
+  render() {
+    return this.state.failed ? this.props.fallback : this.props.children;
+  }
+}
+
+function BlenderDoorModel({
+  modelUrl,
+  doorW,
+  doorH,
+  slabDepth,
+}: {
+  modelUrl: string;
+  doorW: number;
+  doorH: number;
+  slabDepth: number;
+}) {
+  const gltf = useGLTF(modelUrl);
+  const scene = useMemo(() => gltf.scene.clone(true), [gltf.scene]);
+
+  useEffect(() => {
+    const box = new THREE.Box3().setFromObject(scene);
+    const size = new THREE.Vector3();
+    box.getSize(size);
+    const scaleX = size.x > 0 ? doorW / size.x : 1;
+    const scaleY = size.y > 0 ? doorH / size.y : 1;
+    const scaleZ = size.z > 0 ? slabDepth / size.z : 1;
+    scene.scale.set(scaleX, scaleY, scaleZ);
+    const scaledBox = new THREE.Box3().setFromObject(scene);
+    const center = new THREE.Vector3();
+    scaledBox.getCenter(center);
+    scene.position.set(-center.x, -scaledBox.min.y, -center.z);
+  }, [doorH, doorW, scene, slabDepth]);
+
+  return <primitive object={scene} />;
+}
+
+function BlenderWindowModel({
+  modelUrl,
+  winW,
+  winH,
+  winD,
+}: {
+  modelUrl: string;
+  winW: number;
+  winH: number;
+  winD: number;
+}) {
+  const gltf = useGLTF(modelUrl);
+  const scene = useMemo(() => gltf.scene.clone(true), [gltf.scene]);
+
+  useEffect(() => {
+    const box = new THREE.Box3().setFromObject(scene);
+    const size = new THREE.Vector3();
+    box.getSize(size);
+    const scaleX = size.x > 0 ? winW / size.x : 1;
+    const scaleY = size.y > 0 ? winH / size.y : 1;
+    const scaleZ = size.z > 0 ? winD / size.z : 1;
+    scene.scale.set(scaleX, scaleY, scaleZ);
+    const scaledBox = new THREE.Box3().setFromObject(scene);
+    const center = new THREE.Vector3();
+    scaledBox.getCenter(center);
+    scene.position.set(-center.x, -scaledBox.min.y, -center.z);
+  }, [scene, winD, winH, winW]);
+
+  return <primitive object={scene} />;
+}
 
 /**
  * A gap interval in the wall's local axis space.
@@ -1137,6 +1214,19 @@ function DoorMesh({
       }}
     >
       <group position={[localX, 0, 0]}>
+        {door.useBlenderModel === "true" && doorOption.modelUrl ? (
+          <DoorModelBoundary fallback={null}>
+            <Suspense fallback={null}>
+              <BlenderDoorModel
+                modelUrl={doorOption.modelUrl}
+                doorW={slabW}
+                doorH={slabH}
+                slabDepth={slabDepth}
+              />
+            </Suspense>
+          </DoorModelBoundary>
+        ) : (
+          <>
         <mesh position={[-doorW / 2 - 0.04, doorH / 2, 0]}>
           <boxGeometry args={[0.08, doorH + 0.08, frameDepth]} />
           <meshStandardMaterial color={frameColor} roughness={0.52} metalness={0.04} />
@@ -1192,6 +1282,8 @@ function DoorMesh({
         >
           {`D ${doorW.toFixed(1)}m`}
         </Text>
+          </>
+        )}
       </group>
     </group>
   );
@@ -1230,6 +1322,38 @@ function WindowMesh({
   const winH = Math.min(wallHeight * 0.45, 1.2);
   const winD = 0.08;
   const sillY = wallHeight * 0.35;
+  const windowOption = findScgWindow(win.scgWindowCode);
+  const frameColor = win.frameColor ?? windowOption.frameHex;
+  const glassColor = win.glassColor ?? windowOption.glassHex;
+
+  if (win.useBlenderModel === "true" && windowOption.modelUrl) {
+    return (
+      <group
+        position={[center[0], 0, center[1]]}
+        rotation={[0, -angle, 0]}
+        onPointerEnter={(e) => {
+          e.stopPropagation();
+          onHover?.({ type: "window", id: win.id });
+        }}
+        onPointerLeave={(e) => {
+          e.stopPropagation();
+          onHover?.(null);
+        }}
+        onClick={(e) => {
+          e.stopPropagation();
+          onSelect(win.id);
+        }}
+      >
+        <group position={[localX, sillY, 0]}>
+          <DoorModelBoundary fallback={null}>
+            <Suspense fallback={null}>
+              <BlenderWindowModel modelUrl={windowOption.modelUrl} winW={winW} winH={winH} winD={winD} />
+            </Suspense>
+          </DoorModelBoundary>
+        </group>
+      </group>
+    );
+  }
 
   // All child Y positions are relative to sillY (bottom of gap).
   // BoxGeometry centres are at Y=half-height so we add winH/2 to side frames,
@@ -1255,28 +1379,28 @@ function WindowMesh({
         {/* Left frame — bottom-anchored: centre at winH/2 */}
         <mesh position={[-winW / 2, winH / 2, 0]}>
           <boxGeometry args={[0.05, winH, winD]} />
-          <meshStandardMaterial color="#94a3b8" />
+          <meshStandardMaterial color={frameColor} />
         </mesh>
         {/* Right frame — bottom-anchored */}
         <mesh position={[winW / 2, winH / 2, 0]}>
           <boxGeometry args={[0.05, winH, winD]} />
-          <meshStandardMaterial color="#94a3b8" />
+          <meshStandardMaterial color={frameColor} />
         </mesh>
         {/* Top frame — sits at gap top edge (winH) */}
         <mesh position={[0, winH, 0]}>
           <boxGeometry args={[winW, 0.05, winD]} />
-          <meshStandardMaterial color="#94a3b8" />
+          <meshStandardMaterial color={frameColor} />
         </mesh>
         {/* Bottom frame — sits at gap bottom edge (sill, Y=0 relative) */}
         <mesh position={[0, 0, 0]}>
           <boxGeometry args={[winW, 0.05, winD]} />
-          <meshStandardMaterial color="#94a3b8" />
+          <meshStandardMaterial color={frameColor} />
         </mesh>
         {/* Glass — centre at winH/2 */}
         <mesh position={[0, winH / 2, 0]}>
           <planeGeometry args={[winW - 0.1, winH - 0.1]} />
           <meshStandardMaterial
-            color="#7dd3fc"
+            color={glassColor}
             transparent
             opacity={0.35}
             side={THREE.DoubleSide}
@@ -2024,6 +2148,7 @@ const RightPanel = ({
   onDoorUpdate,
   onDoorDelete,
   onWindowAdd,
+  onWindowUpdate,
   onWindowDelete,
   onBack,
 }: RightPanelProps) => {
@@ -2080,6 +2205,7 @@ const RightPanel = ({
   const selectedRoomTile = findScgTile(selectedRoom?.tileCode);
   const selectedWallPaint = findScgPaint(selectedWall?.scgPaintCode);
   const selectedDoorOption = findScgDoor(selectedDoor?.scgDoorCode);
+  const selectedWindowOption = findScgWindow(selectedWindow?.scgWindowCode);
 
   const applyPaintToWall = (wallId: string, code: string) => {
     const paint = findScgPaint(code);
@@ -2131,6 +2257,22 @@ const RightPanel = ({
     Object.entries(patch).forEach(([field, value]) => {
       if (value !== undefined) {
         onDoorUpdate?.(doorId, field as keyof DetectedDoor, value);
+      }
+    });
+  };
+
+  const applyWindowProduct = (windowId: string, code: string) => {
+    const product = findScgWindow(code);
+    const patch: Partial<DetectedWindow> = {
+      scgWindowCode: product.code,
+      windowName: product.name,
+      windowMaterial: product.material,
+      frameColor: product.frameHex,
+      glassColor: product.glassHex,
+    };
+    Object.entries(patch).forEach(([field, value]) => {
+      if (value !== undefined) {
+        onWindowUpdate?.(windowId, field as keyof DetectedWindow, value);
       }
     });
   };
@@ -2678,11 +2820,69 @@ const RightPanel = ({
                         className="h-8 w-12 rounded border border-border bg-transparent"
                       />
                     </label>
+                    <label className="flex items-center justify-between gap-3 rounded-xl border border-border bg-background px-3 py-2 text-[11px] text-muted-foreground">
+                      Use Blender GLB
+                      <input
+                        type="checkbox"
+                        checked={selectedDoor.useBlenderModel === "true"}
+                        onChange={(e) => onDoorUpdate?.(selectedDoor.id, "useBlenderModel", e.target.checked ? "true" : "false")}
+                        className="h-4 w-4"
+                      />
+                    </label>
+                    <div className="rounded-2xl border border-border bg-background px-3 py-2 text-[10px] leading-4 text-muted-foreground">
+                      GLB path: {selectedDoorOption.modelUrl ?? "none"}
+                    </div>
                   </>
                 ) : (
-                  <div className="rounded-2xl border border-border bg-background px-3 py-2 text-[11px] text-muted-foreground">
-                    Delete is available now. Drag/resize handles can be added next.
-                  </div>
+                  <>
+                    <label className="block text-[11px] text-muted-foreground">
+                      SCG window product
+                      <select
+                        value={selectedWindow?.scgWindowCode ?? selectedWindowOption.code}
+                        onChange={(e) => selectedWindow && applyWindowProduct(selectedWindow.id, e.target.value)}
+                        className="mt-1 h-9 w-full rounded-xl border border-border bg-background px-3 text-xs text-foreground"
+                      >
+                        {SCG_WINDOW_CATALOG.map((product) => (
+                          <option key={product.code} value={product.code}>
+                            {product.code}
+                          </option>
+                        ))}
+                      </select>
+                      <span className="mt-1 block text-[10px] text-muted-foreground/70">
+                        {selectedWindow?.windowName ?? selectedWindowOption.name} / {selectedWindow?.windowMaterial ?? selectedWindowOption.material} / {selectedWindowOption.usage}
+                      </span>
+                    </label>
+                    <label className="flex items-center justify-between gap-3 text-[11px] text-muted-foreground">
+                      Frame color
+                      <input
+                        type="color"
+                        value={selectedWindow?.frameColor ?? selectedWindowOption.frameHex}
+                        onChange={(e) => selectedWindow && onWindowUpdate?.(selectedWindow.id, "frameColor", e.target.value)}
+                        className="h-8 w-12 rounded border border-border bg-transparent"
+                      />
+                    </label>
+                    <label className="flex items-center justify-between gap-3 text-[11px] text-muted-foreground">
+                      Glass color
+                      <input
+                        type="color"
+                        value={selectedWindow?.glassColor ?? selectedWindowOption.glassHex}
+                        onChange={(e) => selectedWindow && onWindowUpdate?.(selectedWindow.id, "glassColor", e.target.value)}
+                        className="h-8 w-12 rounded border border-border bg-transparent"
+                      />
+                    </label>
+                    <label className="flex items-center justify-between gap-3 rounded-xl border border-border bg-background px-3 py-2 text-[11px] text-muted-foreground">
+                      Use Blender GLB
+                      <input
+                        type="checkbox"
+                        checked={selectedWindow?.useBlenderModel === "true"}
+                        onChange={(e) => selectedWindow && onWindowUpdate?.(selectedWindow.id, "useBlenderModel", e.target.checked ? "true" : "false")}
+                        className="h-4 w-4"
+                      />
+                    </label>
+                    <div className="rounded-2xl border border-border bg-background px-3 py-2 text-[10px] leading-4 text-muted-foreground">
+                      GLB path: {selectedWindowOption.modelUrl ?? "none"}
+                    </div>
+                  </>
                 )}
               </div>
             )}

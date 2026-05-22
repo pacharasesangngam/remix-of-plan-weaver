@@ -148,6 +148,10 @@ const Index = () => {
     setWindows(prev => [...prev, windowItem]);
   }, []);
 
+  const handleWindowUpdate = useCallback((id: string, field: keyof DetectedWindow, value: number | string) => {
+    setWindows(prev => prev.map(w => w.id === id ? { ...w, [field]: value } : w));
+  }, []);
+
   const handleWindowDelete = useCallback((id: string) => {
     setWindows(prev => prev.filter(w => w.id !== id));
   }, []);
@@ -269,6 +273,7 @@ const Index = () => {
               onDoorUpdate={handleDoorUpdate}
               onDoorDelete={handleDoorDelete}
               onWindowAdd={handleWindowAdd}
+              onWindowUpdate={handleWindowUpdate}
               onWindowDelete={handleWindowDelete}
               onBack={() => setGenerated(false)}
             />

@@ -13,6 +13,7 @@ export interface DetectedDoor {
   doorMaterial?: string;
   doorColor?: string;
   frameColor?: string;
+  useBlenderModel?: string;
 }
 
 export interface DetectedWindow {
@@ -21,6 +22,12 @@ export interface DetectedWindow {
   polygon?: NormalizedPoint[] | null;
   widthPx?: number;
   widthM?: number;
+  scgWindowCode?: string;
+  windowName?: string;
+  windowMaterial?: string;
+  frameColor?: string;
+  glassColor?: string;
+  useBlenderModel?: string;
 }
 
 export interface DetectedWallSegment {
