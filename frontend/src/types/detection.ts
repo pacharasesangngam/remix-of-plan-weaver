@@ -8,6 +8,11 @@ export interface DetectedDoor {
   polygon?: NormalizedPoint[] | null;
   widthPx?: number;
   widthM?: number;
+  scgDoorCode?: string;
+  doorName?: string;
+  doorMaterial?: string;
+  doorColor?: string;
+  frameColor?: string;
 }
 
 export interface DetectedWindow {
@@ -28,6 +33,9 @@ export interface DetectedWallSegment {
   thickness?: number;
   thicknessRatio?: number;
   wallHeight?: number;
+  scgPaintCode?: string;
+  wallColor?: string;
+  wallFinish?: string;
 }
 
 export interface DetectionResult {

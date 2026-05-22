@@ -27,6 +27,8 @@ export interface Room {
   // Pro mode fields
   material?: string;
   floorColor?: string;
+  tileCode?: string;
+  tileName?: string;
   finishCost?: number;
   wallHeight?: number;
 }

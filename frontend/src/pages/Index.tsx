@@ -136,6 +136,10 @@ const Index = () => {
     setDoors(prev => [...prev, door]);
   }, []);
 
+  const handleDoorUpdate = useCallback((id: string, field: keyof DetectedDoor, value: number | string) => {
+    setDoors(prev => prev.map(d => d.id === id ? { ...d, [field]: value } : d));
+  }, []);
+
   const handleDoorDelete = useCallback((id: string) => {
     setDoors(prev => prev.filter(d => d.id !== id));
   }, []);
@@ -262,6 +266,7 @@ const Index = () => {
               onWallAdd={handleWallAdd}
               onWallDelete={handleWallDelete}
               onDoorAdd={handleDoorAdd}
+              onDoorUpdate={handleDoorUpdate}
               onDoorDelete={handleDoorDelete}
               onWindowAdd={handleWindowAdd}
               onWindowDelete={handleWindowDelete}

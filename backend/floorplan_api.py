@@ -10,7 +10,6 @@ from pathlib import Path
 from typing import Optional
 
 import cv2
-from django import conf
 import fitz
 import numpy as np
 from fastapi import FastAPI, File, HTTPException, Query, UploadFile

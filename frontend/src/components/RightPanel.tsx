@@ -5,6 +5,15 @@ import * as THREE from "three";
 import { Box, ChevronLeft, Info, Move3D, Palette, Plus, Trash2 } from "lucide-react";
 import type { BBox, NormalizedPoint, Room } from "@/types/floorplan";
 import type { DetectedWallSegment, DetectedDoor, DetectedWindow } from "@/types/detection";
+import {
+  SCG_DOOR_CATALOG,
+  SCG_PAINT_CATALOG,
+  SCG_TILE_CATALOG,
+  findScgDoor,
+  findScgPaint,
+  findScgTile,
+  type ScgTileOption,
+} from "@/types/materialCatalog";
 
 interface RightPanelProps {
   rooms: Room[];
@@ -21,6 +30,7 @@ interface RightPanelProps {
   onWallAdd?: (wall: DetectedWallSegment) => void;
   onWallDelete?: (id: string) => void;
   onDoorAdd?: (door: DetectedDoor) => void;
+  onDoorUpdate?: (id: string, field: keyof DetectedDoor, value: number | string) => void;
   onDoorDelete?: (id: string) => void;
   onWindowAdd?: (win: DetectedWindow) => void;
   onWindowDelete?: (id: string) => void;
@@ -47,6 +57,77 @@ const ROOM_PALETTE = [
 ];
 const FLOOR_HOVER_COLOR = "#f5e6c8";
 const PLAN_SIZE = 20;
+
+const createTileTexture = (tile: ScgTileOption): THREE.CanvasTexture => {
+  const canvas = document.createElement("canvas");
+  canvas.width = 256;
+  canvas.height = 256;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return new THREE.CanvasTexture(canvas);
+
+  ctx.fillStyle = tile.baseHex;
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+  if (tile.pattern === "marble") {
+    ctx.strokeStyle = tile.accentHex;
+    ctx.globalAlpha = 0.45;
+    for (let i = 0; i < 7; i += 1) {
+      ctx.beginPath();
+      const y = 20 + i * 34;
+      ctx.moveTo(-20, y);
+      ctx.bezierCurveTo(70, y - 45, 120, y + 55, 276, y - 18);
+      ctx.lineWidth = i % 2 === 0 ? 3 : 1.5;
+      ctx.stroke();
+    }
+    ctx.globalAlpha = 1;
+  }
+
+  if (tile.pattern === "terrazzo") {
+    const chips = [tile.accentHex, "#f3f0e8", "#9b8f83", "#6f777c"];
+    for (let i = 0; i < 90; i += 1) {
+      const x = (i * 47) % 256;
+      const y = (i * 83) % 256;
+      ctx.fillStyle = chips[i % chips.length];
+      ctx.globalAlpha = 0.65;
+      ctx.beginPath();
+      ctx.ellipse(x, y, 2 + (i % 5), 1.5 + (i % 4), (i * 17) % 6, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.globalAlpha = 1;
+  }
+
+  if (tile.pattern === "stone") {
+    ctx.fillStyle = tile.accentHex;
+    ctx.globalAlpha = 0.18;
+    for (let i = 0; i < 14; i += 1) {
+      ctx.fillRect((i * 31) % 256, (i * 53) % 256, 90, 18);
+    }
+    ctx.globalAlpha = 1;
+  }
+
+  const grid = tile.sizeCm === "30x30" ? 64 : tile.sizeCm === "60x90" ? 128 : 96;
+  ctx.strokeStyle = tile.groutHex;
+  ctx.lineWidth = 3;
+  for (let x = 0; x <= 256; x += grid) {
+    ctx.beginPath();
+    ctx.moveTo(x, 0);
+    ctx.lineTo(x, 256);
+    ctx.stroke();
+  }
+  for (let y = 0; y <= 256; y += grid) {
+    ctx.beginPath();
+    ctx.moveTo(0, y);
+    ctx.lineTo(256, y);
+    ctx.stroke();
+  }
+
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.wrapS = THREE.RepeatWrapping;
+  texture.wrapT = THREE.RepeatWrapping;
+  texture.repeat.set(3, 3);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  return texture;
+};
 
 // Plan scale context — provides real-world metres per normalised unit.
 // Falls back to PLAN_SIZE (20 m) when calibration hasn't been applied.
@@ -762,7 +843,9 @@ function RoomPolygonMesh({
   const floorMatRef = useRef<THREE.MeshStandardMaterial>(null);
 
   const pal = ROOM_PALETTE[index % ROOM_PALETTE.length];
-  const floorColor = room.floorColor ?? pal.floor;
+  const selectedTile = useMemo(() => findScgTile(room.tileCode), [room.tileCode]);
+  const floorColor = room.floorColor ?? selectedTile.baseHex ?? pal.floor;
+  const floorTexture = useMemo(() => createTileTexture(selectedTile), [selectedTile]);
   const baseColorRef = useRef(new THREE.Color(floorColor));
   const hoverColorRef = useRef(new THREE.Color(FLOOR_HOVER_COLOR));
 
@@ -813,6 +896,8 @@ function RoomPolygonMesh({
     if (floorMatRef.current) floorMatRef.current.color.set(floorColor);
   }, [floorColor]);
 
+  useEffect(() => () => floorTexture.dispose(), [floorTexture]);
+
   if (!shape) return null;
 
   return (
@@ -837,6 +922,7 @@ function RoomPolygonMesh({
         <meshStandardMaterial
           ref={floorMatRef}
           color={floorColor}
+          map={floorTexture}
           roughness={0.85}
           metalness={0.02}
           side={THREE.DoubleSide}
@@ -906,6 +992,8 @@ function WallSegmentMesh({
   const { pw, ph } = usePlanScale();
   const resolvedHeight = safeNum(wall.wallHeight, wallHeight);
   const thickness = getWallThicknessM(wall, pw);
+  const paint = findScgPaint(wall.scgPaintCode);
+  const wallColor = wall.wallColor ?? paint.hex;
 
   const x1 = wall.x1 * pw - pw / 2;
   const z1 = wall.y1 * ph - ph / 2;
@@ -971,7 +1059,7 @@ function WallSegmentMesh({
             }}
           >
             <boxGeometry args={[segLen, segH, thickness]} />
-            <meshStandardMaterial color="#e5e7eb" roughness={0.7} metalness={0.05} />
+            <meshStandardMaterial color={wallColor} roughness={0.72} metalness={0.03} />
           </mesh>
         );
       })}
@@ -1024,6 +1112,12 @@ function DoorMesh({
   const slabW = doorW;
   const slabH = doorH;
   const knobX = slabW * 0.36;
+  const doorOption = findScgDoor(door.scgDoorCode);
+  const doorColor = door.doorColor ?? doorOption.doorHex;
+  const panelColor = doorOption.panelHex;
+  const frameColor = door.frameColor ?? doorOption.frameHex;
+  const isFlatDoor = doorOption.style === "flat";
+  const isGrooveDoor = doorOption.style === "groove" || doorOption.style === "modern";
 
   return (
     <group
@@ -1045,40 +1139,44 @@ function DoorMesh({
       <group position={[localX, 0, 0]}>
         <mesh position={[-doorW / 2 - 0.04, doorH / 2, 0]}>
           <boxGeometry args={[0.08, doorH + 0.08, frameDepth]} />
-          <meshStandardMaterial color="#7c2d12" roughness={0.48} metalness={0.08} />
+          <meshStandardMaterial color={frameColor} roughness={0.52} metalness={0.04} />
         </mesh>
         <mesh position={[doorW / 2 + 0.04, doorH / 2, 0]}>
           <boxGeometry args={[0.08, doorH + 0.08, frameDepth]} />
-          <meshStandardMaterial color="#7c2d12" roughness={0.48} metalness={0.08} />
+          <meshStandardMaterial color={frameColor} roughness={0.52} metalness={0.04} />
         </mesh>
         <mesh position={[0, doorH + 0.04, 0]}>
           <boxGeometry args={[doorW + 0.16, 0.08, frameDepth]} />
-          <meshStandardMaterial color="#7c2d12" roughness={0.48} metalness={0.08} />
+          <meshStandardMaterial color={frameColor} roughness={0.52} metalness={0.04} />
         </mesh>
         <mesh position={[0, 0.035, 0]}>
           <boxGeometry args={[doorW + 0.18, 0.07, frameDepth + 0.04]} />
-          <meshStandardMaterial color="#92400e" roughness={0.55} metalness={0.08} />
+          <meshStandardMaterial color={frameColor} roughness={0.58} metalness={0.04} />
         </mesh>
         <mesh position={[0, slabH / 2, 0]} castShadow>
           <boxGeometry args={[slabW, slabH, slabDepth]} />
           <meshStandardMaterial
-            color="#d9a75f"
-            emissive="#b45309"
-            emissiveIntensity={0.035}
-            roughness={0.5}
-            metalness={0.04}
+            color={doorColor}
+            roughness={doorOption.material === "UPVC" || doorOption.material === "PVC" ? 0.68 : 0.5}
+            metalness={0.02}
           />
         </mesh>
-        {faceOffsets.map((offset) => (
+        {!isFlatDoor && faceOffsets.map((offset) => (
           <group key={offset} position={[0, 0, offset]}>
             <mesh position={[0, slabH * 0.63, 0]}>
               <boxGeometry args={[slabW * 0.56, slabH * 0.32, 0.014]} />
-              <meshStandardMaterial color="#c69049" roughness={0.52} metalness={0.03} />
+              <meshStandardMaterial color={panelColor} roughness={0.52} metalness={0.02} />
             </mesh>
             <mesh position={[0, slabH * 0.29, 0]}>
               <boxGeometry args={[slabW * 0.56, slabH * 0.22, 0.014]} />
-              <meshStandardMaterial color="#c69049" roughness={0.52} metalness={0.03} />
+              <meshStandardMaterial color={panelColor} roughness={0.52} metalness={0.02} />
             </mesh>
+            {isGrooveDoor && [-0.24, 0, 0.24].map((x) => (
+              <mesh key={x} position={[x * slabW, slabH * 0.5, 0.002]}>
+                <boxGeometry args={[0.018, slabH * 0.72, 0.016]} />
+                <meshStandardMaterial color={frameColor} roughness={0.56} metalness={0.02} />
+              </mesh>
+            ))}
             <mesh position={[knobX, slabH * 0.5, 0.026 * Math.sign(offset)]}>
               <sphereGeometry args={[0.038, 16, 16]} />
               <meshStandardMaterial color="#5b260c" roughness={0.28} metalness={0.42} />
@@ -1923,6 +2021,7 @@ const RightPanel = ({
   onWallAdd,
   onWallDelete,
   onDoorAdd,
+  onDoorUpdate,
   onDoorDelete,
   onWindowAdd,
   onWindowDelete,
@@ -1977,6 +2076,64 @@ const RightPanel = ({
     { id: "window", label: "Window", hint: "Click the exact spot on a wall to place a window" },
     { id: "delete", label: "Delete", hint: "Click object to remove" },
   ];
+
+  const selectedRoomTile = findScgTile(selectedRoom?.tileCode);
+  const selectedWallPaint = findScgPaint(selectedWall?.scgPaintCode);
+  const selectedDoorOption = findScgDoor(selectedDoor?.scgDoorCode);
+
+  const applyPaintToWall = (wallId: string, code: string) => {
+    const paint = findScgPaint(code);
+    onWallUpdate?.(wallId, "scgPaintCode", paint.code);
+    onWallUpdate?.(wallId, "wallColor", paint.hex);
+    onWallUpdate?.(wallId, "wallFinish", paint.finish);
+  };
+
+  const applyPaintToAllWalls = (code: string) => {
+    const paint = findScgPaint(code);
+    walls.forEach((wall) => {
+      onWallUpdate?.(wall.id, "scgPaintCode", paint.code);
+      onWallUpdate?.(wall.id, "wallColor", paint.hex);
+      onWallUpdate?.(wall.id, "wallFinish", paint.finish);
+    });
+  };
+
+  const applyTileToRoom = (roomId: string, code: string) => {
+    const tile = findScgTile(code);
+    onRoomPatch?.(roomId, {
+      tileCode: tile.code,
+      tileName: tile.name,
+      floorColor: tile.baseHex,
+      material: "tile",
+    });
+  };
+
+  const applyTileToAllRooms = (code: string) => {
+    const tile = findScgTile(code);
+    rooms.forEach((room) => {
+      onRoomPatch?.(room.id, {
+        tileCode: tile.code,
+        tileName: tile.name,
+        floorColor: tile.baseHex,
+        material: "tile",
+      });
+    });
+  };
+
+  const applyDoorProduct = (doorId: string, code: string) => {
+    const product = findScgDoor(code);
+    const patch: Partial<DetectedDoor> = {
+      scgDoorCode: product.code,
+      doorName: product.name,
+      doorMaterial: product.material,
+      doorColor: product.doorHex,
+      frameColor: product.frameHex,
+    };
+    Object.entries(patch).forEach(([field, value]) => {
+      if (value !== undefined) {
+        onDoorUpdate?.(doorId, field as keyof DetectedDoor, value);
+      }
+    });
+  };
 
   useEffect(() => {
     setPlacementPreview(null);
@@ -2313,19 +2470,68 @@ const RightPanel = ({
             </div>
 
             {!selection && (
-              <div className="rounded-2xl border border-dashed border-border p-3 text-[11px] leading-5 text-muted-foreground">
-                Select a room, wall, door, or window in the 3D view to edit it.
+              <div className="space-y-3">
+                <div className="rounded-2xl border border-dashed border-border p-3 text-[11px] leading-5 text-muted-foreground">
+                  Select a room, wall, door, or window in the 3D view to edit it.
+                </div>
+                <label className="block text-[11px] text-muted-foreground">
+                  Paint all walls
+                  <select
+                    onChange={(e) => applyPaintToAllWalls(e.target.value)}
+                    defaultValue=""
+                    className="mt-1 h-9 w-full rounded-xl border border-border bg-background px-3 text-xs text-foreground"
+                  >
+                    <option value="" disabled>Choose SCG paint code</option>
+                    {SCG_PAINT_CATALOG.map((paint) => (
+                      <option key={paint.code} value={paint.code}>
+                        {paint.code} - {paint.name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label className="block text-[11px] text-muted-foreground">
+                  Tile all rooms
+                  <select
+                    onChange={(e) => applyTileToAllRooms(e.target.value)}
+                    defaultValue=""
+                    className="mt-1 h-9 w-full rounded-xl border border-border bg-background px-3 text-xs text-foreground"
+                  >
+                    <option value="" disabled>Choose tile code</option>
+                    {SCG_TILE_CATALOG.map((tile) => (
+                      <option key={tile.code} value={tile.code}>
+                        {tile.code} - {tile.name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
               </div>
             )}
 
             {selectedRoom && (
               <div className="space-y-3">
                 <div className="text-[11px] font-medium text-foreground">{selectedRoom.name}</div>
+                <label className="block text-[11px] text-muted-foreground">
+                  Floor tile code
+                  <select
+                    value={selectedRoom.tileCode ?? selectedRoomTile.code}
+                    onChange={(e) => applyTileToRoom(selectedRoom.id, e.target.value)}
+                    className="mt-1 h-9 w-full rounded-xl border border-border bg-background px-3 text-xs text-foreground"
+                  >
+                    {SCG_TILE_CATALOG.map((tile) => (
+                      <option key={tile.code} value={tile.code}>
+                        {tile.code} - {tile.sizeCm}
+                      </option>
+                    ))}
+                  </select>
+                  <span className="mt-1 block text-[10px] text-muted-foreground/70">
+                    {selectedRoom.tileName ?? selectedRoomTile.name}
+                  </span>
+                </label>
                 <label className="flex items-center justify-between gap-3 text-[11px] text-muted-foreground">
                   Floor color
                   <input
                     type="color"
-                    value={selectedRoom.floorColor ?? ROOM_PALETTE[0].floor}
+                    value={selectedRoom.floorColor ?? selectedRoomTile.baseHex}
                     onChange={(e) => onRoomUpdate?.(selectedRoom.id, "floorColor", e.target.value)}
                     className="h-8 w-12 rounded border border-border bg-transparent"
                   />
@@ -2363,6 +2569,29 @@ const RightPanel = ({
                     {selectedWall.type}
                   </button>
                 </div>
+                <label className="block text-[11px] text-muted-foreground">
+                  SCG paint code
+                  <select
+                    value={selectedWall.scgPaintCode ?? selectedWallPaint.code}
+                    onChange={(e) => applyPaintToWall(selectedWall.id, e.target.value)}
+                    className="mt-1 h-9 w-full rounded-xl border border-border bg-background px-3 text-xs text-foreground"
+                  >
+                    {SCG_PAINT_CATALOG.map((paint) => (
+                      <option key={paint.code} value={paint.code}>
+                        {paint.code} - {paint.name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label className="flex items-center justify-between gap-3 text-[11px] text-muted-foreground">
+                  Wall color
+                  <input
+                    type="color"
+                    value={selectedWall.wallColor ?? selectedWallPaint.hex}
+                    onChange={(e) => onWallUpdate?.(selectedWall.id, "wallColor", e.target.value)}
+                    className="h-8 w-12 rounded border border-border bg-transparent"
+                  />
+                </label>
                 <label className="block text-[11px] text-muted-foreground">
                   Width / thickness (m)
                   <input
@@ -2412,9 +2641,49 @@ const RightPanel = ({
                 <div className="text-[11px] font-medium text-foreground">
                   {selectedDoor ? "Door" : "Window"}
                 </div>
-                <div className="rounded-2xl border border-border bg-background px-3 py-2 text-[11px] text-muted-foreground">
-                  Delete is available now. Drag/resize handles can be added next.
-                </div>
+                {selectedDoor ? (
+                  <>
+                    <label className="block text-[11px] text-muted-foreground">
+                      SCG door product
+                      <select
+                        value={selectedDoor.scgDoorCode ?? selectedDoorOption.code}
+                        onChange={(e) => applyDoorProduct(selectedDoor.id, e.target.value)}
+                        className="mt-1 h-9 w-full rounded-xl border border-border bg-background px-3 text-xs text-foreground"
+                      >
+                        {SCG_DOOR_CATALOG.map((product) => (
+                          <option key={product.code} value={product.code}>
+                            {product.code}
+                          </option>
+                        ))}
+                      </select>
+                      <span className="mt-1 block text-[10px] text-muted-foreground/70">
+                        {selectedDoor.doorName ?? selectedDoorOption.name} / {selectedDoor.doorMaterial ?? selectedDoorOption.material} / {selectedDoorOption.usage}
+                      </span>
+                    </label>
+                    <label className="flex items-center justify-between gap-3 text-[11px] text-muted-foreground">
+                      Door color
+                      <input
+                        type="color"
+                        value={selectedDoor.doorColor ?? selectedDoorOption.doorHex}
+                        onChange={(e) => onDoorUpdate?.(selectedDoor.id, "doorColor", e.target.value)}
+                        className="h-8 w-12 rounded border border-border bg-transparent"
+                      />
+                    </label>
+                    <label className="flex items-center justify-between gap-3 text-[11px] text-muted-foreground">
+                      Frame color
+                      <input
+                        type="color"
+                        value={selectedDoor.frameColor ?? selectedDoorOption.frameHex}
+                        onChange={(e) => onDoorUpdate?.(selectedDoor.id, "frameColor", e.target.value)}
+                        className="h-8 w-12 rounded border border-border bg-transparent"
+                      />
+                    </label>
+                  </>
+                ) : (
+                  <div className="rounded-2xl border border-border bg-background px-3 py-2 text-[11px] text-muted-foreground">
+                    Delete is available now. Drag/resize handles can be added next.
+                  </div>
+                )}
               </div>
             )}
 
