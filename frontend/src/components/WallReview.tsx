@@ -22,15 +22,15 @@ interface WallReviewProps {
     walls?: DetectedWallSegment[];
     doors?: DetectedDoor[];
     windows?: DetectedWindow[];
-    scale: number;
+    scale: number; 
     onScaleChange: (s: number) => void;
     onPlanSizeChange?: (pw: number, ph: number) => void;
+    onPpmChange?: (ppm: number) => void;  
     onRoomUpdate: (id: string, field: keyof Room, value: number | string) => void;
     onWallUpdate?: (id: string, field: keyof DetectedWallSegment, value: number | string) => void;
     onWallAdd?: (wall: DetectedWallSegment) => void;
     onWallDelete?: (id: string) => void;
-    onGenerate: () => void;
-}
+    onGenerate: () => void;}
 
 interface EditState {
     roomId: string;
@@ -79,7 +79,7 @@ const WallReview = ({
     backgroundImageUrl,
     walls = [], doors = [], windows = [],
     scale, onScaleChange, onPlanSizeChange,
-    onRoomUpdate, onWallUpdate, onWallAdd, onWallDelete, onGenerate,
+    onPpmChange, onRoomUpdate, onWallUpdate, onWallAdd, onWallDelete, onGenerate,
 }: WallReviewProps) => {
 
     const [editState,      setEditState]      = useState<EditState | null>(null);
@@ -301,16 +301,20 @@ const WallReview = ({
 
     // ── Apply / reset ────────────────────────────────────────
     const applyCalibration = () => {
-        if (calibPts.length < 2) return;
-        const real = parseFloat(calibLength);
-        const px   = pixelDist(calibPts[0], calibPts[1]);
-        if (!real || real <= 0 || px === 0) return;
-        const s = real / px;
-        onScaleChange(s);
-        // Provide real-world plan dimensions to 3D view.
-        onPlanSizeChange?.(imgSize.w * s, imgSize.h * s);
-        setCalibPhase("applied");
-    };
+        const real = parseFloat(calibLength)          // เมตรที่ user ใส่
+        const px   = pixelDist(calibPts[0], calibPts[1])  // pixel บนหน้าจอ
+        if (!real || real <= 0 || px === 0) return
+
+        const screenScale = real / px
+        const screenPpm = px / real  
+
+        onScaleChange(screenScale)
+        onPlanSizeChange?.(imgSize.w * screenScale, imgSize.h * screenScale)
+        onPpmChange?.(screenPpm)
+
+        setCalibPhase("applied")
+
+    }
 
     const resetCalibration = () => {
         setCalibPhase("idle");

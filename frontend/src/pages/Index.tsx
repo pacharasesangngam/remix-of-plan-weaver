@@ -34,7 +34,8 @@ const Index = () => {
   const [debugImages, setDebugImages] = useState<Record<string, string> | null>(null);
   const [cleanImageUrl, setCleanImageUrl] = useState<string | null>(null);
   const [planW, setPlanW]             = useState(0);
-  const [planH, setPlanH]             = useState(0);
+  const [planH, setPlanH] = useState(0);
+  const [screenPpm, setScreenPpm] = useState(0)
 
   useEffect(() => {
     setMounted(true);
@@ -157,12 +158,10 @@ const Index = () => {
   }, []);
 
   const handleGenerate = useCallback(() => setGenerated(true), []);
-
   const floorPlanData: FloorPlanData = { meta: { unit, scale }, rooms };
   // Use the clean preprocessed image (same coordinate space as detected walls/rooms).
   // Falls back to the annotated preview, then the original uploaded image.
   const wallReviewBackgroundUrl = cleanImageUrl ?? imageUrl;
-
   return (
     <>
       {showSplash && <SplashScreen onComplete={() => setShowSplash(false)} />}
@@ -240,12 +239,12 @@ const Index = () => {
               scale={scale}
               onScaleChange={setScale}
               onPlanSizeChange={(w, h) => { setPlanW(w); setPlanH(h); }}
+              onPpmChange={setScreenPpm}
               onRoomUpdate={handleRoomUpdate}
               onWallUpdate={handleWallUpdate}
               onWallAdd={handleWallAdd}
               onWallDelete={handleWallDelete}
-              onGenerate={handleGenerate}
-            />
+              onGenerate={handleGenerate}            />
           ) : imageUrl && !generated ? (
             <div className="flex-1 flex flex-col items-center justify-center bg-background relative overflow-hidden p-6 gap-4">
               {fileType === "application/pdf" ? (
