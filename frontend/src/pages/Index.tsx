@@ -29,12 +29,14 @@ const Index = () => {
   // FIX: เริ่มต้น scale = 0 เพื่อให้ WallReview รู้ว่ายังไม่ calibrate
   // scale จะถูก set จริงเมื่อผู้ใช้กด Apply ใน calibration flow เท่านั้น
   const [scale, setScale]             = useState(0);
+  const [wallHeightMeter, setWallHeightMeter] = useState(2.8);
   const [unit, setUnit]               = useState<DimensionUnit>("m");
   const [debugMode, setDebugMode]     = useState(false);
   const [debugImages, setDebugImages] = useState<Record<string, string> | null>(null);
   const [cleanImageUrl, setCleanImageUrl] = useState<string | null>(null);
   const [planW, setPlanW]             = useState(0);
-  const [planH, setPlanH]             = useState(0);
+  const [planH, setPlanH] = useState(0);
+  const [screenPpm, setScreenPpm] = useState(0)
 
   useEffect(() => {
     setMounted(true);
@@ -80,12 +82,17 @@ const Index = () => {
     setPlanH(0);
   }, []);
 
+  const handleWallHeightChange = useCallback((height: number) => {
+    setWallHeightMeter(height);
+    setRooms(prev => prev.map(r => ({ ...r, wallHeight: height })));
+  }, []);
+
   const handleDetect = useCallback(async () => {
     if (!imageFile) return;
     setDetecting(true);
     setDetectError(null);
     try {
-      const result = await detectFloorPlan(imageFile, debugMode);
+      const result = await detectFloorPlan(imageFile, debugMode, undefined, wallHeightMeter);
       if (result.cleanImage) {
         setCleanImageUrl(result.cleanImage);
       }
@@ -157,12 +164,10 @@ const Index = () => {
   }, []);
 
   const handleGenerate = useCallback(() => setGenerated(true), []);
-
   const floorPlanData: FloorPlanData = { meta: { unit, scale }, rooms };
   // Use the clean preprocessed image (same coordinate space as detected walls/rooms).
   // Falls back to the annotated preview, then the original uploaded image.
   const wallReviewBackgroundUrl = cleanImageUrl ?? imageUrl;
-
   return (
     <>
       {showSplash && <SplashScreen onComplete={() => setShowSplash(false)} />}
@@ -240,12 +245,14 @@ const Index = () => {
               scale={scale}
               onScaleChange={setScale}
               onPlanSizeChange={(w, h) => { setPlanW(w); setPlanH(h); }}
+              onPpmChange={setScreenPpm}
+              wallHeightMeter={wallHeightMeter}
+              onWallHeightChange={handleWallHeightChange}
               onRoomUpdate={handleRoomUpdate}
               onWallUpdate={handleWallUpdate}
               onWallAdd={handleWallAdd}
               onWallDelete={handleWallDelete}
-              onGenerate={handleGenerate}
-            />
+              onGenerate={handleGenerate}            />
           ) : imageUrl && !generated ? (
             <div className="flex-1 flex flex-col items-center justify-center bg-background relative overflow-hidden p-6 gap-4">
               {fileType === "application/pdf" ? (
