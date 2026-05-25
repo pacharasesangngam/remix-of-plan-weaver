@@ -125,7 +125,8 @@ function polygonToRoom(raw: RawRoom): Room {
 export async function detectFloorPlan(
   file: File,
   debug = false,
-  scaleInfo?: { scalePx: number; scaleM: number; displayW: number; displayH: number }
+  scaleInfo?: { scalePx: number; scaleM: number; displayW: number; displayH: number },
+  wallHeightMeter?: number,
 ): Promise<DetectFloorPlanResult> {
   const formData = new FormData()
   formData.append("file", file)
@@ -135,6 +136,10 @@ export async function detectFloorPlan(
         formData.append("scale_m",       String(scaleInfo.scaleM))
         formData.append("img_display_w", String(scaleInfo.displayW))
         formData.append("img_display_h", String(scaleInfo.displayH))
+  }
+
+  if (wallHeightMeter != null && wallHeightMeter > 0) {
+    formData.append("wall_height_meter", String(wallHeightMeter))
   }
 
   const url = `${API_BASE_URL}/api/detect-floorplan${debug ? "?debug=true" : ""}`;
@@ -150,7 +155,12 @@ export async function detectFloorPlan(
   }
 
   const json: RawApiResponse = await res.json();
-  const rooms: Room[] = (json.rooms ?? []).map(polygonToRoom);
+  const rooms: Room[] = (json.rooms ?? [])
+    .map(polygonToRoom)
+    .filter(r => {
+      const poly = r.wallPolygon ?? r.polygon;
+      return poly && poly.length >= 3;
+    });
 
   return {
     rooms,

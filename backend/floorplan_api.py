@@ -37,7 +37,7 @@ WINDOW_CONF = 0.40
 DOOR_MAX_AREA = 0.03
 WIN_MAX_AREA = 0.05
 MIN_SEG = 0.018
-MIN_ROOM_AREA = 0.005  # inner polygon area threshold (was 0.008 outer)
+MIN_ROOM_AREA = 0.003  
 
 WALL_CLR = (80, 160, 60)
 DOOR_CLR = (0, 140, 255)
@@ -70,12 +70,13 @@ def health():
 
 @app.post("/api/detect-floorplan")
 async def analyze(
-    file:           UploadFile = File(...),
-    debug:          bool       = Query(False),
-    scale_px:       float      = Form(0),
-    scale_m:        float      = Form(0),
-    img_display_w:  float      = Form(0),
-    img_display_h:  float      = Form(0),
+    file:               UploadFile = File(...),
+    debug:              bool       = Query(False),
+    scale_px:           float      = Form(0),
+    scale_m:            float      = Form(0),
+    img_display_w:      float      = Form(0),
+    img_display_h:      float      = Form(0),
+    wall_height_meter:  float      = Form(2.8),
 ):
     try:
         raw = await file.read()
@@ -83,12 +84,22 @@ async def analyze(
             raw, file.filename or "", debug=debug,
             scale_px=scale_px, scale_m=scale_m,
             img_display_w=img_display_w, img_display_h=img_display_h,
+            wall_height_meter=wall_height_meter,
         )
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
-def run_pipeline(file_bytes: bytes, filename: str = "", debug: bool = False,scale_px: float = 0,scale_m: float = 0,img_display_w: float = 0,img_display_h: float = 0) -> dict:
+def run_pipeline(
+    file_bytes: bytes,
+    filename: str = "",
+    debug: bool = False,
+    scale_px: float = 0,
+    scale_m: float = 0,
+    img_display_w: float = 0,
+    img_display_h: float = 0,
+    wall_height_meter: float = 2.8,
+) -> dict:
     image = decode_image(file_bytes, filename)
     prep = preprocess(image)
     clean_image = prep["image"]
@@ -99,8 +110,20 @@ def run_pipeline(file_bytes: bytes, filename: str = "", debug: bool = False,scal
     debug_images = {}
     if debug:
         debug_images["01_preprocessed"] = encode_preview(clean_image)
-    geometry = build_geometry(clean_image, yolo_result,ppm=ppm, debug_images=debug_images if debug else None)
-    geometry["rooms"] = [r for r in geometry["rooms"] if r.get("areaNorm", 0) >= MIN_ROOM_AREA]
+    geometry = build_geometry(
+        clean_image, yolo_result, ppm=ppm,
+        debug_images=debug_images if debug else None,
+        wall_height_meter=wall_height_meter,
+    )
+    all_rooms = geometry["rooms"]
+    geometry["rooms"] = [r for r in all_rooms if r.get("areaNorm", 0) >= MIN_ROOM_AREA]
+    # แนบ wallHeight ทุกห้องให้ frontend ดึงไป Extrude ผนัง 3D ได้ทันที
+    for room in geometry["rooms"]:
+        room.setdefault("wallHeight", wall_height_meter)
+    dropped = [r for r in all_rooms if r.get("areaNorm", 0) < MIN_ROOM_AREA]
+    if dropped:
+        print(f"[post-filter] dropped {len(dropped)} room(s) with areaNorm < {MIN_ROOM_AREA}: "
+              + ", ".join(f"{r['name']}={r.get('areaNorm',0):.5f}" for r in dropped))
     _estimate_widths(geometry)
     preview = encode_preview(draw_preview(clean_image, geometry))
     clean_preview = encode_preview(clean_image)  # preprocessed image without overlays
@@ -288,139 +311,139 @@ def _rotate(image: np.ndarray, angle: float) -> np.ndarray:
         borderValue=(255, 255, 255),
     )
 
-def _build_outer_walls_from_rooms(room_masks, h_walls, v_walls, cfg):
-    if not room_masks:
-        return h_walls, v_walls
+# def _build_outer_walls_from_rooms(room_masks, h_walls, v_walls, cfg):
+#     if not room_masks:
+#         return h_walls, v_walls
 
-    snap = cfg["snap"]
+#     snap = cfg["snap"]
 
-    try:
-        room_union = unary_union([m["polygon"] for m in room_masks])
-        outer = room_union.buffer(0.01).simplify(0.008, preserve_topology=True)
-        outer = _largest_poly(outer)
-        if outer is None:
-            return h_walls, v_walls
-    except Exception:
-        return h_walls, v_walls
+#     try:
+#         room_union = unary_union([m["polygon"] for m in room_masks])
+#         outer = room_union.buffer(0.01).simplify(0.008, preserve_topology=True)
+#         outer = _largest_poly(outer)
+#         if outer is None:
+#             return h_walls, v_walls
+#     except Exception:
+#         return h_walls, v_walls
 
-    coords = list(outer.exterior.coords)
-    new_h, new_v = [], []
+#     coords = list(outer.exterior.coords)
+#     new_h, new_v = [], []
 
-    for i in range(len(coords) - 1):
-        x1, y1 = coords[i]
-        x2, y2 = coords[i + 1]
-        dx = abs(x2 - x1)
-        dy = abs(y2 - y1)
+#     for i in range(len(coords) - 1):
+#         x1, y1 = coords[i]
+#         x2, y2 = coords[i + 1]
+#         dx = abs(x2 - x1)
+#         dy = abs(y2 - y1)
 
-        if dx < 1e-4 and dy < 1e-4:
-            continue
+#         if dx < 1e-4 and dy < 1e-4:
+#             continue
 
-        if dx >= dy and dy <= 0.03:  # ✅ ขยาย threshold รับ edge ที่เอียงเล็กน้อย
-            ex1, ex2 = min(x1, x2), max(x1, x2)
-            ey = (y1 + y2) / 2
+#         if dx >= dy and dy <= 0.03:  # ✅ ขยาย threshold รับ edge ที่เอียงเล็กน้อย
+#             ex1, ex2 = min(x1, x2), max(x1, x2)
+#             ey = (y1 + y2) / 2
 
-            # ✅ covered = มี YOLO wall ที่ overlap บางส่วน ไม่ต้องครอบทั้งหมด
-            covered = any(
-                abs(w.get("y", 999) - ey) <= snap * 2
-                and w.get("x2", -999) >= ex1 - snap   # overlap ซ้าย
-                and w.get("x1", 999) <= ex2 + snap    # overlap ขวา
-                for w in h_walls
-                if w.get("source") == "yolo"
-            )
+#             # ✅ covered = มี YOLO wall ที่ overlap บางส่วน ไม่ต้องครอบทั้งหมด
+#             covered = any(
+#                 abs(w.get("y", 999) - ey) <= snap * 2
+#                 and w.get("x2", -999) >= ex1 - snap   # overlap ซ้าย
+#                 and w.get("x1", 999) <= ex2 + snap    # overlap ขวา
+#                 for w in h_walls
+#                 if w.get("source") == "yolo"
+#             )
 
-            if not covered:
-                new_h.append({
-                    "x1": float(ex1), "x2": float(ex2),
-                    "y": float(ey),
-                    "t": cfg["thickness"],
-                    "source": "room_shell",
-                    "synthetic": True,
-                })
-            else:
-                # ✅ มี YOLO wall แล้วแต่อาจขาดช่วง — bridge ส่วนที่ขาด
-                yolo_on_axis = sorted(
-                    [w for w in h_walls
-                     if w.get("source") == "yolo"
-                     and abs(w.get("y", 999) - ey) <= snap * 2
-                     and w.get("x2", -999) >= ex1 - snap
-                     and w.get("x1", 999) <= ex2 + snap],
-                    key=lambda w: w.get("x1", 0)
-                )
-                # เติม gap ระหว่าง YOLO walls บน axis เดียวกัน
-                prev_x2 = ex1
-                for w in yolo_on_axis:
-                    wx1 = w.get("x1", ex2)
-                    if wx1 - prev_x2 > snap:
-                        new_h.append({
-                            "x1": float(prev_x2), "x2": float(wx1),
-                            "y": float(ey),
-                            "t": cfg["thickness"],
-                            "source": "room_shell",
-                            "synthetic": True,
-                        })
-                    prev_x2 = max(prev_x2, w.get("x2", prev_x2))
-                # เติม gap หลัง YOLO wall สุดท้าย
-                if ex2 - prev_x2 > snap:
-                    new_h.append({
-                        "x1": float(prev_x2), "x2": float(ex2),
-                        "y": float(ey),
-                        "t": cfg["thickness"],
-                        "source": "room_shell",
-                        "synthetic": True,
-                    })
+#             if not covered:
+#                 new_h.append({
+#                     "x1": float(ex1), "x2": float(ex2),
+#                     "y": float(ey),
+#                     "t": cfg["thickness"],
+#                     "source": "room_shell",
+#                     "synthetic": True,
+#                 })
+#             else:
+#                 # ✅ มี YOLO wall แล้วแต่อาจขาดช่วง — bridge ส่วนที่ขาด
+#                 yolo_on_axis = sorted(
+#                     [w for w in h_walls
+#                      if w.get("source") == "yolo"
+#                      and abs(w.get("y", 999) - ey) <= snap * 2
+#                      and w.get("x2", -999) >= ex1 - snap
+#                      and w.get("x1", 999) <= ex2 + snap],
+#                     key=lambda w: w.get("x1", 0)
+#                 )
+#                 # เติม gap ระหว่าง YOLO walls บน axis เดียวกัน
+#                 prev_x2 = ex1
+#                 for w in yolo_on_axis:
+#                     wx1 = w.get("x1", ex2)
+#                     if wx1 - prev_x2 > snap:
+#                         new_h.append({
+#                             "x1": float(prev_x2), "x2": float(wx1),
+#                             "y": float(ey),
+#                             "t": cfg["thickness"],
+#                             "source": "room_shell",
+#                             "synthetic": True,
+#                         })
+#                     prev_x2 = max(prev_x2, w.get("x2", prev_x2))
+#                 # เติม gap หลัง YOLO wall สุดท้าย
+#                 if ex2 - prev_x2 > snap:
+#                     new_h.append({
+#                         "x1": float(prev_x2), "x2": float(ex2),
+#                         "y": float(ey),
+#                         "t": cfg["thickness"],
+#                         "source": "room_shell",
+#                         "synthetic": True,
+#                     })
 
-        elif dy > dx and dx <= 0.03:  # ✅ ขยาย threshold เช่นกัน
-            ey1, ey2 = min(y1, y2), max(y1, y2)
-            ex = (x1 + x2) / 2
+#         elif dy > dx and dx <= 0.03:  # ✅ ขยาย threshold เช่นกัน
+#             ey1, ey2 = min(y1, y2), max(y1, y2)
+#             ex = (x1 + x2) / 2
 
-            covered = any(
-                abs(w.get("x", 999) - ex) <= snap * 2
-                and w.get("y2", -999) >= ey1 - snap
-                and w.get("y1", 999) <= ey2 + snap
-                for w in v_walls
-                if w.get("source") == "yolo"
-            )
+#             covered = any(
+#                 abs(w.get("x", 999) - ex) <= snap * 2
+#                 and w.get("y2", -999) >= ey1 - snap
+#                 and w.get("y1", 999) <= ey2 + snap
+#                 for w in v_walls
+#                 if w.get("source") == "yolo"
+#             )
 
-            if not covered:
-                new_v.append({
-                    "x": float(ex),
-                    "y1": float(ey1), "y2": float(ey2),
-                    "t": cfg["thickness"],
-                    "source": "room_shell",
-                    "synthetic": True,
-                })
-            else:
-                # bridge ส่วนที่ขาดใน vertical axis
-                yolo_on_axis = sorted(
-                    [w for w in v_walls
-                     if w.get("source") == "yolo"
-                     and abs(w.get("x", 999) - ex) <= snap * 2
-                     and w.get("y2", -999) >= ey1 - snap
-                     and w.get("y1", 999) <= ey2 + snap],
-                    key=lambda w: w.get("y1", 0)
-                )
-                prev_y2 = ey1
-                for w in yolo_on_axis:
-                    wy1 = w.get("y1", ey2)
-                    if wy1 - prev_y2 > snap:
-                        new_v.append({
-                            "x": float(ex),
-                            "y1": float(prev_y2), "y2": float(wy1),
-                            "t": cfg["thickness"],
-                            "source": "room_shell",
-                            "synthetic": True,
-                        })
-                    prev_y2 = max(prev_y2, w.get("y2", prev_y2))
-                if ey2 - prev_y2 > snap:
-                    new_v.append({
-                        "x": float(ex),
-                        "y1": float(prev_y2), "y2": float(ey2),
-                        "t": cfg["thickness"],
-                        "source": "room_shell",
-                        "synthetic": True,
-                    })
+#             if not covered:
+#                 new_v.append({
+#                     "x": float(ex),
+#                     "y1": float(ey1), "y2": float(ey2),
+#                     "t": cfg["thickness"],
+#                     "source": "room_shell",
+#                     "synthetic": True,
+#                 })
+#             else:
+#                 # bridge ส่วนที่ขาดใน vertical axis
+#                 yolo_on_axis = sorted(
+#                     [w for w in v_walls
+#                      if w.get("source") == "yolo"
+#                      and abs(w.get("x", 999) - ex) <= snap * 2
+#                      and w.get("y2", -999) >= ey1 - snap
+#                      and w.get("y1", 999) <= ey2 + snap],
+#                     key=lambda w: w.get("y1", 0)
+#                 )
+#                 prev_y2 = ey1
+#                 for w in yolo_on_axis:
+#                     wy1 = w.get("y1", ey2)
+#                     if wy1 - prev_y2 > snap:
+#                         new_v.append({
+#                             "x": float(ex),
+#                             "y1": float(prev_y2), "y2": float(wy1),
+#                             "t": cfg["thickness"],
+#                             "source": "room_shell",
+#                             "synthetic": True,
+#                         })
+#                     prev_y2 = max(prev_y2, w.get("y2", prev_y2))
+#                 if ey2 - prev_y2 > snap:
+#                     new_v.append({
+#                         "x": float(ex),
+#                         "y1": float(prev_y2), "y2": float(ey2),
+#                         "t": cfg["thickness"],
+#                         "source": "room_shell",
+#                         "synthetic": True,
+#                     })
 
-    return h_walls + new_h, v_walls + new_v
+#     return h_walls + new_h, v_walls + new_v
 
 def _classify_structural_walls(
     h_walls: list,
@@ -477,6 +500,136 @@ def _classify_structural_walls(
         seg["is_structural"] = bool((near_left or near_right) and is_long)
 
 
+def _seal_wall_gaps(
+    h_walls: list,
+    v_walls: list,
+    cfg: dict,
+    image=None,
+) -> tuple:
+    """
+    เชื่อมช่องว่างขนาดใหญ่ระหว่างผนังโครงบ้าน (Structural Walls) โดยใช้ภาพจริงเป็นหลัก
+    ทำงานก่อน _close_all_gaps เพื่อปิดช่องใหญ่ที่ _close_all_gaps ยังเอื้อมไม่ถึง
+
+    กฎหลัก:
+    - ผนัง structural (outer): รับ gap ได้สูงสุด 0.22 (≈ 22% ของภาพ) — ปิดช่องโครงบ้านได้แม้กว้างมาก
+    - ผนังทั่วไป (internal): รับ gap ได้สูงสุด 0.020 เท่านั้น — ป้องกันดูดเส้นบันได/เฟอร์นิเจอร์
+    - ตรวจ pixel 15 จุดตลอดช่องว่าง — ต้องมีหมึกมืด ≥ 30% (structural) / 55% (ทั่วไป)
+    - ไม่ตรวจ room mask เลย — pixel ในภาพเป็นหลักฐานเดียว
+    """
+    MAX_SEAL_STRUCTURAL = cfg.get("seal_gap", 0.22)   # ขยายเพื่อรองรับช่องโครงบ้านกว้าง
+    MAX_SEAL_NORMAL     = 0.020                        # ผนังภายใน: เชื่อมได้ไม่เกิน 2%
+    N_SAMPLES = 15
+    DARK_THRESH = 100
+    MIN_RATIO_STRUCTURAL = 0.30   # ผ่อนปรนสำหรับ gap กว้างของโครงบ้าน
+    MIN_RATIO_NORMAL     = 0.55
+
+    gray = None
+    if image is not None:
+        try:
+            gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+        except Exception:
+            gray = None
+
+    def _dark_ratio(x1n, y1n, x2n, y2n) -> float:
+        if gray is None:
+            return 1.0
+        h_img, w_img = gray.shape[:2]
+        dark = 0
+        for i in range(N_SAMPLES):
+            t = i / max(N_SAMPLES - 1, 1)
+            px = int(np.clip((x1n + (x2n - x1n) * t) * w_img, 0, w_img - 1))
+            py = int(np.clip((y1n + (y2n - y1n) * t) * h_img, 0, h_img - 1))
+            if gray[py, px] <= DARK_THRESH:
+                dark += 1
+        return dark / N_SAMPLES
+
+    new_h, seen_h = [], set()
+
+    for i, a in enumerate(h_walls):
+        for j, b in enumerate(h_walls):
+            if i >= j:
+                continue
+            y_delta = abs(a["y"] - b["y"])
+            if y_delta > min(a.get("t", 0.012), b.get("t", 0.012)) * 1.5:
+                continue
+            if a["x2"] <= b["x1"]:
+                left, right = a, b
+            elif b["x2"] <= a["x1"]:
+                left, right = b, a
+            else:
+                continue
+            gap = right["x1"] - left["x2"]
+            if gap <= 0:
+                continue
+            is_struct = left.get("is_structural") or right.get("is_structural")
+            max_gap = MAX_SEAL_STRUCTURAL if is_struct else MAX_SEAL_NORMAL
+            min_ratio = MIN_RATIO_STRUCTURAL if is_struct else MIN_RATIO_NORMAL
+            if gap > max_gap:
+                continue
+            mid_y = (left["y"] + right["y"]) / 2
+            if _dark_ratio(left["x2"], mid_y, right["x1"], mid_y) < min_ratio:
+                continue
+            key = (round(left["x2"], 4), round(right["x1"], 4), round(mid_y, 4))
+            if key in seen_h:
+                continue
+            seen_h.add(key)
+            new_h.append({
+                "x1": float(left["x2"]),
+                "x2": float(right["x1"]),
+                "y":  float(mid_y),
+                "t":  max(left.get("t", 0.012), right.get("t", 0.012)),
+                "source": "gap_bridge",
+                "synthetic": True,
+                "is_structural": bool(is_struct),
+            })
+
+    new_v, seen_v = [], set()
+
+    for i, a in enumerate(v_walls):
+        for j, b in enumerate(v_walls):
+            if i >= j:
+                continue
+            x_delta = abs(a["x"] - b["x"])
+            if x_delta > min(a.get("t", 0.012), b.get("t", 0.012)) * 1.5:
+                continue
+            if a["y2"] <= b["y1"]:
+                top, bot = a, b
+            elif b["y2"] <= a["y1"]:
+                top, bot = b, a
+            else:
+                continue
+            gap = bot["y1"] - top["y2"]
+            if gap <= 0:
+                continue
+            is_struct = top.get("is_structural") or bot.get("is_structural")
+            max_gap = MAX_SEAL_STRUCTURAL if is_struct else MAX_SEAL_NORMAL
+            min_ratio = MIN_RATIO_STRUCTURAL if is_struct else MIN_RATIO_NORMAL
+            if gap > max_gap:
+                continue
+            mid_x = (top["x"] + bot["x"]) / 2
+            if _dark_ratio(mid_x, top["y2"], mid_x, bot["y1"]) < min_ratio:
+                continue
+            key = (round(mid_x, 4), round(top["y2"], 4), round(bot["y1"], 4))
+            if key in seen_v:
+                continue
+            seen_v.add(key)
+            new_v.append({
+                "x":  float(mid_x),
+                "y1": float(top["y2"]),
+                "y2": float(bot["y1"]),
+                "t":  max(top.get("t", 0.012), bot.get("t", 0.012)),
+                "source": "gap_bridge",
+                "synthetic": True,
+                "is_structural": bool(is_struct),
+            })
+
+    if new_h or new_v:
+        print(f"[seal_gaps] Sealed {len(new_h)} H + {len(new_v)} V large-gap bridges")
+        return _snap_merge(h_walls + new_h, v_walls + new_v, cfg)
+
+    return h_walls, v_walls
+
+
 def _close_all_gaps(
     h_walls: list,
     v_walls: list,
@@ -500,8 +653,10 @@ def _close_all_gaps(
       • logic เดิมทุกอย่าง ไม่มีอะไรเปลี่ยน
     """
     snap = cfg["snap"]
-    max_bridge_normal     = cfg.get("connect_gap", 0.028)
-    max_bridge_structural = max_bridge_normal * 3.0  # ผนังโครงบ้านเชื่อมได้ไกลกว่า
+    # ผนังภายใน: เชื่อมได้น้อย (≤ 2%) — ป้องกันดูดเส้นบันได/เฟอร์นิเจอร์
+    # ผนังโครงบ้าน: เชื่อมได้ไกลถึง 20% ของภาพ — บังคับปิดช่องโครงสร้างหลัก
+    max_bridge_normal     = min(cfg.get("connect_gap", 0.022), 0.020)
+    max_bridge_structural = 0.20
  
     # ─── สร้าง room union สำหรับตรวจผนังทั่วไป ───────────────────────────
     room_union = None
@@ -733,11 +888,12 @@ def _graceful_fallback(boundary, h_walls, v_walls, doors, cfg,
                 label = _name_room_heuristic(
                     cell, boundary, doors, used_names, cells_sorted
                 )
-                room = _make_room(label, 1, cell, ppm=ppm, img_shape=img_shape)
+                room = _make_room(label, 1, cell, ppm=ppm, img_shape=img_shape,
+                                  wall_thickness=cfg.get("thickness", 0.0))
                 if room:
                     rooms.append(room)
             if rooms:
-                return _deoverlap(rooms, boundary)
+                return _deoverlap(rooms, boundary, wall_thickness=cfg.get("thickness", 0.0))
     except Exception:
         pass
 
@@ -775,21 +931,126 @@ def _graceful_fallback(boundary, h_walls, v_walls, doors, cfg,
                 label = _name_room_heuristic(
                     half, boundary, doors, used_names, halves_sorted
                 )
-                room = _make_room(label, 1, half, ppm=ppm, img_shape=img_shape)
+                room = _make_room(label, 1, half, ppm=ppm, img_shape=img_shape,
+                                  wall_thickness=cfg.get("thickness", 0.0))
                 if room:
                     rooms.append(room)
-            return _deoverlap(rooms, boundary)
+            return _deoverlap(rooms, boundary, wall_thickness=cfg.get("thickness", 0.0))
     except Exception:
         pass
 
     # --- Level 3: Floor เดียว ---
-    room = _make_room("Floor", 1, boundary, ppm=ppm, img_shape=img_shape)
+    room = _make_room("Floor", 1, boundary, ppm=ppm, img_shape=img_shape,
+                      wall_thickness=cfg.get("thickness", 0.0))
     return [room] if room else []
 
-def build_geometry(image: np.ndarray, yolo_results, ppm=None, debug_images=None) -> dict:
+def _is_ghost_room(
+    mask: dict,
+    h_walls: list,
+    v_walls: list,
+    cfg: dict,
+    image: np.ndarray = None,
+) -> bool:
+    poly = mask["polygon"]
+    snap = cfg.get("snap", 0.01)
+    conf = mask.get("conf", 0.0)
+
+    # ─── ด่านที่ 1: ตรวจสอบการสัมผัสกำแพง (Anchor-Wall Check) ─────────────────
+    # ห้องจริงที่ถูกต้องตามหลักสถาปัตยกรรม "ต้องมีส่วนใดส่วนหนึ่งสัมผัสหรือซ้อนทับกับผนังจริงในระบบ"
+    # หากห้องใดลอยอยู่โดดๆ หรืออยู่ติดแค่เส้นขอบกระดาษ โดยไม่มีผนังจริง (YOLO source) แตะอยู่เลย ให้เตะทิ้งทันที
+    search_zone = poly.buffer(snap * 1.5)
+    has_wall_touch = False
+    
+    # รวมการเช็คทั้ง h_walls และ v_walls ที่มาจาก yolo
+    for seg in h_walls + v_walls:
+        if seg.get("source") != "yolo":
+            continue
+        if seg.get("is_structural", False) is False and seg.get("source") != "yolo": 
+            continue # สนใจเฉพาะผนังจริง
+        
+        if "x" in seg: # V-Wall
+            line = LineString([(seg["x"], seg["y1"]), (seg["x"], seg["y2"])])
+        else: # H-Wall
+            line = LineString([(seg["x1"], seg["y"]), (seg["x2"], seg["y"])])
+            
+        if search_zone.intersects(line):
+            has_wall_touch = True
+            break
+            
+    if not has_wall_touch:
+        print(f"[ghost_filter] ❌ Drop (No wall touch - Floating Room Outside): conf={conf:.2f}")
+        return True
+
+    # ─── ด่านที่ 2: สแกนความหนาแน่นหมึกแบบซอยย่อย (Grid Density Check) ────────
+    # ป้องกันกรณีห้องผีหลอกขนาดใหญ่ที่กินเส้นกรอบกระดาษเข้าไปจนค่าเฉลี่ยหมึกรวมผ่านเกณฑ์
+    if image is not None:
+        try:
+            gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+            h_img, w_img = gray.shape[:2]
+            
+            # บิตแมสเฉพาะพื้นที่ห้อง
+            mask_img = np.zeros((h_img, w_img), dtype=np.uint8)
+            pts = np.array([[int(x * w_img), int(y * h_img)] for x, y in poly.exterior.coords], np.int32)
+            cv2.fillPoly(mask_img, [pts], 255)
+            
+            # คำนวณภาพ Ink
+            _, binary_ink = cv2.threshold(gray, 210, 255, cv2.THRESH_BINARY_INV)
+            ink_in_mask = cv2.bitwise_and(binary_ink, mask_img)
+            
+            # ตรวจสอบ Bounding Box ของตัวห้อง เพื่อแบ่งตารางสแกน 3x3 ช่อง
+            x_min, y_min, x_max, y_max = poly.bounds
+            px_min_x, px_max_x = int(x_min * w_img), int(x_max * w_img)
+            px_min_y, px_max_y = int(y_min * h_img), int(y_max * h_img)
+            
+            empty_sub_boxes = 0
+            steps = 3
+            x_step = (px_max_x - px_min_x) // steps
+            y_step = (px_max_y - px_min_y) // steps
+            
+            if x_step > 5 and y_step > 5:
+                for i in range(steps):
+                    for j in range(steps):
+                        bx1 = px_min_x + i * x_step
+                        by1 = px_min_y + j * y_step
+                        bx2 = bx1 + x_step
+                        by2 = by1 + y_step
+                        
+                        sub_mask = mask_img[by1:by2, bx1:bx2]
+                        sub_ink = ink_in_mask[by1:by2, bx1:bx2]
+                        
+                        if np.sum(sub_mask > 0) > 0:
+                            sub_density = np.sum(sub_ink > 0) / np.sum(sub_mask > 0)
+                            if sub_density < 0.001: 
+                                empty_sub_boxes += 1
+                                
+                if empty_sub_boxes >= 5:
+                    print(f"[ghost_filter] ❌ Drop (White Space Overload {empty_sub_boxes}/9 empty boxes): conf={conf:.2f}")
+                    return True
+                    
+        except Exception as e:
+            print(f"[ghost_filter] Grid check failed ({e})")
+
+    return False
+
+def build_geometry(image: np.ndarray, yolo_results, ppm=None, debug_images=None,
+                   wall_height_meter: float = 2.8) -> dict:
     h, w = image.shape[:2]
 
     room_masks = _extract_room_masks(yolo_results, w, h)
+    
+    yolo_h, yolo_v = _extract_walls_yolo(yolo_results, w, h)
+    
+    if yolo_h or yolo_v:
+        cfg_for_ghost = _wall_config(yolo_h, yolo_v)
+        before = len(room_masks)
+        room_masks = [
+            m for m in room_masks
+            if not _is_ghost_room(m, yolo_h, yolo_v, cfg_for_ghost, image=image)
+        ]
+        after = len(room_masks)
+        if before != after:
+            print(f"[ghost_filter] Removed {before - after} ghost room(s), "
+                  f"{after} remaining")
 
     if debug_images is not None:
         dbg_raw = image.copy()
@@ -816,33 +1077,38 @@ def build_geometry(image: np.ndarray, yolo_results, ppm=None, debug_images=None)
     doors = _extract_openings(yolo_results, w, h, "door")
     windows = _extract_openings(yolo_results, w, h, "window")
     
+    # ─── กรองประตู/หน้าต่างที่ใหญ่ผิดปกติ (Giant Door/Window Filter) ──────────
+    # ประตูปกติในแปลน: กว้าง/ยาวไม่เกิน ~10% ของภาพ, พื้นที่ไม่เกิน 1.5% ของภาพ
+    DOOR_MAX_AREA = 0.015   # > 1.5% ของภาพ = ใหญ่เท่าห้อง ให้ตัดทิ้ง
+    DOOR_MAX_DIM  = 0.12    # มิติด้านใดด้านหนึ่งเกิน 12% = ผิดปกติ
+
     clean_doors = []
     for d in doors:
         bbox = d.get("bbox", {})
         bw, bh = bbox.get("w", 0), bbox.get("h", 0)
         door_area = bw * bh
-        
-        # 1. เช็คตามสัดส่วนพื้นที่สะสมสะท้อนขนาดจริง
-        if door_area > 0.025:  # สัดส่วนเกิน 2.5% ของพื้นที่ภาพรวม (ปรับลดลงมานิดนึงจาก 0.03 เพื่อความเป๊ะ)
-            print(f"[Anti-Ghost-Door] Removed giant door ID: {d.get('id')} with area: {door_area:.4f}")
+        if door_area > DOOR_MAX_AREA:
+            print(f"[Anti-Ghost-Door] Drop area={door_area:.4f} > {DOOR_MAX_AREA} id={d.get('id')}")
             continue
-            
-        # 2. เช็คมิติรูปร่าง ประตูจริงต้องเป็นเส้นยาวเรียว ไม่ใช่สี่เหลี่ยมจัตุรัสหม่ำหนาเท่าขนาดห้อง
-        # ถ้าความกว้างและความหนาเกิน 15% ของรูปภาพทั้งคู่ แปลว่าโมเดลจับคลาสพลาดครอบระเบียงแน่นอน
-        if bw > 0.15 and bh > 0.15:
-            print(f"[Anti-Ghost-Door] Removed fat door ID: {d.get('id')} ({bw:.3f}x{bh:.3f})")
+        if bw > DOOR_MAX_DIM or bh > DOOR_MAX_DIM:
+            print(f"[Anti-Ghost-Door] Drop dim={bw:.3f}x{bh:.3f} > {DOOR_MAX_DIM} id={d.get('id')}")
             continue
-            
         clean_doors.append(d)
     doors = clean_doors
+
+    WIN_MAX_AREA = 0.020
+    WIN_MAX_DIM  = 0.14
 
     clean_windows = []
     for win in windows:
         bbox = win.get("bbox", {})
         bw, bh = bbox.get("w", 0), bbox.get("h", 0)
         win_area = bw * bh
-        if win_area > 0.035 or (bw > 0.15 and bh > 0.15):
-            print(f"[Anti-Ghost-Window] Removed giant window ID: {w.get('id')} with area: {win_area:.4f}")
+        if win_area > WIN_MAX_AREA:
+            print(f"[Anti-Ghost-Window] Drop area={win_area:.4f} > {WIN_MAX_AREA} id={win.get('id')}")
+            continue
+        if bw > WIN_MAX_DIM or bh > WIN_MAX_DIM:
+            print(f"[Anti-Ghost-Window] Drop dim={bw:.3f}x{bh:.3f} > {WIN_MAX_DIM} id={win.get('id')}")
             continue
         clean_windows.append(win)
     windows = clean_windows
@@ -854,9 +1120,12 @@ def build_geometry(image: np.ndarray, yolo_results, ppm=None, debug_images=None)
         w,
         h,
     )
-        
+
+    # บันทึก snapshot ก่อน pipeline แก้ไข coord ใน-place (snap_merge ฯลฯ)
+    yolo_h_snapshot = [dict(s) for s in yolo_h]
+    yolo_v_snapshot = [dict(s) for s in yolo_v]
+
     cfg_rough = _wall_config(yolo_h, yolo_v, ppm=None)
-    
     _classify_structural_walls(yolo_h, yolo_v, cfg_rough)
     cfg = _wall_config(yolo_h, yolo_v, ppm=ppm)
 
@@ -872,7 +1141,6 @@ def build_geometry(image: np.ndarray, yolo_results, ppm=None, debug_images=None)
             cfg["connect_gap"] = float(np.clip(cfg["snap"] * 2.0, 0.020, 0.055))
             print(f"[wall_config] thickness clamped: {median_m:.3f}m → {clamped_m:.3f}m")
     
-
     all_h = list(yolo_h)
     all_v = list(yolo_v)
 
@@ -883,12 +1151,15 @@ def build_geometry(image: np.ndarray, yolo_results, ppm=None, debug_images=None)
         cfg,
     )
 
-    all_h, all_v = _build_outer_walls_from_rooms(
-        room_masks,
-        all_h,
-        all_v,
-        cfg,
-    )
+    # all_h, all_v = _build_outer_walls_from_rooms(
+    #     room_masks,
+    #     all_h,
+    #     all_v,
+    #     cfg,
+    # )
+
+    
+    _classify_structural_walls(all_h, all_v, cfg)
 
     boundary = _build_boundary(
         room_masks,
@@ -905,9 +1176,14 @@ def build_geometry(image: np.ndarray, yolo_results, ppm=None, debug_images=None)
         windows=windows,
         image=image,
     )
-    
+    # ปิดช่องว่างขนาดใหญ่ในผนังโครงบ้าน (ทำหลัง _close_all_gaps เพื่อไม่ override การตรวจ room)
+    all_h, all_v = _seal_wall_gaps(all_h, all_v, cfg, image=image)
+    # [ด่าน 1] รวมผนังซ้อนทับบนแกนเดียวกันให้เป็นเส้นเดียวก่อนเข้า Step 2
+    all_h, all_v = _merge_collinear_walls(all_h, all_v, cfg)
+
+    # ─── ขั้น 2: ซ่อมรอยต่อผนัง (Wall Joint Repair) ────────────────────────
     all_h, all_v = _patch_wall_holes(all_h, all_v, room_masks, cfg)
-    all_h, all_v = _close_topology_gaps(all_h, all_v, cfg, room_masks) 
+    all_h, all_v = _close_topology_gaps(all_h, all_v, cfg, room_masks)
     h_walls, v_walls = _process_wall_graph(
         all_h,
         all_v,
@@ -915,16 +1191,32 @@ def build_geometry(image: np.ndarray, yolo_results, ppm=None, debug_images=None)
         boundary,
         cfg,
     )
-
-    h_walls, v_walls = _filter_walls_by_rooms(
-        h_walls,
-        v_walls,
-        room_masks,
-        cfg,
+    h_walls, v_walls = _filter_walls_by_rooms(h_walls, v_walls, room_masks, cfg)
+    # ซ่อมมุม L/T-Corner ให้ปลายผนังชนกันสนิท
+    h_walls, v_walls = _heal_wall_corners(h_walls, v_walls, cfg, image=image)
+    # ยืดผนังมาปิดกรอบประตู/หน้าต่างที่ลอยอยู่
+    h_walls, v_walls = _connect_openings_to_walls(h_walls, v_walls, doors, windows, cfg, image=image)
+    h_walls, v_walls = _force_connect_broken(h_walls, v_walls, cfg, image=image)
+    # ยืดผนังที่มีอยู่ให้ครอบ endpoint ที่ YOLO ตรวจไม่ครบ (pixel-verified)
+    h_walls, v_walls = _extend_walls_at_junctions(h_walls, v_walls, cfg, image=image)
+    # snap มุมที่เพิ่งถูก extend ให้ชนสนิทรอบสุดท้าย
+    h_walls, v_walls = _heal_wall_corners(h_walls, v_walls, cfg, image=image)
+    # คืน YOLO walls ที่หายไปแต่มีเส้นมืดยืนยันในภาพจริง
+    h_walls, v_walls = _restore_verified_yolo_walls(
+        h_walls, v_walls,
+        yolo_h_snapshot, yolo_v_snapshot,
+        image, cfg,
     )
-    h_walls, v_walls = _force_connect_broken(h_walls, v_walls, cfg ,image=image)
-    print("[after force_connect]")
-    _debug_wall_connectivity(h_walls, v_walls, cfg)
+    # เติมผนังตาม boundary polygon ที่ยังขาด (รองรับกรณีไม่มี room mask เช่น Sunroom)
+    h_walls, v_walls = _fill_boundary_gaps(h_walls, v_walls, boundary, image, cfg)
+    # [ด่าน 1] รอบสุดท้าย: รวมผนังซ้อนทับที่เกิดจาก bridge/heal functions ทั้งหมด
+    h_walls, v_walls = _merge_collinear_walls(h_walls, v_walls, cfg)
+    # สับผนังยาวออกเป็นท่อนย่อยที่จุดตัด (Node-Segment Topology)
+    # ป้องกัน Over-Merge และช่วยให้ polygonize ล้อมพื้นที่ปิดได้ถูกต้อง
+    h_walls, v_walls = _split_walls_at_junctions(h_walls, v_walls, cfg)
+    broken_h, broken_v = _debug_wall_connectivity(h_walls, v_walls, cfg)
+    print(f"[wall_repair] done — h={len(h_walls)} v={len(v_walls)} "
+          f"broken_h={len(broken_h)} broken_v={len(broken_v)})")
 
     if debug_images is not None:
         debug_images["03_yolo_walls"] = encode_preview(
@@ -937,60 +1229,46 @@ def build_geometry(image: np.ndarray, yolo_results, ppm=None, debug_images=None)
     mode = "mask_direct"
     rooms = []
 
-    # ชั้นที่ 1: 🚀 PRIMARY PATH - Raster-based Wall Cut Strategy
-    if room_masks and (h_walls or v_walls):
+    # ─── ขั้น 3: สร้างห้องและหดขอบ NIA ─────────────────────────────────────
+    # [ด่าน 3] Layer 1 (หลัก): Vector Polygonize — ทำงานเสมอเมื่อมีผนัง
+    # ไม่ต้องรอ room_masks จาก YOLO — ผนังที่ล้อมพื้นที่ปิดสนิทก็สร้างห้องได้
+    if h_walls or v_walls:
         try:
-            print(f"[pipeline] Layer 1/4: Executing Raster-Cut (masks={len(room_masks)}, h={len(h_walls)}, v={len(v_walls)})")
-            
-            raster_rooms = _rooms_by_raster_cut(image, room_masks, h_walls, v_walls, boundary, doors, cfg ,ppm=ppm)
-            
-            if raster_rooms and _raster_rooms_valid(raster_rooms, room_masks, boundary):
-                rooms = raster_rooms
-                mode = "raster_cut"
-                print(f"✅ Layer 1 Success: Raster-Cut parsed {len(rooms)} rooms.")
-            else:
-                print("[pipeline] Layer 1 Bypass: Raster-Cut validation failed or rooms empty.")
-        except Exception as e:
-            print(f"[pipeline] Layer 1 Error: {str(e)}")
-
-    # ชั้นที่ 2: 🥈 FALLBACK 1 - Graph-based Polygonize Cell Extraction
-    if not rooms:
-        try:
-            print("[pipeline] Layer 2/4: Trying Vector Polygonize Graph...")
+            print(f"[pipeline] Layer 1/3: Vector Polygonize "
+                  f"(masks={len(room_masks)}, h={len(h_walls)}, v={len(v_walls)})")
             cells = _polygonize_cells(h_walls, v_walls, boundary, room_masks)
             cells = _cleanup_cells(cells, boundary, cfg)
             cells = _merge_fragmented_cells(cells, cfg)
-            
+
             if cells and _cells_valid(cells, room_masks, boundary):
                 rooms = _assign_rooms(cells, room_masks, boundary, cfg, doors=doors, ppm=ppm, img_shape=image.shape)
                 rooms = _filter_room_area_outliers(rooms, boundary)
                 rooms = _filter_room_area_outliers(rooms, boundary)
                 rooms = _ensure_full_coverage(rooms, boundary, doors, cfg)
                 mode = "polygonize"
-                print(f"✅ Layer 2 Success: Polygonize parsed {len(rooms)} rooms.")
+                print(f"✅ Layer 1 Success: Polygonize parsed {len(rooms)} rooms.")
             else:
-                print("[pipeline] Layer 2 Bypass: Cell structures are invalid.")
+                print("[pipeline] Layer 1 Bypass: Cell structures are invalid.")
         except Exception as e:
-            print(f"[pipeline] Layer 2 Error: {str(e)}")
+            print(f"[pipeline] Layer 1 Error: {str(e)}")
 
-    # ชั้นที่ 3: 🥉 FALLBACK 2 - Raw YOLO Masks with Sequential Deoverlap
+    # Layer 2: Mask Direct (fallback เมื่อ polygonize ล้มเหลว)
     if not rooms:
         try:
-            print("[pipeline] Layer 3/4: Trying Mask Direct Subtract...")
+            print("[pipeline] Layer 2/3: Mask Direct Subtract...")
             rooms = _rooms_from_masks(room_masks, boundary, h_walls, v_walls, cfg, ppm=ppm, img_shape=image.shape)
             mode = "mask_direct"
             if rooms:
-                print(f"✅ Layer 3 Success: Mask Direct parsed {len(rooms)} rooms.")
+                print(f"✅ Layer 2 Success: Mask Direct parsed {len(rooms)} rooms.")
         except Exception as e:
-            print(f"[pipeline] Layer 3 Error: {str(e)}")
+            print(f"[pipeline] Layer 2 Error: {str(e)}")
 
-    # ชั้นที่ 4: 🎖️ FALLBACK 3 - Last Resort Single Shell
+    # Layer 3: Graceful Fallback
     if not rooms:
-        print("[pipeline] Layer 4/4: Critical! All paths failed. Invoking Graceful Fallback.")
+        print("[pipeline] Layer 3/3: Critical! All paths failed. Invoking Graceful Fallback.")
         rooms = _graceful_fallback(boundary, h_walls, v_walls, doors, cfg, ppm=ppm, img_shape=image.shape)
         mode = "graceful_fallback"
 
-    # ── Wrap up outputs ──────────────────────────────────────────────────────
     walls = _wall_output(h_walls, v_walls, boundary)
 
     if debug_images is not None:
@@ -1042,45 +1320,54 @@ def build_geometry(image: np.ndarray, yolo_results, ppm=None, debug_images=None)
     }
 
 
-
 def _filter_walls_by_rooms(h_walls, v_walls, room_masks, cfg) -> tuple:
     if not room_masks:
         return h_walls, v_walls
-
+ 
     try:
         room_union = unary_union([m["polygon"] for m in room_masks])
-        room_area = room_union.buffer(cfg["snap"] * 8)
+        # buffer ปกติสำหรับผนังทั่วไป
+        room_area_normal     = room_union.buffer(cfg["snap"] * 8)
+        # buffer ใหญ่กว่าสำหรับผนังโครงบ้าน (อาจอยู่ห่างจาก mask มากกว่า)
+        room_area_structural = room_union.buffer(cfg["snap"] * 16)
     except Exception:
         return h_walls, v_walls
-
-    # source เหล่านี้เก็บไว้เสมอ ไม่กรองออก
-    KEEP_SOURCES = {"yolo", "room_shell", "opening_inferred",
-                "gap_bridge", "force_connect", "hole_patch", "topo_bridge"}
-
-    def wall_near_room(line: LineString) -> bool:
+ 
+    KEEP_SOURCES = {
+        "yolo", "room_shell", "opening_inferred",
+        "gap_bridge", "force_connect", "hole_patch", "topo_bridge", "boundary_fill"
+    }
+ 
+    def wall_near_room(line, is_structural: bool) -> bool:
         try:
-            # ใช้ room_area.distance(line) — ถูกต้องกว่า line.distance(room_area)
-            # เมื่อ line อยู่ภายใน room_area → distance = 0 → ผ่านเสมอ
-            return room_area.distance(line) <= cfg["snap"] * 2
+            zone = room_area_structural if is_structural else room_area_normal
+            return zone.distance(line) <= cfg["snap"] * 2
         except Exception:
             return True
-
+ 
     out_h = [
         seg for seg in h_walls
         if seg.get("source") in KEEP_SOURCES
-        or wall_near_room(LineString([(seg["x1"], seg["y"]), (seg["x2"], seg["y"])]))
+        or seg.get("source") == "yolo"   # ← YOLO เก็บไว้เสมอ ไม่ตรวจระยะ
+        or wall_near_room(
+            LineString([(seg["x1"], seg["y"]), (seg["x2"], seg["y"])]),
+            is_structural=bool(seg.get("is_structural"))
+        )
     ]
     out_v = [
         seg for seg in v_walls
         if seg.get("source") in KEEP_SOURCES
-        or wall_near_room(LineString([(seg["x"], seg["y1"]), (seg["x"], seg["y2"])]))
+        or seg.get("source") == "yolo"   # ← YOLO เก็บไว้เสมอ ไม่ตรวจระยะ
+        or wall_near_room(
+            LineString([(seg["x"], seg["y1"]), (seg["x"], seg["y2"])]),
+            is_structural=bool(seg.get("is_structural"))
+        )
     ]
-
+ 
     return out_h, out_v
 
 def _clip(v: float) -> float:
     return float(np.clip(v, 0.0, 1.0))
-
 
 def _extract_room_masks(results, w, h) -> list[dict]:
 
@@ -1295,6 +1582,8 @@ def _filter_staircase_walls(h_walls, v_walls):
         remove = set()
         for i in range(1, len(srt) - 1):
             p, c, n = srt[i - 1], srt[i], srt[i + 1]
+            if c.get("source") == "yolo":  # ป้องกัน YOLO walls จาก staircase filter
+                continue
             if (abs(c[coord] - p[coord]) < gap_thr
                     and abs(n[coord] - c[coord]) < gap_thr
                     and overlaps(c, p, k1, k2) > overlap_thr
@@ -1302,10 +1591,13 @@ def _filter_staircase_walls(h_walls, v_walls):
                 remove.add(id(c))
         return [s for s in walls if id(s) not in remove]
 
-    return filter_dense(h_walls, "y", "x1", "x2"), filter_dense(v_walls, "x", "y1", "y2")
-
-
-
+    out_h = filter_dense(h_walls, "y", "x1", "x2")
+    out_v = filter_dense(v_walls, "x", "y1", "y2")
+    dh = len(h_walls) - len(out_h)
+    dv = len(v_walls) - len(out_v)
+    if dh or dv:
+        print(f"[staircase_filter] removed h={dh}, v={dv} non-YOLO walls")
+    return out_h, out_v
 
 def _wall_config(h_walls, v_walls, ppm: float = None) -> dict:
     all_walls = h_walls + v_walls
@@ -1451,11 +1743,171 @@ def _nearest(value: float, axes: list) -> float:
     return min(axes, key=lambda axis: abs(axis - value)) if axes else value
 
 
+def _merge_collinear_walls(h_walls: list, v_walls: list, cfg: dict) -> tuple:
+    """
+    รวมผนังที่อยู่บนแกนเดียวกันและมีส่วนซ้อนทับหรือแตะกัน (gap ≤ 0) ให้เป็นเส้นเดียว
+
+    ทำงาน 2 รอบ: H-walls (group by y) และ V-walls (group by x)
+    รักษา is_structural=True, source="yolo", conf สูงสุดไว้
+    """
+    snap = cfg["snap"]
+
+    def _merge_group_h(segs: list) -> list:
+        segs = sorted(segs, key=lambda s: s["x1"])
+        result = []
+        cur = dict(segs[0])
+        for seg in segs[1:]:
+            if seg["x1"] <= cur["x2"] + 1e-6:          # overlap หรือแตะ
+                cur["x2"] = max(cur["x2"], seg["x2"])
+                cur["t"]   = max(cur.get("t", 0.012), seg.get("t", 0.012))
+                cur["conf"] = max(cur.get("conf", 0), seg.get("conf", 0))
+                if seg.get("is_structural"):
+                    cur["is_structural"] = True
+                if seg.get("source") == "yolo" and cur.get("source") != "yolo":
+                    cur["source"] = "yolo"
+            else:
+                if cur["x2"] - cur["x1"] >= MIN_SEG / 2:
+                    result.append(cur)
+                cur = dict(seg)
+        if cur["x2"] - cur["x1"] >= MIN_SEG / 2:
+            result.append(cur)
+        return result
+
+    def _merge_group_v(segs: list) -> list:
+        segs = sorted(segs, key=lambda s: s["y1"])
+        result = []
+        cur = dict(segs[0])
+        for seg in segs[1:]:
+            if seg["y1"] <= cur["y2"] + 1e-6:
+                cur["y2"] = max(cur["y2"], seg["y2"])
+                cur["t"]   = max(cur.get("t", 0.012), seg.get("t", 0.012))
+                cur["conf"] = max(cur.get("conf", 0), seg.get("conf", 0))
+                if seg.get("is_structural"):
+                    cur["is_structural"] = True
+                if seg.get("source") == "yolo" and cur.get("source") != "yolo":
+                    cur["source"] = "yolo"
+            else:
+                if cur["y2"] - cur["y1"] >= MIN_SEG / 2:
+                    result.append(cur)
+                cur = dict(seg)
+        if cur["y2"] - cur["y1"] >= MIN_SEG / 2:
+            result.append(cur)
+        return result
+
+    # Group H-walls by quantized y-axis
+    from collections import defaultdict as _dd
+    h_buckets: dict = _dd(list)
+    for seg in h_walls:
+        key = round(seg["y"] / snap)
+        h_buckets[key].append(seg)
+
+    merged_h: list = []
+    for segs in h_buckets.values():
+        merged_h.extend(_merge_group_h(segs))
+
+    # Group V-walls by quantized x-axis
+    v_buckets: dict = _dd(list)
+    for seg in v_walls:
+        key = round(seg["x"] / snap)
+        v_buckets[key].append(seg)
+
+    merged_v: list = []
+    for segs in v_buckets.values():
+        merged_v.extend(_merge_group_v(segs))
+
+    removed_h = len(h_walls) - len(merged_h)
+    removed_v = len(v_walls) - len(merged_v)
+    if removed_h or removed_v:
+        print(f"[merge_collinear] merged {removed_h} H + {removed_v} V duplicate/overlap segments")
+
+    return merged_h, merged_v
+
+
+def _split_walls_at_junctions(h_walls: list, v_walls: list, cfg: dict) -> tuple:
+    """
+    สับเส้นผนังยาวออกเป็นท่อนย่อยทุกจุดที่มีเส้นผนังตั้งฉากมาตัดผ่าน (Shared Node)
+
+    หลักการ (Node-Segment Topology):
+    - H-wall ยาว x=[x1,x2] จะถูกสับที่ทุก V.x ที่อยู่ระหว่างกลาง (ห่างจาก endpoint)
+    - V-wall ยาว y=[y1,y2] จะถูกสับที่ทุก H.y ที่อยู่ระหว่างกลาง
+    - ทำให้ทุก segment ปลายชนกันที่พิกัดเดียวกันพอดี ไม่มีรอยรั่ว
+    - ช่วย polygonize ล้อมพื้นที่ปิดได้ถูกต้อง
+    - ใน 3D: ผู้ใช้คลิกเลือกผนังรายห้องได้ ไม่โดนยาวทะลุทั้งบ้าน
+    """
+    snap = cfg["snap"]
+    # จุดตัดต้องอยู่ห่างจาก endpoint อย่างน้อย ENDPOINT_TOL
+    # (ถ้าใกล้ endpoint = เชื่อมกันอยู่แล้ว ไม่ต้องสับ)
+    ENDPOINT_TOL = snap * 0.5
+
+    def _split_h(h_list: list, v_list: list) -> list:
+        out = []
+        for h in h_list:
+            y, x1, x2 = h["y"], h["x1"], h["x2"]
+            split_xs: set = set()
+            for v in v_list:
+                vx = v["x"]
+                # vx ต้องอยู่ "ในตัว" H (ไม่ใช่ที่ปลาย)
+                if x1 + ENDPOINT_TOL < vx < x2 - ENDPOINT_TOL:
+                    # V ต้องผ่าน (span) y ของ H
+                    if v["y1"] - snap <= y <= v["y2"] + snap:
+                        split_xs.add(vx)
+            if not split_xs:
+                out.append(h)
+                continue
+            xs = sorted([x1] + list(split_xs) + [x2])
+            for i in range(len(xs) - 1):
+                sx1, sx2 = xs[i], xs[i + 1]
+                if sx2 - sx1 < snap * 0.5:
+                    continue
+                seg = dict(h)
+                seg["x1"] = sx1
+                seg["x2"] = sx2
+                out.append(seg)
+        return out
+
+    def _split_v(h_list: list, v_list: list) -> list:
+        out = []
+        for v in v_list:
+            x, y1, y2 = v["x"], v["y1"], v["y2"]
+            split_ys: set = set()
+            for h in h_list:
+                hy = h["y"]
+                if y1 + ENDPOINT_TOL < hy < y2 - ENDPOINT_TOL:
+                    if h["x1"] - snap <= x <= h["x2"] + snap:
+                        split_ys.add(hy)
+            if not split_ys:
+                out.append(v)
+                continue
+            ys = sorted([y1] + list(split_ys) + [y2])
+            for i in range(len(ys) - 1):
+                sy1, sy2 = ys[i], ys[i + 1]
+                if sy2 - sy1 < snap * 0.5:
+                    continue
+                seg = dict(v)
+                seg["y1"] = sy1
+                seg["y2"] = sy2
+                out.append(seg)
+        return out
+
+    # สับ H ก่อน (ใช้ v_walls ที่ยังไม่สับเพื่อหาจุดตัด), แล้วค่อยสับ V
+    new_h = _split_h(h_walls, v_walls)
+    new_v = _split_v(new_h, v_walls)
+
+    added_h = len(new_h) - len(h_walls)
+    added_v = len(new_v) - len(v_walls)
+    if added_h or added_v:
+        print(f"[split_junctions] +{added_h} H, +{added_v} V sub-segments at junctions "
+              f"(h: {len(h_walls)}→{len(new_h)}, v: {len(v_walls)}→{len(new_v)})")
+    return new_h, new_v
+
+
 def _snap_merge(h_walls: list, v_walls: list, cfg: dict):
     snap, merge_gap = cfg["snap"], cfg["merge_gap"]
     x_axes = _cluster([seg["x"] for seg in v_walls], snap)
     y_axes = _cluster([seg["y"] for seg in h_walls], snap)
+ 
     for seg in h_walls:
+        orig_x1, orig_x2 = seg["x1"], seg["x2"]
         seg["y"] = _nearest(seg["y"], y_axes)
         for axis in x_axes:
             if abs(seg["x1"] - axis) <= snap:
@@ -1464,7 +1916,14 @@ def _snap_merge(h_walls: list, v_walls: list, cfg: dict):
                 seg["x2"] = axis
         if seg["x1"] > seg["x2"]:
             seg["x1"], seg["x2"] = seg["x2"], seg["x1"]
+        # ป้องกัน YOLO wall สั้นกลายเป็น degenerate หลัง snap
+        if seg.get("source") == "yolo" and seg["x2"] - seg["x1"] < MIN_SEG / 2:
+            if abs(orig_x2 - orig_x1) >= MIN_SEG / 2:
+                seg["x1"] = min(orig_x1, orig_x2)
+                seg["x2"] = max(orig_x1, orig_x2)
+
     for seg in v_walls:
+        orig_y1, orig_y2 = seg["y1"], seg["y2"]
         seg["x"] = _nearest(seg["x"], x_axes)
         for axis in y_axes:
             if abs(seg["y1"] - axis) <= snap:
@@ -1473,30 +1932,64 @@ def _snap_merge(h_walls: list, v_walls: list, cfg: dict):
                 seg["y2"] = axis
         if seg["y1"] > seg["y2"]:
             seg["y1"], seg["y2"] = seg["y2"], seg["y1"]
-
+        # ป้องกัน YOLO wall สั้นกลายเป็น degenerate หลัง snap
+        if seg.get("source") == "yolo" and seg["y2"] - seg["y1"] < MIN_SEG / 2:
+            if abs(orig_y2 - orig_y1) >= MIN_SEG / 2:
+                seg["y1"] = min(orig_y1, orig_y2)
+                seg["y2"] = max(orig_y1, orig_y2)
+ 
     merged_h = []
     for axis in y_axes:
-        same = sorted([seg for seg in h_walls if abs(seg["y"] - axis) <= snap], key=lambda seg: seg["x1"])
+        same = sorted(
+            [seg for seg in h_walls if abs(seg["y"] - axis) <= snap],
+            key=lambda seg: seg["x1"]
+        )
         for seg in same:
             if seg["x2"] - seg["x1"] < MIN_SEG:
-                continue
-            if merged_h and abs(merged_h[-1]["y"] - axis) <= snap and seg["x1"] - merged_h[-1]["x2"] <= merge_gap:
-                merged_h[-1]["x2"] = max(merged_h[-1]["x2"], seg["x2"])
-                merged_h[-1]["t"] = max(merged_h[-1]["t"], seg["t"])
+                if seg.get("source") != "yolo" or seg["x2"] - seg["x1"] < 1e-4:
+                    continue
+            if (merged_h
+                    and abs(merged_h[-1]["y"] - axis) <= snap
+                    and seg["x1"] - merged_h[-1]["x2"] <= merge_gap):
+                # ── merge: รักษา conf สูงสุด และ is_structural ──────────
+                prev = merged_h[-1]
+                prev["x2"] = max(prev["x2"], seg["x2"])
+                prev["t"]  = max(prev["t"],  seg.get("t", 0.012))
+                prev["conf"] = max(prev.get("conf", 0), seg.get("conf", 0))
+                if seg.get("is_structural"):
+                    prev["is_structural"] = True
+                if seg.get("source") == "yolo" and prev.get("source") != "yolo":
+                    prev["source"] = "yolo"
             else:
                 merged_h.append({**seg, "y": axis})
-
+ 
     merged_v = []
     for axis in x_axes:
-        same = sorted([seg for seg in v_walls if abs(seg["x"] - axis) <= snap], key=lambda seg: seg["y1"])
+        same = sorted(
+            [seg for seg in v_walls if abs(seg["x"] - axis) <= snap],
+            key=lambda seg: seg["y1"]
+        )
         for seg in same:
             if seg["y2"] - seg["y1"] < MIN_SEG:
-                continue
-            if merged_v and abs(merged_v[-1]["x"] - axis) <= snap and seg["y1"] - merged_v[-1]["y2"] <= merge_gap:
-                merged_v[-1]["y2"] = max(merged_v[-1]["y2"], seg["y2"])
-                merged_v[-1]["t"] = max(merged_v[-1]["t"], seg["t"])
+                if seg.get("source") != "yolo" or seg["y2"] - seg["y1"] < 1e-4:
+                    continue
+            if (merged_v
+                    and abs(merged_v[-1]["x"] - axis) <= snap
+                    and seg["y1"] - merged_v[-1]["y2"] <= merge_gap):
+                prev = merged_v[-1]
+                prev["y2"] = max(prev["y2"], seg["y2"])
+                prev["t"]  = max(prev["t"],  seg.get("t", 0.012))
+                prev["conf"] = max(
+                    prev.get("conf", 0),
+                    seg.get("conf", 0)
+                )
+                if seg.get("is_structural"):
+                    prev["is_structural"] = True
+                if seg.get("source") == "yolo" and prev.get("source") != "yolo":
+                    prev["source"] = "yolo"
             else:
                 merged_v.append({**seg, "x": axis})
+ 
     return merged_h, merged_v
 
 
@@ -1509,76 +2002,87 @@ def _v_anchored(x, y, h_walls, tol):
 
 
 def _heal(h_walls, v_walls, cfg):
-    snap    = cfg["snap"]
-    connect = cfg["connect_gap"]
-    structural_connect = connect * 2.5  # ผนังโครงบ้านยืดได้ไกลกว่า
- 
+    snap = cfg["snap"]
+    # ผนังโครงบ้าน: ยืดได้ไกลพอสมควร  ผนังภายใน: ยืดได้น้อยมาก (ป้องกันดูดเส้นภายใน)
+    structural_reach = snap * 4.0
+    internal_reach   = snap * 1.2   # ≈ 0.014 — เฉพาะ micro-gap
+
+    def _pull_v_endpoint(v: dict, y: float) -> None:
+        """ดึง endpoint V เข้าหา y เฉพาะเมื่อ y อยู่นอก body ของ V (L-corner เท่านั้น)"""
+        if y < v["y1"] - 1e-6 and abs(y - v["y1"]) <= snap * 2:
+            v["y1"] = y
+        elif y > v["y2"] + 1e-6 and abs(y - v["y2"]) <= snap * 2:
+            v["y2"] = y
+
+    def _pull_h_endpoint(h: dict, x: float) -> None:
+        """ดึง endpoint H เข้าหา x เฉพาะเมื่อ x อยู่นอก body ของ H (L-corner เท่านั้น)"""
+        if x < h["x1"] - 1e-6 and abs(x - h["x1"]) <= snap * 2:
+            h["x1"] = x
+        elif x > h["x2"] + 1e-6 and abs(x - h["x2"]) <= snap * 2:
+            h["x2"] = x
+
     for _ in range(2):
         # ── ผนังนอน: ยืดปลายซ้าย-ขวา ──────────────────────────────────
         for seg in h_walls:
             y = seg["y"]
-            reach = structural_connect if seg.get("is_structural") else connect
- 
-            # ปลายซ้าย: หาผนังตั้งที่อยู่ทางซ้าย และผ่านแนว y นี้
+            reach = structural_reach if seg.get("is_structural") else internal_reach
+
+            # ปลายซ้าย
             if not _h_anchored(seg["x1"], y, v_walls, snap):
                 candidates = [
                     v for v in v_walls
                     if v["x"] < seg["x1"]
+                    and seg["x1"] - v["x"] <= reach
                     and v["y1"] - snap <= y <= v["y2"] + snap
                 ]
                 if candidates:
                     hit = max(candidates, key=lambda v: v["x"])
-                    if seg["x1"] - hit["x"] <= reach:
-                        seg["x1"] = hit["x"]
-                        hit["y1"] = min(hit["y1"], y)
-                        hit["y2"] = max(hit["y2"], y)
- 
-            # ปลายขวา: หาผนังตั้งที่อยู่ทางขวา และผ่านแนว y นี้
+                    seg["x1"] = hit["x"]
+                    _pull_v_endpoint(hit, y)
+
+            # ปลายขวา
             if not _h_anchored(seg["x2"], y, v_walls, snap):
                 candidates = [
                     v for v in v_walls
                     if v["x"] > seg["x2"]
+                    and v["x"] - seg["x2"] <= reach
                     and v["y1"] - snap <= y <= v["y2"] + snap
                 ]
                 if candidates:
                     hit = min(candidates, key=lambda v: v["x"])
-                    if hit["x"] - seg["x2"] <= reach:
-                        seg["x2"] = hit["x"]
-                        hit["y1"] = min(hit["y1"], y)
-                        hit["y2"] = max(hit["y2"], y)
- 
+                    seg["x2"] = hit["x"]
+                    _pull_v_endpoint(hit, y)
+
         # ── ผนังตั้ง: ยืดปลายบน-ล่าง ────────────────────────────────────
         for seg in v_walls:
             x = seg["x"]
-            reach = structural_connect if seg.get("is_structural") else connect
- 
-            # ปลายบน: หาผนังนอนที่อยู่เหนือขึ้นไป และผ่านแนว x นี้
+            reach = structural_reach if seg.get("is_structural") else internal_reach
+
+            # ปลายบน
             if not _v_anchored(x, seg["y1"], h_walls, snap):
                 candidates = [
                     h for h in h_walls
                     if h["y"] < seg["y1"]
+                    and seg["y1"] - h["y"] <= reach
                     and h["x1"] - snap <= x <= h["x2"] + snap
                 ]
                 if candidates:
                     hit = max(candidates, key=lambda h: h["y"])
-                    if seg["y1"] - hit["y"] <= reach:
-                        seg["y1"] = hit["y"]
-                        hit["x1"] = min(hit["x1"], x)
-                        hit["x2"] = max(hit["x2"], x)
- 
-            # ปลายล่าง: หาผนังนอนที่อยู่ใต้ลงไป และผ่านแนว x นี้
+                    seg["y1"] = hit["y"]
+                    _pull_h_endpoint(hit, x)
+
+            # ปลายล่าง
             if not _v_anchored(x, seg["y2"], h_walls, snap):
                 candidates = [
                     h for h in h_walls
                     if h["y"] > seg["y2"]
+                    and h["y"] - seg["y2"] <= reach
                     and h["x1"] - snap <= x <= h["x2"] + snap
                 ]
                 if candidates:
                     hit = min(candidates, key=lambda h: h["y"])
-                    if hit["y"] - seg["y2"] <= reach:
-                        seg["y2"] = hit["y"]
-                        hit["x1"] = min(hit["x1"], x)
-                        hit["x2"] = max(hit["x2"], x)
+                    seg["y2"] = hit["y"]
+                    _pull_h_endpoint(hit, x)
 
 def _snap_to_structural(h_walls: list, v_walls: list, cfg: dict) -> None:
     snap      = cfg["snap"]
@@ -1601,8 +2105,10 @@ def _snap_to_structural(h_walls: list, v_walls: list, cfg: dict) -> None:
         if candidates_l:
             best = max(candidates_l, key=lambda v: v["x"])
             h["x1"] = best["x"]
-            best["y1"] = min(best["y1"], y)
-            best["y2"] = max(best["y2"], y)
+            if y < best["y1"] - 1e-6:
+                best["y1"] = y
+            elif y > best["y2"] + 1e-6:
+                best["y2"] = y
  
         # ปลายขวา
         candidates_r = [
@@ -1615,8 +2121,10 @@ def _snap_to_structural(h_walls: list, v_walls: list, cfg: dict) -> None:
         if candidates_r:
             best = min(candidates_r, key=lambda v: v["x"])
             h["x2"] = best["x"]
-            best["y1"] = min(best["y1"], y)
-            best["y2"] = max(best["y2"], y)
+            if y < best["y1"] - 1e-6:
+                best["y1"] = y
+            elif y > best["y2"] + 1e-6:
+                best["y2"] = y
  
     # ── ผนังตั้ง: ปลายบน/ล่าง → ดึงให้ชนผนังนอน ─────────────────────────
     for v in v_walls:
@@ -1635,8 +2143,10 @@ def _snap_to_structural(h_walls: list, v_walls: list, cfg: dict) -> None:
         if candidates_t:
             best = max(candidates_t, key=lambda h: h["y"])
             v["y1"] = best["y"]
-            best["x1"] = min(best["x1"], x)
-            best["x2"] = max(best["x2"], x)
+            if x < best["x1"] - 1e-6:
+                best["x1"] = x
+            elif x > best["x2"] + 1e-6:
+                best["x2"] = x
  
         # ปลายล่าง
         candidates_b = [
@@ -1649,8 +2159,10 @@ def _snap_to_structural(h_walls: list, v_walls: list, cfg: dict) -> None:
         if candidates_b:
             best = min(candidates_b, key=lambda h: h["y"])
             v["y2"] = best["y"]
-            best["x1"] = min(best["x1"], x)
-            best["x2"] = max(best["x2"], x)
+            if x < best["x1"] - 1e-6:
+                best["x1"] = x
+            elif x > best["x2"] + 1e-6:
+                best["x2"] = x
             
 def _bridge_openings(h_walls, v_walls, openings, cfg):
 
@@ -2018,99 +2530,120 @@ def _line_parts(geom):
 
 
 def _clip_to_boundary(h_walls, v_walls, boundary, cfg):
+    yolo_in_h  = sum(1 for s in h_walls if s.get("source") == "yolo")
+    yolo_in_v  = sum(1 for s in v_walls if s.get("source") == "yolo")
+    
     allowed = boundary.buffer(cfg["bnd_pad"], join_style=2)
     out_h, out_v = [], []
+    
     for seg in h_walls:
         try:
             intersection = _seg_line(seg, "h").intersection(allowed)
         except Exception:
+            if seg.get("source") == "yolo":
+                print(f"[clip] YOLO H dropped by exception: y={seg['y']:.3f}")
             continue
-        for line in _line_parts(intersection):
+        parts = _line_parts(intersection)
+        if not parts and seg.get("source") == "yolo":
+            print(f"[clip] YOLO H dropped (no intersection): "
+                  f"y={seg['y']:.3f} x=[{seg['x1']:.3f},{seg['x2']:.3f}]")
+        for line in parts:
             coords = list(line.coords)
             x1, x2 = min(coords[0][0], coords[-1][0]), max(coords[0][0], coords[-1][0])
             if x2 - x1 >= MIN_SEG:
-                out_h.append({**seg, "x1": float(x1), "x2": float(x2), "y": float(coords[0][1])})
+                out_h.append({**seg, "x1": float(x1), "x2": float(x2), 
+                               "y": float(coords[0][1])})
+            elif seg.get("source") == "yolo":
+                print(f"[clip] YOLO H dropped (too short after clip): "
+                      f"len={x2-x1:.4f} y={seg['y']:.3f}")
+
     for seg in v_walls:
         try:
             intersection = _seg_line(seg, "v").intersection(allowed)
         except Exception:
+            if seg.get("source") == "yolo":
+                print(f"[clip] YOLO V dropped by exception: x={seg['x']:.3f}")
             continue
-        for line in _line_parts(intersection):
+        parts = _line_parts(intersection)
+        if not parts and seg.get("source") == "yolo":
+            print(f"[clip] YOLO V dropped (no intersection): "
+                  f"x={seg['x']:.3f} y=[{seg['y1']:.3f},{seg['y2']:.3f}]")
+        for line in parts:
             coords = list(line.coords)
             y1, y2 = min(coords[0][1], coords[-1][1]), max(coords[0][1], coords[-1][1])
             if y2 - y1 >= MIN_SEG:
-                out_v.append({**seg, "x": float(coords[0][0]), "y1": float(y1), "y2": float(y2)})
+                out_v.append({**seg, "x": float(coords[0][0]), 
+                               "y1": float(y1), "y2": float(y2)})
+            elif seg.get("source") == "yolo":
+                print(f"[clip] YOLO V dropped (too short after clip): "
+                      f"len={y2-y1:.4f} x={seg['x']:.3f}")
+
+    yolo_out_h = sum(1 for s in out_h if s.get("source") == "yolo")
+    yolo_out_v = sum(1 for s in out_v if s.get("source") == "yolo")
+    print(f"[clip_to_boundary] YOLO h: {yolo_in_h}→{yolo_out_h}, "
+          f"v: {yolo_in_v}→{yolo_out_v}")
+
     return out_h, out_v
 
 
 def _filter_structural(h_walls, v_walls, boundary, cfg):
+    # เพิ่มตรง debug ต้นฟังก์ชัน
+    yolo_in_h = sum(1 for s in h_walls if s.get("source") == "yolo")
+    yolo_in_v = sum(1 for s in v_walls if s.get("source") == "yolo")
+
     snap = cfg["snap"]
     minx, miny, maxx, maxy = boundary.bounds
-    min_keep = max(0.045, snap * 2.2)
-    interior_keep = max(0.05, snap * 2.2)
+    min_keep      = max(0.045, snap * 2.2)
+    interior_keep = max(0.05,  snap * 2.2)
 
     def on_h(seg):
-        
-        # ชิดขอบ AND มาจาก YOLO จริงๆ (ไม่ใช่ shell/boundary-derived)
         if seg.get("source") in ("shell", "boundary"):
             return False
-        return (
-            abs(seg["y"] - miny) <= snap * 1.5
-            or abs(seg["y"] - maxy) <= snap * 1.5
-        )
+        return (abs(seg["y"] - miny) <= snap * 1.5
+                or abs(seg["y"] - maxy) <= snap * 1.5)
 
     def on_v(seg):
         if seg.get("source") in ("shell", "boundary"):
             return False
-        return (
-            abs(seg["x"] - minx) <= snap * 1.5
-            or abs(seg["x"] - maxx) <= snap * 1.5
-        )
+        return (abs(seg["x"] - minx) <= snap * 1.5
+                or abs(seg["x"] - maxx) <= snap * 1.5)
 
     def h_conn(seg):
         y = seg["y"]
-        return sum(
-            1 for v in v_walls
-            if "x" in v and "y1" in v and "y2" in v  # guard
-            and seg["x1"] - snap <= v["x"] <= seg["x2"] + snap
-            and v["y1"] - snap <= y <= v["y2"] + snap
-        )
+        return sum(1 for v in v_walls
+                   if seg["x1"] - snap <= v["x"] <= seg["x2"] + snap
+                   and v["y1"] - snap <= y <= v["y2"] + snap)
 
     def v_conn(seg):
         x = seg["x"]
-        return sum(
-            1 for h in h_walls
-            if "y" in h and "x1" in h and "x2" in h  # guard
-            and seg["y1"] - snap <= h["y"] <= seg["y2"] + snap
-            and h["x1"] - snap <= x <= h["x2"] + snap
-        )
+        return sum(1 for h in h_walls
+                   if seg["y1"] - snap <= h["y"] <= seg["y2"] + snap
+                   and h["x1"] - snap <= x <= h["x2"] + snap)
 
     out_h = []
     for seg in h_walls:
         seg_len = seg["x2"] - seg["x1"]
-
-        # ตัด shell wall ออกก่อนเลย ไม่ต้องผ่าน logic อื่น
         if seg.get("source") == "shell":
             continue
 
-        if seg.get("source") == "yolo" and seg.get("conf", 0) >= 0.40:
+        # ── YOLO: เก็บทุกเส้น ไม่ตรวจอะไรเพิ่ม ──
+        if seg.get("source") == "yolo":
             out_h.append(seg)
             continue
 
         if seg.get("source") == "cv_bridge":
-            supported = any(
-                abs(w["y"] - seg["y"]) <= snap * 2
-                for w in h_walls
-                if w.get("source") != "cv_bridge"
-            )
+            supported = any(abs(w["y"] - seg["y"]) <= snap * 2
+                            for w in h_walls if w.get("source") != "cv_bridge")
             if not supported:
                 continue
 
         keep = (
-        seg.get("source") in ("opening_inferred", "room_shell","hole_patch","topo_bridge","force_connect")
-        or on_h(seg)
-        or seg_len >= interior_keep
-        or (seg_len >= min_keep and h_conn(seg) >= 1)
+            seg.get("source") in ("opening_inferred", "room_shell", "hole_patch",
+                                   "topo_bridge", "force_connect")
+            or seg.get("is_structural")
+            or on_h(seg)
+            or seg_len >= interior_keep
+            or (seg_len >= min_keep and h_conn(seg) >= 1)
         )
         if keep:
             out_h.append(seg)
@@ -2118,32 +2651,35 @@ def _filter_structural(h_walls, v_walls, boundary, cfg):
     out_v = []
     for seg in v_walls:
         seg_len = seg["y2"] - seg["y1"]
-
         if seg.get("source") == "shell":
             continue
 
-        if seg.get("source") == "yolo" and seg.get("conf", 0) >= 0.40:
+        # ── YOLO: เก็บทุกเส้น ──
+        if seg.get("source") == "yolo":
             out_v.append(seg)
             continue
 
         if seg.get("source") == "cv_bridge":
-            supported = any(
-                abs(w["x"] - seg["x"]) <= snap * 2
-                for w in v_walls
-                if w.get("source") != "cv_bridge"
-            )
+            supported = any(abs(w["x"] - seg["x"]) <= snap * 2
+                            for w in v_walls if w.get("source") != "cv_bridge")
             if not supported:
                 continue
 
         keep = (
             seg.get("synthetic")
             or seg.get("source") in ("opening_inferred", "room_shell")
-            or on_v(seg)  
+            or seg.get("is_structural")
+            or on_v(seg)
             or seg_len >= interior_keep
-            or (seg_len >= min_keep and v_conn(seg) >= 1) 
+            or (seg_len >= min_keep and v_conn(seg) >= 1)
         )
         if keep:
             out_v.append(seg)
+
+    yolo_out_h = sum(1 for s in out_h if s.get("source") == "yolo")
+    yolo_out_v = sum(1 for s in out_v if s.get("source") == "yolo")
+    print(f"[filter_structural] YOLO h: {yolo_in_h}→{yolo_out_h}, "
+          f"v: {yolo_in_v}→{yolo_out_v}")
 
     return out_h, out_v
 
@@ -2152,18 +2688,27 @@ def _split_at_junctions(h_walls, v_walls):
     snap = MIN_SEG * 0.5
     split_h = []
     for seg in h_walls:
-        cuts = [v["x"] for v in v_walls if seg["x1"] < v["x"] < seg["x2"] and v["y1"] - snap <= seg["y"] <= v["y2"] + snap]
+        cuts = [
+            v["x"] for v in v_walls
+            if seg["x1"] < v["x"] < seg["x2"]
+            and v["y1"] - snap <= seg["y"] <= v["y2"] + snap
+        ]
         xs = sorted([seg["x1"], *cuts, seg["x2"]])
         for i in range(len(xs) - 1):
-            if xs[i + 1] - xs[i] >= MIN_SEG / 2:
+            if xs[i + 1] - xs[i] > 1e-5:
                 split_h.append({**seg, "x1": xs[i], "x2": xs[i + 1]})
     split_v = []
     for seg in v_walls:
-        cuts = [h["y"] for h in split_h if seg["y1"] < h["y"] < seg["y2"] and h["x1"] - snap <= seg["x"] <= h["x2"] + snap]
+        cuts = [
+            h["y"] for h in split_h
+            if seg["y1"] < h["y"] < seg["y2"]
+            and h["x1"] - snap <= seg["x"] <= h["x2"] + snap
+        ]
         ys = sorted([seg["y1"], *cuts, seg["y2"]])
         for i in range(len(ys) - 1):
             if ys[i + 1] - ys[i] >= MIN_SEG / 2:
                 split_v.append({**seg, "y1": ys[i], "y2": ys[i + 1]})
+ 
     return split_h, split_v
 
 
@@ -2651,21 +3196,28 @@ def _merge_fragmented_cells(cells, cfg):
 
 def _cells_valid(cells, room_masks, boundary) -> bool:
     if not cells:
+        print("❌ FAIL: no cells generated from polygonize")
         return False
     if not room_masks:
+        print(f"⚠️ WARNING: no room masks provided, cell valid check bypassed (cells={len(cells)})")
         return len(cells) > 0
 
     count = len(room_masks)
     min_area = max(boundary.area * 0.018, 0.0008)
     large_cells = [c for c in cells if c.area >= min_area]
+    print(f"[cells_valid] Target Room Count={count} | Total Large Cells={len(large_cells)} | "
+          f"Boundary Area={boundary.area:.4f} | min_area={min_area:.4f}")
 
-    if len(large_cells) < max(1, int(count * 0.45)):
-        return False
-    if len(large_cells) > max(count * 3 + 4, 14):
+    min_large = max(1, int(count * 0.45))
+    if len(large_cells) < min_large:
+        print(f"❌ FAIL: too few large cells ({len(large_cells)} < {min_large})")
         return False
 
-    # --- guard ใหม่: cell ใหญ่สุดต้องไม่เกิน 60% ของ boundary ---
-    # ถ้าใหญ่กว่านี้ = ผนังรั่ว ห้องทะลุกัน
+    max_large = max(count * 3 + 4, 14)
+    if len(large_cells) > max_large:
+        print(f"❌ FAIL: too many large cells ({len(large_cells)} > {max_large})")
+        return False
+
     max_cell_area = max(c.area for c in large_cells)
     if max_cell_area > boundary.area * 0.60:
         print(f"❌ FAIL: largest cell too big ({max_cell_area:.4f} > {boundary.area * 0.60:.4f})")
@@ -2674,11 +3226,13 @@ def _cells_valid(cells, room_masks, boundary) -> bool:
     cell_area = sum(c.area for c in large_cells)
     mask_area = unary_union([m["polygon"] for m in room_masks]).intersection(boundary).area
     if mask_area <= 0:
+        print(f"❌ FAIL: mask_area is zero or negative ({mask_area:.4f})")
         return False
 
     ratio = cell_area / mask_area
+    print(f"[cells_valid] cell_area={cell_area:.4f} | mask_area={mask_area:.4f} | ratio={ratio:.2f}")
     if not (0.45 <= ratio <= 1.55):
-        print(f"❌ FAIL: area mismatch ratio={ratio:.2f}")
+        print(f"❌ FAIL: area mismatch ratio={ratio:.2f} (expected 0.45–1.55)")
         return False
 
     hits = sum(
@@ -2688,9 +3242,13 @@ def _cells_valid(cells, room_masks, boundary) -> bool:
             for c in large_cells
         )
     )
-    ok = hits >= max(1, int(count * 0.60))
+    min_hits = max(1, int(count * 0.60))
+    print(f"[cells_valid] mask hits={hits}/{count} (need >= {min_hits})")
+    ok = hits >= min_hits
     if not ok:
-        print(f"❌ FAIL: mask hits {hits}/{count}")
+        print(f"❌ FAIL: mask hits {hits}/{count} < {min_hits}")
+    else:
+        print(f"✅ PASS: cells_valid")
     return ok
 
 
@@ -2782,6 +3340,7 @@ def _assign_rooms(cells, room_masks, boundary, cfg,
             cell,
             ppm=ppm,
             img_shape=img_shape,
+            wall_thickness=cfg.get("thickness", 0.0),
         )
 
         if room:
@@ -2817,7 +3376,8 @@ def _assign_rooms(cells, room_masks, boundary, cfg,
             1,
             cell,
             ppm=ppm,
-            img_shape=img_shape
+            img_shape=img_shape,
+            wall_thickness=cfg.get("thickness", 0.0),
         )
 
         if room:
@@ -2867,7 +3427,7 @@ def _assign_rooms(cells, room_masks, boundary, cfg,
         seen_polys.append(poly)
         filtered.append(room)
 
-    return _deoverlap(filtered, boundary)
+    return _deoverlap(filtered, boundary, wall_thickness=cfg.get("thickness", 0.0))
 
 def _ensure_full_coverage(rooms: list, boundary: Polygon, doors: list, cfg: dict) -> list:
     """
@@ -2907,120 +3467,735 @@ def _ensure_full_coverage(rooms: list, boundary: Polygon, doors: list, cfg: dict
 
     for poly in cells_sorted:
         label = _name_room_heuristic(poly, boundary, doors, used_names, cells_sorted)
-        room = _make_room(label, used_names.get(label, 1), poly)
+        room = _make_room(label, used_names.get(label, 1), poly,
+                          wall_thickness=cfg.get("thickness", 0.0))
         if room:
             rooms.append(room)
 
     return rooms
 
-def _force_connect_broken(h_walls: list, v_walls: list, cfg: dict, image=None) -> tuple:
+def _restore_verified_yolo_walls(
+    h_walls: list,
+    v_walls: list,
+    yolo_h_orig: list,
+    yolo_v_orig: list,
+    image,
+    cfg: dict,
+    dark_thresh: int = 110,
+    min_hit_ratio: float = 0.50,
+    samples: int = 16,
+) -> tuple:
+    if image is None:
+        return h_walls, v_walls
+
     snap = cfg["snap"]
-    force_snap = snap * 6.0
+    try:
+        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    except Exception:
+        return h_walls, v_walls
+
+    h_img, w_img = gray.shape[:2]
+    wall_t_px = max(2, int(cfg.get("thickness", 0.012) * min(h_img, w_img) * 1.5))
+
+    def _hit_ratio_h(seg):
+        """fraction of sample-points along H wall ที่มี dark pixel ในแนวตั้งฉาก"""
+        x1 = int(seg["x1"] * w_img)
+        x2 = int(seg["x2"] * w_img)
+        y_c = int(seg["y"] * h_img)
+        if x2 <= x1:
+            return 0.0
+        xs = np.linspace(x1, x2, max(samples, (x2 - x1) // 6), dtype=int)
+        hits = 0
+        for x in xs:
+            if not (0 <= x < w_img):
+                continue
+            for dy in range(-wall_t_px, wall_t_px + 1):
+                ys = y_c + dy
+                if 0 <= ys < h_img and gray[ys, x] < dark_thresh:
+                    hits += 1
+                    break  # พบ dark pixel ที่จุดนี้แล้ว → นับ 1 hit แล้วไปจุดถัดไป
+        return hits / max(len(xs), 1)
+
+    def _hit_ratio_v(seg):
+        """fraction of sample-points along V wall ที่มี dark pixel ในแนวตั้งฉาก"""
+        y1 = int(seg["y1"] * h_img)
+        y2 = int(seg["y2"] * h_img)
+        x_c = int(seg["x"] * w_img)
+        if y2 <= y1:
+            return 0.0
+        ys = np.linspace(y1, y2, max(samples, (y2 - y1) // 6), dtype=int)
+        hits = 0
+        for y in ys:
+            if not (0 <= y < h_img):
+                continue
+            for dx in range(-wall_t_px, wall_t_px + 1):
+                xs = x_c + dx
+                if 0 <= xs < w_img and gray[y, xs] < dark_thresh:
+                    hits += 1
+                    break
+        return hits / max(len(ys), 1)
+
+    def _coverage_h(seg):
+        """fraction of YOLO H-wall already covered by final h_walls (strict tolerance)"""
+        seg_len = seg["x2"] - seg["x1"]
+        if seg_len < 1e-6:
+            return 1.0
+        covered = 0.0
+        for w in h_walls:
+            if abs(w["y"] - seg["y"]) > snap:   # snap เดียว (ไม่ใช่ snap*2)
+                continue
+            overlap = min(w["x2"], seg["x2"]) - max(w["x1"], seg["x1"])
+            covered += max(0.0, overlap)
+        return min(covered / seg_len, 1.0)
+
+    def _coverage_v(seg):
+        """fraction of YOLO V-wall already covered by final v_walls (strict tolerance)"""
+        seg_len = seg["y2"] - seg["y1"]
+        if seg_len < 1e-6:
+            return 1.0
+        covered = 0.0
+        for w in v_walls:
+            if abs(w["x"] - seg["x"]) > snap:   # snap เดียว (ไม่ใช่ snap*2)
+                continue
+            overlap = min(w["y2"], seg["y2"]) - max(w["y1"], seg["y1"])
+            covered += max(0.0, overlap)
+        return min(covered / seg_len, 1.0)
+
+    restored_h = restored_v = 0
+
+    for seg in yolo_h_orig:
+        cov = _coverage_h(seg)
+        if cov >= 0.75:   # ถ้า cover 75%+ แปลว่ามีอยู่จริงแล้ว ห้าม restore ซ้ำ
+            continue
+        ratio = _hit_ratio_h(seg)
+        print(f"[restore_yolo?] H y={seg['y']:.3f} x=[{seg['x1']:.3f},{seg['x2']:.3f}] "
+              f"cov={cov:.2f} hit={ratio:.2f}")
+        if ratio >= min_hit_ratio:
+            h_walls.append({**seg, "source": "yolo"})
+            restored_h += 1
+            print(f"[restore_yolo] ✅ restored H wall above")
+
+    for seg in yolo_v_orig:
+        cov = _coverage_v(seg)
+        if cov >= 0.75:   # ถ้า cover 75%+ แปลว่ามีอยู่จริงแล้ว ห้าม restore ซ้ำ
+            continue
+        ratio = _hit_ratio_v(seg)
+        print(f"[restore_yolo?] V x={seg['x']:.3f} y=[{seg['y1']:.3f},{seg['y2']:.3f}] "
+              f"cov={cov:.2f} hit={ratio:.2f}")
+        if ratio >= min_hit_ratio:
+            v_walls.append({**seg, "source": "yolo"})
+            restored_v += 1
+            print(f"[restore_yolo] ✅ restored V wall above")
+
+    if restored_h or restored_v:
+        print(f"[restore_yolo] total restored h={restored_h} v={restored_v}")
+
+    return h_walls, v_walls
+
+
+def _fill_boundary_gaps(
+    h_walls: list, v_walls: list,
+    boundary: "Polygon",
+    image,
+    cfg: dict,
+) -> tuple:
+    """
+    สุดท้ายหลัง restore YOLO — ตรวจขอบ boundary polygon
+    ถ้าขอบไหนไม่มีผนังรองรับ (coverage < 60%) AND มีเส้นมืดในภาพ (≥ 35%)
+    → สร้าง structural wall เติม (เฉพาะ edge แนวตั้งฉาก)
+
+    ครอบคลุมกรณี: wall ที่ YOLO ไม่ได้จับและไม่มี room mask (เช่น Sunroom boundary)
+    """
+    if boundary is None or boundary.is_empty:
+        return h_walls, v_walls
+
+    snap = cfg["snap"]
+    min_edge = snap * 2.0   # ความยาวขั้นต่ำของ boundary edge ที่จะสร้างผนัง
+
+    gray = None
+    if image is not None:
+        try:
+            gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+        except Exception:
+            pass
+
+    def _dark_frac(x1n, y1n, x2n, y2n, n=8, thresh=145) -> float:
+        if gray is None:
+            return 0.5
+        hi, wi = gray.shape[:2]
+        dark = 0
+        for i in range(n):
+            t = i / max(n - 1, 1)
+            px = int(np.clip((x1n + (x2n - x1n) * t) * wi, 0, wi - 1))
+            py = int(np.clip((y1n + (y2n - y1n) * t) * hi, 0, hi - 1))
+            if gray[py, px] < thresh:
+                dark += 1
+        return dark / n
+
+    def _h_coverage(ex1, ex2, ey) -> float:
+        length = max(ex2 - ex1, 1e-9)
+        covered = 0.0
+        for w in h_walls:
+            if abs(w["y"] - ey) > snap * 2:
+                continue
+            covered += max(0.0, min(w["x2"], ex2) - max(w["x1"], ex1))
+        return min(covered / length, 1.0)
+
+    def _v_coverage(ey1, ey2, ex) -> float:
+        length = max(ey2 - ey1, 1e-9)
+        covered = 0.0
+        for w in v_walls:
+            if abs(w["x"] - ex) > snap * 2:
+                continue
+            covered += max(0.0, min(w["y2"], ey2) - max(w["y1"], ey1))
+        return min(covered / length, 1.0)
+
+    new_h, new_v = [], []
+    coords = list(boundary.exterior.coords)
+
+    for i in range(len(coords) - 1):
+        x1, y1 = coords[i]
+        x2, y2 = coords[i + 1]
+        dx = abs(x2 - x1)
+        dy = abs(y2 - y1)
+
+        if dx >= dy and dy <= 0.025:          # H-edge
+            ex1, ex2 = min(x1, x2), max(x1, x2)
+            ey = (y1 + y2) / 2
+            if ex2 - ex1 < min_edge:
+                continue
+            if _h_coverage(ex1, ex2, ey) >= 0.60:
+                continue
+            if _dark_frac(ex1, ey, ex2, ey) < 0.35:
+                continue
+            new_h.append({
+                "x1": float(ex1), "x2": float(ex2), "y": float(ey),
+                "t": cfg["thickness"],
+                "source": "boundary_fill",
+                "is_structural": True,
+                "synthetic": True,
+            })
+
+        elif dy > dx and dx <= 0.025:         # V-edge
+            ey1, ey2 = min(y1, y2), max(y1, y2)
+            ex = (x1 + x2) / 2
+            if ey2 - ey1 < min_edge:
+                continue
+            if _v_coverage(ey1, ey2, ex) >= 0.60:
+                continue
+            if _dark_frac(ex, ey1, ex, ey2) < 0.35:
+                continue
+            new_v.append({
+                "x": float(ex), "y1": float(ey1), "y2": float(ey2),
+                "t": cfg["thickness"],
+                "source": "boundary_fill",
+                "is_structural": True,
+                "synthetic": True,
+            })
+
+    if new_h or new_v:
+        print(f"[boundary_fill] added h={len(new_h)} v={len(new_v)} missing boundary walls")
+        h_walls = h_walls + new_h
+        v_walls = v_walls + new_v
+
+    return h_walls, v_walls
+
+
+def _heal_wall_corners(h_walls: list, v_walls: list, cfg: dict, image=None) -> tuple:
+    """
+    ปิดมุม L-Corner และ T-Corner ระหว่างผนังแนวนอน/แนวตั้ง
+
+    หลักการ: ปลายผนังสองเส้นที่อยู่ในระยะ corner_snap จะถูกบังคับให้ชนกันที่ "จุดตัดสมมติ"
+    พอดีเป๊ะ — ไม่มีการยืดเลยหรือเหลื่อม (no overshoot / no overlap stub)
+
+    L-Corner: ปลายของ H อยู่ใกล้ปลายของ V → ทั้งสองวิ่งมาหากันที่ (V.x, H.y)
+    T-Corner: ปลายของ H อยู่ติดกับตัวของ V → H เท่านั้นที่ขยับ, V ไม่ถูกแตะ
+    """
+    snap = cfg["snap"]
+    corner_snap = snap * 2.5      # ขยายจาก 1.8x เพื่อจับ gap ที่มุมห้องได้กว้างขึ้น
+    zero_tol    = snap * 1.5      # ระยะ "แทบจะชนกันแล้ว" → force-snap ไม่ตรวจ pixel
+
+    gray = None
+    if image is not None:
+        try:
+            gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+        except Exception:
+            pass
+
+    def _pixel_dark(nx: float, ny: float, thresh: int = 150) -> bool:
+        if gray is None:
+            return True
+        hi, wi = gray.shape[:2]
+        px = int(np.clip(nx * wi, 0, wi - 1))
+        py = int(np.clip(ny * hi, 0, hi - 1))
+        return int(gray[py, px]) < thresh
+
+    def _ok_to_snap(dist: float, check_x: float, check_y: float) -> bool:
+        """Zero-tolerance: gap เล็กมากให้ force-snap เสมอ; gap ปานกลางตรวจ pixel ก่อน"""
+        if dist <= zero_tol:
+            return True   # แทบแตะกันแล้ว — ดูดสนิทไม่ต้องถามภาพ
+        return _pixel_dark(check_x, check_y)
+
+    def _snap_v_endpoint(v: dict, y: float) -> None:
+        """ดึง endpoint ของ V-wall เข้าหา y เฉพาะเมื่อ y อยู่นอก body ของ V (L-Corner)
+        ถ้า y อยู่ใน body แล้ว (T-Corner) ไม่แตะ V เลย"""
+        if y < v["y1"] - 1e-6:
+            if abs(y - v["y1"]) <= corner_snap:
+                v["y1"] = y
+        elif y > v["y2"] + 1e-6:
+            if abs(y - v["y2"]) <= corner_snap:
+                v["y2"] = y
+
+    def _snap_h_endpoint(h: dict, x: float) -> None:
+        """ดึง endpoint ของ H-wall เข้าหา x เฉพาะเมื่อ x อยู่นอก body ของ H (L-Corner)"""
+        if x < h["x1"] - 1e-6:
+            if abs(x - h["x1"]) <= corner_snap:
+                h["x1"] = x
+        elif x > h["x2"] + 1e-6:
+            if abs(x - h["x2"]) <= corner_snap:
+                h["x2"] = x
+
     changed = True
     rounds = 0
-    
+    while changed and rounds < 5:
+        changed = False
+        rounds += 1
+
+        # ── H-wall endpoint → ค้นหา V-wall ที่ปลายทั้งสองฝั่ง ────────────
+        for h in h_walls:
+            y = h["y"]
+
+            # ปลายซ้าย (x1) — V ต้องอยู่ทางซ้าย
+            best, best_dist = None, corner_snap
+            for v in v_walls:
+                if v["x"] >= h["x1"]:
+                    continue
+                dist = h["x1"] - v["x"]
+                if dist > corner_snap:
+                    continue
+                near_top = abs(y - v["y1"]) <= corner_snap
+                near_bot = abs(y - v["y2"]) <= corner_snap
+                in_body  = v["y1"] - snap <= y <= v["y2"] + snap
+                if not (in_body or near_top or near_bot):
+                    continue
+                if dist < best_dist and _ok_to_snap(dist, v["x"], y):
+                    best_dist, best = dist, v
+            if best is not None:
+                h["x1"] = best["x"]
+                _snap_v_endpoint(best, y)
+                changed = True
+
+            # ปลายขวา (x2) — V ต้องอยู่ทางขวา
+            best, best_dist = None, corner_snap
+            for v in v_walls:
+                if v["x"] <= h["x2"]:
+                    continue
+                dist = v["x"] - h["x2"]
+                if dist > corner_snap:
+                    continue
+                near_top = abs(y - v["y1"]) <= corner_snap
+                near_bot = abs(y - v["y2"]) <= corner_snap
+                in_body  = v["y1"] - snap <= y <= v["y2"] + snap
+                if not (in_body or near_top or near_bot):
+                    continue
+                if dist < best_dist and _ok_to_snap(dist, v["x"], y):
+                    best_dist, best = dist, v
+            if best is not None:
+                h["x2"] = best["x"]
+                _snap_v_endpoint(best, y)
+                changed = True
+
+        # ── V-wall endpoint → ค้นหา H-wall ที่ปลายทั้งสองฝั่ง ────────────
+        for v in v_walls:
+            x = v["x"]
+
+            # ปลายบน (y1) — H ต้องอยู่เหนือ
+            best, best_dist = None, corner_snap
+            for h in h_walls:
+                if h["y"] >= v["y1"]:
+                    continue
+                dist = v["y1"] - h["y"]
+                if dist > corner_snap:
+                    continue
+                near_left  = abs(x - h["x1"]) <= corner_snap
+                near_right = abs(x - h["x2"]) <= corner_snap
+                in_body    = h["x1"] - snap <= x <= h["x2"] + snap
+                if not (in_body or near_left or near_right):
+                    continue
+                if dist < best_dist and _ok_to_snap(dist, x, h["y"]):
+                    best_dist, best = dist, h
+            if best is not None:
+                v["y1"] = best["y"]
+                _snap_h_endpoint(best, x)
+                changed = True
+
+            # ปลายล่าง (y2) — H ต้องอยู่ใต้
+            best, best_dist = None, corner_snap
+            for h in h_walls:
+                if h["y"] <= v["y2"]:
+                    continue
+                dist = h["y"] - v["y2"]
+                if dist > corner_snap:
+                    continue
+                near_left  = abs(x - h["x1"]) <= corner_snap
+                near_right = abs(x - h["x2"]) <= corner_snap
+                in_body    = h["x1"] - snap <= x <= h["x2"] + snap
+                if not (in_body or near_left or near_right):
+                    continue
+                if dist < best_dist and _ok_to_snap(dist, x, h["y"]):
+                    best_dist, best = dist, h
+            if best is not None:
+                v["y2"] = best["y"]
+                _snap_h_endpoint(best, x)
+                changed = True
+
+    if rounds > 1:
+        print(f"[corner_heal] done in {rounds} round(s)")
+    return h_walls, v_walls
+
+
+def _connect_openings_to_walls(
+    h_walls: list, v_walls: list,
+    doors: list, windows: list,
+    cfg: dict,
+    image=None,
+) -> tuple:
+    snap = cfg["snap"]
+    reach = snap * 5.0  # ระยะสูงสุดจาก endpoint ของผนังถึงขอบ bbox
+
+    openings = list(doors or []) + list(windows or [])
+
+    gray = None
+    if image is not None:
+        try:
+            gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+        except Exception:
+            pass
+
+    def _dark(nx: float, ny: float, thresh: int = 115) -> bool:
+        """True ถ้าจุด (nx, ny) ในภาพเป็นสีมืด (มีเส้นผนัง)"""
+        if gray is None:
+            return True
+        hi, wi = gray.shape[:2]
+        px = int(np.clip(nx * wi, 0, wi - 1))
+        py = int(np.clip(ny * hi, 0, hi - 1))
+        return int(gray[py, px]) < thresh
+
+    def _h_present(y_val: float, x_lo: float, x_hi: float) -> bool:
+        """มี H-wall ที่ y≈y_val และครอบช่วง [x_lo, x_hi] บางส่วนไหม"""
+        for h in h_walls:
+            if abs(h["y"] - y_val) > snap * 2:
+                continue
+            # ผนังต้องทับกับช่วง opening (อย่างน้อยส่วนหนึ่ง)
+            if h["x2"] >= x_lo - snap and h["x1"] <= x_hi + snap:
+                return True
+        return False
+
+    def _v_present(x_val: float, y_lo: float, y_hi: float) -> bool:
+        """มี V-wall ที่ x≈x_val และครอบช่วง [y_lo, y_hi] บางส่วนไหม"""
+        for v in v_walls:
+            if abs(v["x"] - x_val) > snap * 2:
+                continue
+            if v["y2"] >= y_lo - snap and v["y1"] <= y_hi + snap:
+                return True
+        return False
+
+    for obj in openings:
+        if not isinstance(obj, dict):
+            continue
+        bbox = obj.get("bbox", obj)
+        if not isinstance(bbox, dict):
+            continue
+        bx  = bbox.get("x", 0.0)
+        by  = bbox.get("y", 0.0)
+        bw  = bbox.get("w", 0.0)
+        bh  = bbox.get("h", 0.0)
+        if bw < 1e-4 or bh < 1e-4:
+            continue
+        bx2 = bx + bw
+        by2 = by + bh
+
+        # ── TOP edge: H-wall ที่ y≈by ────────────────────────────────────
+        if not _h_present(by, bx, bx2):
+            best, best_d = None, reach
+            for h in h_walls:
+                if abs(h["y"] - by) > snap * 3:
+                    continue
+                # ปลายขวา (x2) อยู่ทางซ้ายของ bx → ยืดมาถึง bx
+                d = bx - h["x2"]
+                if 0 < d < best_d and _dark(h["x2"], h["y"]):
+                    best_d = d; best = ("x2→bx", h)
+                # ปลายซ้าย (x1) อยู่ทางขวาของ bx2 → ยืดมาถึง bx2
+                d = h["x1"] - bx2
+                if 0 < d < best_d and _dark(h["x1"], h["y"]):
+                    best_d = d; best = ("x1→bx2", h)
+            if best:
+                kind, h = best
+                if kind == "x2→bx":
+                    h["x2"] = bx    # ยืดมาถึงขอบซ้ายของช่องเปิด
+                else:
+                    h["x1"] = bx2   # ยืดมาถึงขอบขวาของช่องเปิด
+
+        # ── BOTTOM edge: H-wall ที่ y≈by2 ───────────────────────────────
+        if not _h_present(by2, bx, bx2):
+            best, best_d = None, reach
+            for h in h_walls:
+                if abs(h["y"] - by2) > snap * 3:
+                    continue
+                d = bx - h["x2"]
+                if 0 < d < best_d and _dark(h["x2"], h["y"]):
+                    best_d = d; best = ("x2→bx", h)
+                d = h["x1"] - bx2
+                if 0 < d < best_d and _dark(h["x1"], h["y"]):
+                    best_d = d; best = ("x1→bx2", h)
+            if best:
+                kind, h = best
+                if kind == "x2→bx":
+                    h["x2"] = bx
+                else:
+                    h["x1"] = bx2
+
+        # ── LEFT edge: V-wall ที่ x≈bx ──────────────────────────────────
+        if not _v_present(bx, by, by2):
+            best, best_d = None, reach
+            for v in v_walls:
+                if abs(v["x"] - bx) > snap * 3:
+                    continue
+                # ปลายล่าง (y2) อยู่เหนือ by → ยืดมาถึง by
+                d = by - v["y2"]
+                if 0 < d < best_d and _dark(v["x"], v["y2"]):
+                    best_d = d; best = ("y2→by", v)
+                # ปลายบน (y1) อยู่ใต้ by2 → ยืดมาถึง by2
+                d = v["y1"] - by2
+                if 0 < d < best_d and _dark(v["x"], v["y1"]):
+                    best_d = d; best = ("y1→by2", v)
+            if best:
+                kind, v = best
+                if kind == "y2→by":
+                    v["y2"] = by    # ยืดมาถึงขอบบนของช่องเปิด
+                else:
+                    v["y1"] = by2   # ยืดมาถึงขอบล่างของช่องเปิด
+
+        # ── RIGHT edge: V-wall ที่ x≈bx2 ────────────────────────────────
+        if not _v_present(bx2, by, by2):
+            best, best_d = None, reach
+            for v in v_walls:
+                if abs(v["x"] - bx2) > snap * 3:
+                    continue
+                d = by - v["y2"]
+                if 0 < d < best_d and _dark(v["x"], v["y2"]):
+                    best_d = d; best = ("y2→by", v)
+                d = v["y1"] - by2
+                if 0 < d < best_d and _dark(v["x"], v["y1"]):
+                    best_d = d; best = ("y1→by2", v)
+            if best:
+                kind, v = best
+                if kind == "y2→by":
+                    v["y2"] = by
+                else:
+                    v["y1"] = by2
+
+    return h_walls, v_walls
+
+
+def _force_connect_broken(h_walls: list, v_walls: list, cfg: dict, image=None) -> tuple:
+    """
+    เชื่อมปลายผนังที่ยังลอยอยู่โดยไม่มีผนังตั้งฉากรองรับ
+
+    การเปลี่ยนแปลงจากเวอร์ชันก่อน
+    ────────────────────────────────
+    1. force_snap: snap*3 → snap*2  ลดระยะเพื่อกัน false-wall
+    2. _gap_has_dark:
+       - thresh: 155 → 120  เข้มขึ้น (ต้องมืดจริงๆ ไม่ใช่แค่เทาอ่อน)
+       - n_samples: 5 → 9   สุ่มจุดเพิ่มเพื่อความแม่นยำ
+       - min_hit: n//2 → 60% ของจุดทั้งหมดต้องมืด (จากเดิมแค่ครึ่ง)
+       - เพิ่มการตรวจ ±1px รอบจุดตัวอย่าง เพราะเส้นผนังบางแปลนกว้างแค่ 1px
+    3. ห้ามสร้างผนังเชื่อมถ้าช่องว่างทับ bbox ประตู/หน้าต่าง
+       (ย้าย doors/windows เข้ามาเป็น parameter ใหม่)
+    4. ส่วนสร้างผนังใหม่ (new_h, new_v): เพิ่มเงื่อนไขว่าปลายผนังที่จะเชื่อม
+       ต้องอยู่บนแนว axis เดียวกันจริงๆ (ไม่ใช่แค่อยู่ในระยะ force_snap)
+    """
+    snap       = cfg["snap"]
+    force_snap = snap * 2.0   # ลดจาก 3x → 2x
+
     gray_img = None
     if image is not None:
         try:
             gray_img = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
         except Exception:
-            gray_img = image
+            gray_img = None
 
+    # ── helper: ตรวจว่าช่องว่างมีเส้นมืดในภาพจริงไหม ──────────────────────
+    def _gap_has_dark(
+        x1n: float, y1n: float, x2n: float, y2n: float,
+        n_samples: int = 9,
+        thresh: int = 120,      # เข้มขึ้นจาก 155 → 120
+        min_ratio: float = 0.6, # ต้องผ่าน 60% ของจุดทั้งหมด
+    ) -> bool:
+        if gray_img is None:
+            return True   # ถ้าไม่มีภาพ → ให้ผ่าน (conservative)
+        hi, wi = gray_img.shape[:2]
+        dark = 0
+        for i in range(n_samples):
+            t = i / max(n_samples - 1, 1)
+            cx = int(np.clip((x1n + (x2n - x1n) * t) * wi, 0, wi - 1))
+            cy = int(np.clip((y1n + (y2n - y1n) * t) * hi, 0, hi - 1))
+            # ตรวจ ±1px รอบจุด เพราะเส้นในแปลนบางบางแค่ 1px
+            hit = False
+            for dy in range(-1, 2):
+                for dx in range(-1, 2):
+                    px_ = int(np.clip(cx + dx, 0, wi - 1))
+                    py_ = int(np.clip(cy + dy, 0, hi - 1))
+                    if int(gray_img[py_, px_]) < thresh:
+                        hit = True
+                        break
+                if hit:
+                    break
+            if hit:
+                dark += 1
+        return (dark / n_samples) >= min_ratio
+
+    # ── Phase 1: ยืดปลายผนังที่มีอยู่แล้ว (ไม่สร้างใหม่) ──────────────────
+    # ทำซ้ำหลายรอบเพราะการยืดรอบหนึ่งอาจทำให้รอบต่อไปยืดได้เพิ่ม
+    changed = True
+    rounds  = 0
     while changed and rounds < 3:
         changed = False
         rounds += 1
 
-        # ── ผนังนอน: ยืดปลายซ้าย/ขวาหาผนังตั้ง ──────────────────────
         for seg in h_walls:
             y = seg["y"]
 
-            # ปลายซ้าย
+            # ปลายซ้าย (x1) — หาผนังตั้งที่อยู่ทางซ้าย ในระยะ force_snap
             if not _h_anchored(seg["x1"], y, v_walls, snap):
                 candidates = [
                     v for v in v_walls
-                    if v["x"] <= seg["x1"] + force_snap
-                    and v["y1"] - force_snap <= y <= v["y2"] + force_snap
+                    if v["x"] < seg["x1"]                        # ต้องอยู่ซ้ายจริงๆ
+                    and seg["x1"] - v["x"] <= force_snap          # ในระยะ
+                    and v["y1"] - snap <= y <= v["y2"] + snap     # ผ่านแนว y นี้
                 ]
                 if candidates:
-                    hit = max(candidates, key=lambda v: v["x"])
-                    if abs(hit["x"] - seg["x1"]) <= force_snap:
+                    hit = max(candidates, key=lambda v: v["x"])   # ใกล้ที่สุด
+                    gap_dist = seg["x1"] - hit["x"]
+                    if 0 <= gap_dist <= snap * 0.5:
                         seg["x1"] = hit["x"]
-                        hit["y1"] = min(hit["y1"], y)
-                        hit["y2"] = max(hit["y2"], y)
+                        if y < hit["y1"] - 1e-6:
+                            hit["y1"] = y
+                        elif y > hit["y2"] + 1e-6:
+                            hit["y2"] = y
+                        changed = True
+                    elif gap_dist > 0 and _gap_has_dark(hit["x"], y, seg["x1"], y):
+                        seg["x1"] = hit["x"]
+                        if y < hit["y1"] - 1e-6:
+                            hit["y1"] = y
+                        elif y > hit["y2"] + 1e-6:
+                            hit["y2"] = y
                         changed = True
 
-            # ปลายขวา
+            # ปลายขวา (x2)
             if not _h_anchored(seg["x2"], y, v_walls, snap):
                 candidates = [
                     v for v in v_walls
-                    if v["x"] >= seg["x2"] - force_snap
-                    and v["y1"] - force_snap <= y <= v["y2"] + force_snap
+                    if v["x"] > seg["x2"]
+                    and v["x"] - seg["x2"] <= force_snap
+                    and v["y1"] - snap <= y <= v["y2"] + snap
                 ]
                 if candidates:
                     hit = min(candidates, key=lambda v: v["x"])
-                    if abs(hit["x"] - seg["x2"]) <= force_snap:
+                    gap_dist = hit["x"] - seg["x2"]
+                    if 0 <= gap_dist <= snap * 0.5:
                         seg["x2"] = hit["x"]
-                        hit["y1"] = min(hit["y1"], y)
-                        hit["y2"] = max(hit["y2"], y)
+                        if y < hit["y1"] - 1e-6:
+                            hit["y1"] = y
+                        elif y > hit["y2"] + 1e-6:
+                            hit["y2"] = y
+                        changed = True
+                    elif gap_dist > 0 and _gap_has_dark(seg["x2"], y, hit["x"], y):
+                        seg["x2"] = hit["x"]
+                        if y < hit["y1"] - 1e-6:
+                            hit["y1"] = y
+                        elif y > hit["y2"] + 1e-6:
+                            hit["y2"] = y
                         changed = True
 
-        # ── ผนังตั้ง: ยืดปลายบน/ล่างหาผนังนอน ──────────────────────
         for seg in v_walls:
             x = seg["x"]
 
-            # ปลายบน
+            # ปลายบน (y1)
             if not _v_anchored(x, seg["y1"], h_walls, snap):
                 candidates = [
                     h for h in h_walls
-                    if h["y"] <= seg["y1"] + force_snap
-                    and h["x1"] - force_snap <= x <= h["x2"] + force_snap
+                    if h["y"] < seg["y1"]
+                    and seg["y1"] - h["y"] <= force_snap
+                    and h["x1"] - snap <= x <= h["x2"] + snap
                 ]
                 if candidates:
                     hit = max(candidates, key=lambda h: h["y"])
-                    if abs(hit["y"] - seg["y1"]) <= force_snap:
+                    gap_dist = seg["y1"] - hit["y"]
+                    if 0 <= gap_dist <= snap * 0.5:
                         seg["y1"] = hit["y"]
-                        hit["x1"] = min(hit["x1"], x)
-                        hit["x2"] = max(hit["x2"], x)
+                        if x < hit["x1"] - 1e-6:
+                            hit["x1"] = x
+                        elif x > hit["x2"] + 1e-6:
+                            hit["x2"] = x
+                        changed = True
+                    elif gap_dist > 0 and _gap_has_dark(x, hit["y"], x, seg["y1"]):
+                        seg["y1"] = hit["y"]
+                        if x < hit["x1"] - 1e-6:
+                            hit["x1"] = x
+                        elif x > hit["x2"] + 1e-6:
+                            hit["x2"] = x
                         changed = True
 
-            # ปลายล่าง
+            # ปลายล่าง (y2)
             if not _v_anchored(x, seg["y2"], h_walls, snap):
                 candidates = [
                     h for h in h_walls
-                    if h["y"] >= seg["y2"] - force_snap
-                    and h["x1"] - force_snap <= x <= h["x2"] + force_snap
+                    if h["y"] > seg["y2"]
+                    and h["y"] - seg["y2"] <= force_snap
+                    and h["x1"] - snap <= x <= h["x2"] + snap
                 ]
                 if candidates:
                     hit = min(candidates, key=lambda h: h["y"])
-                    if abs(hit["y"] - seg["y2"]) <= force_snap:
+                    gap_dist = hit["y"] - seg["y2"]
+                    if 0 <= gap_dist <= snap * 0.5:
                         seg["y2"] = hit["y"]
-                        hit["x1"] = min(hit["x1"], x)
-                        hit["x2"] = max(hit["x2"], x)
+                        if x < hit["x1"] - 1e-6:
+                            hit["x1"] = x
+                        elif x > hit["x2"] + 1e-6:
+                            hit["x2"] = x
+                        changed = True
+                    elif gap_dist > 0 and _gap_has_dark(x, seg["y2"], x, hit["y"]):
+                        seg["y2"] = hit["y"]
+                        if x < hit["x1"] - 1e-6:
+                            hit["x1"] = x
+                        elif x > hit["x2"] + 1e-6:
+                            hit["x2"] = x
                         changed = True
 
+    # ── Phase 2: สร้างผนังเชื่อมช่องว่างที่ยังเหลืออยู่ ──────────────────
+    # เข้มกว่า Phase 1: ต้องมี dark pixel ยืนยัน และ gap ต้องน้อยกว่า force_snap
+    # เพิ่มเงื่อนไข: ปลายผนังต้องอยู่บน axis เดียวกันกับผนังตรงข้ามพอดี
+    #   (ไม่ใช่แค่ "อยู่ในระยะ" ซึ่งทำให้สร้างผนังเฉียงผิดๆ ได้)
     new_h, new_v = [], []
 
+    # V-wall ที่ปลายบน/ล่างยังไม่ชน H-wall
     for seg in v_walls:
         x = seg["x"]
 
-        # 1. เคสเพิ่มผนังแนวตั้ง วิ่งหาแนวตั้งด้านบน
+        # ปลายบน: หา H-wall ที่อยู่เหนือขึ้นไป และ x อยู่ในช่วง [x1, x2]
         if not _v_anchored(x, seg["y1"], h_walls, snap * 2):
-            above = [h for h in h_walls
-                     if h["y"] < seg["y1"]
-                     and h["x1"] - force_snap <= x <= h["x2"] + force_snap]
+            above = [
+                h for h in h_walls
+                if h["y"] < seg["y1"]
+                and seg["y1"] - h["y"] <= force_snap
+                and h["x1"] - snap <= x <= h["x2"] + snap   # x ต้องอยู่ในช่วงผนังนอน
+            ]
             if above:
                 hit = max(above, key=lambda h: h["y"])
                 gap = seg["y1"] - hit["y"]
-                if 0 < gap <= force_snap:
-                    # 👉 เพิ่มเติม: ตรวจสอบเมทริกซ์พิกเซลภาพจริงบนกึ่งกลางช่องว่างแนวตั้ง
-                    if gray_img is not None:
-                        hi, wi = gray_img.shape[:2]
-                        mid_px = int(np.clip(x * wi, 0, wi - 1))
-                        mid_py = int(np.clip(((hit["y"] + seg["y1"]) / 2) * hi, 0, hi - 1))
-                        # ถ้าพื้นผิวสว่างเกินไป (> 180 คือค่อนไปทางสีขาวบริสุทธิ์) แปลว่าไม่มีเส้นพิมพ์เขียวอยู่จริง
-                        if gray_img[mid_py, mid_px] > 180:
-                            continue # ข้าม ไม่สร้างผนังมั่ว
-
+                is_struct = seg.get("is_structural") or hit.get("is_structural")
+                if 0 < gap <= force_snap and (is_struct or gap <= 0.018) and _gap_has_dark(x, hit["y"], x, seg["y1"]):
                     new_v.append({
                         "x": float(x),
                         "y1": float(hit["y"]),
@@ -3030,21 +4205,19 @@ def _force_connect_broken(h_walls: list, v_walls: list, cfg: dict, image=None) -
                         "synthetic": True,
                     })
 
+        # ปลายล่าง
         if not _v_anchored(x, seg["y2"], h_walls, snap * 2):
-            below = [h for h in h_walls
-                     if h["y"] > seg["y2"]
-                     and h["x1"] - force_snap <= x <= h["x2"] + force_snap]
+            below = [
+                h for h in h_walls
+                if h["y"] > seg["y2"]
+                and h["y"] - seg["y2"] <= force_snap
+                and h["x1"] - snap <= x <= h["x2"] + snap
+            ]
             if below:
                 hit = min(below, key=lambda h: h["y"])
                 gap = hit["y"] - seg["y2"]
-                if 0 < gap <= force_snap:
-                    if gray_img is not None:
-                        hi, wi = gray_img.shape[:2]
-                        mid_px = int(np.clip(x * wi, 0, wi - 1))
-                        mid_py = int(np.clip(((seg["y2"] + hit["y"]) / 2) * hi, 0, hi - 1))
-                        if gray_img[mid_py, mid_px] > 180:
-                            continue
-
+                is_struct = seg.get("is_structural") or hit.get("is_structural")
+                if 0 < gap <= force_snap and (is_struct or gap <= 0.018) and _gap_has_dark(x, seg["y2"], x, hit["y"]):
                     new_v.append({
                         "x": float(x),
                         "y1": float(seg["y2"]),
@@ -3054,24 +4227,23 @@ def _force_connect_broken(h_walls: list, v_walls: list, cfg: dict, image=None) -
                         "synthetic": True,
                     })
 
+    # H-wall ที่ปลายซ้าย/ขวายังไม่ชน V-wall
     for seg in h_walls:
         y = seg["y"]
 
+        # ปลายซ้าย
         if not _h_anchored(seg["x1"], y, v_walls, snap * 2):
-            left_v = [v for v in v_walls
-                      if v["x"] < seg["x1"]
-                      and v["y1"] - force_snap <= y <= v["y2"] + force_snap]
+            left_v = [
+                v for v in v_walls
+                if v["x"] < seg["x1"]
+                and seg["x1"] - v["x"] <= force_snap
+                and v["y1"] - snap <= y <= v["y2"] + snap   # y ต้องอยู่ในช่วงผนังตั้ง
+            ]
             if left_v:
                 hit = max(left_v, key=lambda v: v["x"])
                 gap = seg["x1"] - hit["x"]
-                if 0 < gap <= force_snap:
-                    if gray_img is not None:
-                        hi, wi = gray_img.shape[:2]
-                        mid_px = int(np.clip(((hit["x"] + seg["x1"]) / 2) * wi, 0, wi - 1))
-                        mid_py = int(np.clip(y * hi, 0, hi - 1))
-                        if gray_img[mid_py, mid_px] > 180:
-                            continue
-
+                is_struct = seg.get("is_structural") or hit.get("is_structural")
+                if 0 < gap <= force_snap and (is_struct or gap <= 0.018) and _gap_has_dark(hit["x"], y, seg["x1"], y):
                     new_h.append({
                         "x1": float(hit["x"]),
                         "x2": float(seg["x1"]),
@@ -3080,22 +4252,20 @@ def _force_connect_broken(h_walls: list, v_walls: list, cfg: dict, image=None) -
                         "source": "force_connect",
                         "synthetic": True,
                     })
-                    
+
+        # ปลายขวา
         if not _h_anchored(seg["x2"], y, v_walls, snap * 2):
-            right_v = [v for v in v_walls
-                       if v["x"] > seg["x2"]
-                       and v["y1"] - force_snap <= y <= v["y2"] + force_snap]
+            right_v = [
+                v for v in v_walls
+                if v["x"] > seg["x2"]
+                and v["x"] - seg["x2"] <= force_snap
+                and v["y1"] - snap <= y <= v["y2"] + snap
+            ]
             if right_v:
                 hit = min(right_v, key=lambda v: v["x"])
                 gap = hit["x"] - seg["x2"]
-                if 0 < gap <= force_snap:
-                    if gray_img is not None:
-                        hi, wi = gray_img.shape[:2]
-                        mid_px = int(np.clip(((seg["x2"] + hit["x"]) / 2) * wi, 0, wi - 1))
-                        mid_py = int(np.clip(y * hi, 0, hi - 1))
-                        if gray_img[mid_py, mid_px] > 180:
-                            continue
-
+                is_struct = seg.get("is_structural") or hit.get("is_structural")
+                if 0 < gap <= force_snap and (is_struct or gap <= 0.018) and _gap_has_dark(seg["x2"], y, hit["x"], y):
                     new_h.append({
                         "x1": float(seg["x2"]),
                         "x2": float(hit["x"]),
@@ -3106,11 +4276,156 @@ def _force_connect_broken(h_walls: list, v_walls: list, cfg: dict, image=None) -
                     })
 
     if new_h or new_v:
+        added_h = len(new_h)
+        added_v = len(new_v)
         h_walls = h_walls + new_h
         v_walls = v_walls + new_v
         h_walls, v_walls = _snap_merge(h_walls, v_walls, cfg)
+        print(f"[force_connect] added h={added_h} v={added_v} "
+              f"(thresh=120, min_ratio=0.6, force_snap={force_snap:.3f})")
 
     return h_walls, v_walls
+
+
+def _extend_walls_at_junctions(
+    h_walls: list, v_walls: list, cfg: dict, image=None
+) -> tuple:
+    """
+    ยืด H-wall ที่มีอยู่แล้วให้ครอบ V-wall endpoint ที่ยังลอยอยู่ (และกลับกัน)
+    แก้กรณีที่ YOLO ตรวจจับผนังได้เพียงบางส่วน แต่ส่วนที่ขาดหายมีเส้นมืดยืนยันในภาพ
+
+    EXT_STRUCTURAL = 0.20  ← max extension สำหรับผนังโครงบ้าน
+    EXT_INTERNAL   = 0.16  ← max extension สำหรับผนังภายใน (pixel-verified)
+    """
+    snap = cfg["snap"]
+    EXT_STRUCTURAL = 0.20
+    EXT_INTERNAL   = 0.16
+    DARK_THRESH    = 115
+    MIN_RATIO      = 0.45
+    N_SAMPLES      = 12
+
+    gray = None
+    if image is not None:
+        try:
+            gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+        except Exception:
+            pass
+
+    def _line_dark(x1n: float, y1n: float, x2n: float, y2n: float) -> bool:
+        if gray is None:
+            return True
+        hi, wi = gray.shape[:2]
+        dark = 0
+        for i in range(N_SAMPLES):
+            t = i / max(N_SAMPLES - 1, 1)
+            px = int(np.clip((x1n + (x2n - x1n) * t) * wi, 0, wi - 1))
+            py = int(np.clip((y1n + (y2n - y1n) * t) * hi, 0, hi - 1))
+            hit = False
+            for dy in range(-1, 2):
+                for dx in range(-1, 2):
+                    ppx = int(np.clip(px + dx, 0, wi - 1))
+                    ppy = int(np.clip(py + dy, 0, hi - 1))
+                    if gray[ppy, ppx] < DARK_THRESH:
+                        hit = True
+                        break
+                if hit:
+                    break
+            if hit:
+                dark += 1
+        return (dark / N_SAMPLES) >= MIN_RATIO
+
+    changed = True
+    rounds   = 0
+    total_ext = 0
+
+    while changed and rounds < 4:
+        changed = False
+        rounds += 1
+
+        # ── ยืด H-wall ให้ครอบ V endpoint ที่ลอยอยู่ ──────────────────────
+        for v in v_walls:
+            x          = v["x"]
+            is_v_struct = v.get("is_structural", False)
+            for ep_idx, y in enumerate([v["y1"], v["y2"]]):
+                if _v_anchored(x, y, h_walls, snap):
+                    continue
+                # หา H-wall ที่ y ใกล้กัน (เรียงจากใกล้สุด)
+                near_h = sorted(
+                    [h for h in h_walls if abs(h["y"] - y) <= snap],
+                    key=lambda h: abs(h["y"] - y),
+                )
+                for h in near_h:
+                    is_struct = is_v_struct or h.get("is_structural", False)
+                    max_ext   = EXT_STRUCTURAL if is_struct else EXT_INTERNAL
+                    if x < h["x1"] - snap:
+                        gap = h["x1"] - x
+                        if gap <= max_ext and _line_dark(x, h["y"], h["x1"], h["y"]):
+                            print(f"[extend_junc] H y={h['y']:.3f} x1 {h['x1']:.3f}→{x:.3f} (gap={gap:.3f})")
+                            h["x1"] = x
+                            # snap V endpoint ให้ชนกับ H พอดี
+                            if ep_idx == 0:
+                                v["y1"] = h["y"]
+                            else:
+                                v["y2"] = h["y"]
+                            changed   = True
+                            total_ext += 1
+                            break
+                    elif x > h["x2"] + snap:
+                        gap = x - h["x2"]
+                        if gap <= max_ext and _line_dark(h["x2"], h["y"], x, h["y"]):
+                            print(f"[extend_junc] H y={h['y']:.3f} x2 {h['x2']:.3f}→{x:.3f} (gap={gap:.3f})")
+                            h["x2"] = x
+                            if ep_idx == 0:
+                                v["y1"] = h["y"]
+                            else:
+                                v["y2"] = h["y"]
+                            changed   = True
+                            total_ext += 1
+                            break
+
+        # ── ยืด V-wall ให้ครอบ H endpoint ที่ลอยอยู่ ──────────────────────
+        for h in h_walls:
+            y          = h["y"]
+            is_h_struct = h.get("is_structural", False)
+            for ep_idx, x in enumerate([h["x1"], h["x2"]]):
+                if _h_anchored(x, y, v_walls, snap):
+                    continue
+                near_v = sorted(
+                    [v for v in v_walls if abs(v["x"] - x) <= snap],
+                    key=lambda v: abs(v["x"] - x),
+                )
+                for v in near_v:
+                    is_struct = is_h_struct or v.get("is_structural", False)
+                    max_ext   = EXT_STRUCTURAL if is_struct else EXT_INTERNAL
+                    if y < v["y1"] - snap:
+                        gap = v["y1"] - y
+                        if gap <= max_ext and _line_dark(v["x"], y, v["x"], v["y1"]):
+                            print(f"[extend_junc] V x={v['x']:.3f} y1 {v['y1']:.3f}→{y:.3f} (gap={gap:.3f})")
+                            v["y1"] = y
+                            if ep_idx == 0:
+                                h["x1"] = v["x"]
+                            else:
+                                h["x2"] = v["x"]
+                            changed   = True
+                            total_ext += 1
+                            break
+                    elif y > v["y2"] + snap:
+                        gap = y - v["y2"]
+                        if gap <= max_ext and _line_dark(v["x"], v["y2"], v["x"], y):
+                            print(f"[extend_junc] V x={v['x']:.3f} y2 {v['y2']:.3f}→{y:.3f} (gap={gap:.3f})")
+                            v["y2"] = y
+                            if ep_idx == 0:
+                                h["x1"] = v["x"]
+                            else:
+                                h["x2"] = v["x"]
+                            changed   = True
+                            total_ext += 1
+                            break
+
+    if total_ext > 0:
+        print(f"[extend_junction] total {total_ext} ext in {rounds} round(s)")
+    return h_walls, v_walls
+
 
 def _rooms_by_raster_cut(image, room_masks, h_walls, v_walls,
                           boundary, doors, cfg, ppm=None) -> list:
@@ -3201,38 +4516,67 @@ def _rooms_by_raster_cut(image, room_masks, h_walls, v_walls,
         return []
 
     # Step 6: extract, dilate (recover wall area), clip, polygonize
-    min_px = max(10, int(h_img * w_img * MIN_ROOM_AREA * 0.5))    
+    # Step 6: extract, dilate (recover wall area), clip, polygonize
+    min_px = 50   
     all_cells = []
     for lid in range(1, n_labels):
         comp = (labels_img == lid).astype(np.uint8) * 255
-        if int(comp.sum()) // 255 < min_px:
+        px_count = int(comp.sum()) // 255
+        print(f"[step6] lid={lid} pixels={px_count} min_px={min_px}")
+        if px_count < min_px:
+            print(f"[step6] lid={lid} → dropped early: pixels {px_count} < min_px")
             continue
-        # dilate back to reclaim wall-zone pixels
-        dil_px = max(2, wall_px // 3)
+
+        # ใช้ max(1, ...) เพื่อไม่ให้ dilate บวมหนาจนเกินไปสำหรับส่วนประกอบขนาดเล็ก
+        dil_px = max(1, wall_px // 6)
         k_dil = cv2.getStructuringElement(
             cv2.MORPH_ELLIPSE, (dil_px * 2 + 1, dil_px * 2 + 1)
         )
         comp = cv2.bitwise_and(cv2.dilate(comp, k_dil), mask_img)
         cnts, _ = cv2.findContours(comp, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         if not cnts:
+            print(f"[step6] lid={lid} → no contours after dilate")
             continue
+            
         cnt = max(cnts, key=cv2.contourArea)
-        if cv2.contourArea(cnt) < min_px:
+        cnt_area = cv2.contourArea(cnt)
+        if cnt_area < min_px:
+            print(f"[step6] lid={lid} → contour area {cnt_area:.0f} < min_px")
             continue
+            
         norm = [(_clip(float(x) / w_img), _clip(float(y) / h_img)) for x, y in cnt[:, 0]]
         poly = _clean_poly(Polygon(norm))
         if poly is None:
+            print(f"[step6] lid={lid} → _clean_poly returned None")
             continue
+            
         poly = _largest_poly(poly.simplify(0.002, preserve_topology=True))
-        if poly is None or poly.area < MIN_ROOM_AREA:
+        if poly is None:
+            print(f"[step6] lid={lid} → simplify returned None")
             continue
+            
+        print(f"[step6] lid={lid} → poly.area={poly.area:.5f} MIN_ROOM_AREA*0.08={MIN_ROOM_AREA * 0.08:.5f}")
+        if poly.area < MIN_ROOM_AREA * 0.08:
+            print(f"[step6] lid={lid} → dropped by area check 1")
+            continue
+            
         try:
             poly = _largest_poly(poly.intersection(boundary))
-        except Exception:
+        except Exception as e:
+            print(f"[step6] lid={lid} → intersection failed: {e}")
             continue
-        if poly is None or poly.area < MIN_ROOM_AREA:
+            
+        if poly is None:
+            print(f"[step6] lid={lid} → intersection returned None")
             continue
+            
+        print(f"[step6] lid={lid} → after intersection area={poly.area:.5f}")
+        if poly.area < MIN_ROOM_AREA * 0.08:
+            print(f"[step6] lid={lid} → dropped by area check 2")
+            continue
+            
         all_cells.append(poly)
+        print(f"[step6] lid={lid} → ✅ added to all_cells")
 
     if not all_cells:
         return []
@@ -3246,7 +4590,12 @@ def _rooms_by_raster_cut(image, room_masks, h_walls, v_walls,
                 diff = _largest_poly(poly.difference(occupied.buffer(1e-6)))
             except Exception:
                 diff = None
-            if diff is None or diff.area < poly.area * 0.15:
+                
+            ratio = (diff.area / poly.area) if diff else 0
+            print(f"[deoverlap] area={poly.area:.5f} diff_ratio={ratio:.3f} "
+                    f"kept={diff is not None and diff.area >= poly.area * 0.05:.5f}")
+        
+            if diff is None or diff.area < poly.area * 0.03:
                 continue
             poly = diff
         final_cells.append(poly)
@@ -3267,9 +4616,16 @@ def _rooms_by_raster_cut(image, room_masks, h_walls, v_walls,
     return rooms
 
 
-def _raster_rooms_valid(rooms: list, room_masks: list, boundary: Polygon) -> bool:
+def _raster_rooms_valid(rooms, room_masks, boundary):
     if not rooms:
         return False
+
+    # ลด threshold จาก 0.80 → 0.55 เพราะ raster-cut อาจรวมห้องเล็กบางห้อง
+    min_expected = max(2, int(len(room_masks) * 0.55))
+    if len(rooms) < min_expected:
+        print(f"❌ raster_cut: {len(rooms)} rooms < expected {min_expected}")
+        return False
+
     try:
         covered = unary_union([
             Polygon([(p["x"], p["y"]) for p in r["polygon"]])
@@ -3277,8 +4633,8 @@ def _raster_rooms_valid(rooms: list, room_masks: list, boundary: Polygon) -> boo
         ])
         mask_area = unary_union([m["polygon"] for m in room_masks]).area
         ratio = covered.area / max(mask_area, 1e-6)
-        if ratio < 0.25:
-            print(f"❌ raster_cut: coverage {ratio:.2f} < 0.35")
+        if ratio < 0.25: 
+            print(f"❌ raster_cut: coverage {ratio:.2f} < 0.25")
             return False
         print(f"✅ raster_cut: {len(rooms)} rooms, coverage {ratio:.2f}")
     except Exception:
@@ -3327,7 +4683,7 @@ def _rooms_from_masks(room_masks, boundary, h_walls=None,
         if poly is None:
             continue
 
-        if poly.area < MIN_ROOM_AREA:
+        if poly.area < MIN_ROOM_AREA * 0.08:
             continue
 
         clipped.append((mask, poly))
@@ -3370,7 +4726,8 @@ def _rooms_from_masks(room_masks, boundary, h_walls=None,
             counters[label],
             poly,
             ppm=ppm,
-            img_shape=img_shape
+            img_shape=img_shape,
+            wall_thickness=cfg.get("thickness", 0.0) if cfg else 0.0,
         )
 
         if room:
@@ -3386,33 +4743,55 @@ def _rooms_from_masks(room_masks, boundary, h_walls=None,
     return rooms
 
 
-def _make_room(label, index, poly, ppm=None, img_shape=None) -> Optional[dict]:
-    pts = _poly_pts(poly)
-    if not pts:
+def _make_room(label, index, poly, ppm=None, img_shape=None,
+               wall_thickness: float = 0.0) -> Optional[dict]:
+    """
+    สร้าง room dict จาก polygon ที่ได้จาก polygonize
+
+    wall_thickness > 0  →  คำนวณ NIA (Net Internal Area) โดย negative buffer
+      polygon     = NIA polygon (หดเข้าในครึ่งความหนาผนัง) → ใช้วาง tile grid
+      wallPolygon = outer polygon เต็ม (รวมส่วนกำแพง) → ใช้สร้าง 3D
+    """
+    outer_pts = _poly_pts(poly)
+    if not outer_pts:
         return None
-    center = poly.centroid
-    slug = re.sub(r"[^a-z0-9]+", "_", label.strip().lower()).strip("_") or "room"
+
+    # ─── NIA: หด inward ครึ่งความหนาผนัง ───────────────────────────────────
+    nia_poly = poly
+    if wall_thickness > 0:
+        try:
+            shrunk = poly.buffer(-wall_thickness / 2, join_style=2)
+            nia = _largest_poly(shrunk)
+            # ยอมรับ NIA ก็ต่อเมื่อพื้นที่ยังเหลือ >= 5% ของ outer
+            if nia and not nia.is_empty and nia.area >= poly.area * 0.05:
+                nia_poly = nia
+        except Exception:
+            pass
+
+    nia_pts = _poly_pts(nia_poly) or outer_pts
+    center  = nia_poly.centroid if not nia_poly.is_empty else poly.centroid
+    slug    = re.sub(r"[^a-z0-9]+", "_", label.strip().lower()).strip("_") or "room"
 
     area_sqm = None
     if ppm and img_shape:
         H, W = img_shape[:2]
-        area_px2 = poly.area * W * H
+        area_px2 = nia_poly.area * W * H
         area_sqm = round(area_px2 / (ppm ** 2), 2)
 
     return {
         "id": f"room_{slug}_{index}",
         "name": label,
         "label": label,
-        "polygon": pts,
-        "wallPolygon": pts,
+        "polygon":     nia_pts,    # NIA — สำหรับ tile grid / area คำนวณ
+        "wallPolygon": outer_pts,  # outer — สำหรับ 3D walls
         "center": {"x": float(center.x), "y": float(center.y)},
         "bbox": _bbox(poly),
-        "areaNorm": float(poly.area),
-        "areaSqm": area_sqm,   # ← None ถ้ายังไม่ calibrate, ตัวเลขจริงถ้า calibrate แล้ว
+        "areaNorm": float(nia_poly.area),
+        "areaSqm":  area_sqm,
     }
 
 
-def _deoverlap(rooms, boundary) -> list:
+def _deoverlap(rooms, boundary, wall_thickness: float = 0.0) -> list:
     cleaned, occupied = [], GeometryCollection()
     for room in sorted(rooms, key=lambda item: -item.get("areaNorm", 0)):
         outer_pts = room.get("wallPolygon") or room.get("polygon") or []
@@ -3429,14 +4808,26 @@ def _deoverlap(rooms, boundary) -> list:
         if not outer_new_pts:
             continue
 
-        # ปิด inner buffer ไว้ก่อน — ใช้ outer polygon ตรงๆ
+        # คำนวณ NIA จาก outer polygon ที่ clip แล้ว
+        nia_pts = outer_new_pts
+        nia_area = outer_poly.area
+        if wall_thickness > 0:
+            try:
+                shrunk = outer_poly.buffer(-wall_thickness / 2, join_style=2)
+                nia = _largest_poly(shrunk)
+                if nia and not nia.is_empty and nia.area >= outer_poly.area * 0.05:
+                    nia_pts = _poly_pts(nia) or outer_new_pts
+                    nia_area = nia.area
+            except Exception:
+                pass
+
         center = outer_poly.centroid
         room.update({
-            "polygon": outer_new_pts,
-            "wallPolygon": outer_new_pts,
+            "polygon":     nia_pts,        # NIA — tile grid
+            "wallPolygon": outer_new_pts,  # outer — 3D walls
             "center": {"x": float(center.x), "y": float(center.y)},
             "bbox": _bbox(outer_poly),
-            "areaNorm": float(outer_poly.area),
+            "areaNorm": nia_area,
         })
         cleaned.append(room)
         occupied = unary_union([occupied, outer_poly]) if not occupied.is_empty else outer_poly
