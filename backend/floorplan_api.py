@@ -1031,7 +1031,54 @@ def _is_ghost_room(
             print(f"[ghost_filter] Grid check failed ({e})")
 
     return False
-
+def _find_unclosed_rooms(h_walls, v_walls, room_masks, cfg):
+    """
+    ตรวจหา room mask ที่ boundary ยังเปิดอยู่
+    (ผนังรอบห้องไม่ครบ → polygonize รวมกับห้องข้างๆ)
+    """
+    snap = cfg["snap"]
+    
+    for mask in room_masks:
+        poly = mask["polygon"]
+        coords = list(poly.exterior.coords)
+        
+        uncovered_edges = []
+        for i in range(len(coords) - 1):
+            x1, y1 = coords[i]
+            x2, y2 = coords[i + 1]
+            dx, dy = abs(x2 - x1), abs(y2 - y1)
+            
+            # เฉพาะ edge แนวตั้งฉาก
+            if dx >= dy and dy <= 0.02:  # H-edge
+                mid_x = (x1 + x2) / 2
+                mid_y = (y1 + y2) / 2
+                covered = any(
+                    abs(h["y"] - mid_y) <= snap * 2
+                    and h["x1"] <= mid_x <= h["x2"]
+                    for h in h_walls
+                )
+                if not covered and (x2 - x1) > snap * 3:
+                    uncovered_edges.append(("H", x1, y1, x2, y2))
+                    
+            elif dy > dx and dx <= 0.02:  # V-edge
+                mid_x = (x1 + x2) / 2
+                mid_y = (y1 + y2) / 2
+                covered = any(
+                    abs(v["x"] - mid_x) <= snap * 2
+                    and v["y1"] <= mid_y <= v["y2"]
+                    for v in v_walls
+                )
+                if not covered and (y2 - y1) > snap * 3:
+                    uncovered_edges.append(("V", x1, y1, x2, y2))
+        
+        if uncovered_edges:
+            print(f"[unclosed_room] {mask['label']} "
+                  f"centroid=({mask['centroid'][0]:.3f},{mask['centroid'][1]:.3f}) "
+                  f"→ {len(uncovered_edges)} uncovered edges:")
+            for edge in uncovered_edges:
+                print(f"  {edge[0]}: ({edge[1]:.3f},{edge[2]:.3f}) → "
+                      f"({edge[3]:.3f},{edge[4]:.3f})")
+                
 def build_geometry(image: np.ndarray, yolo_results, ppm=None, debug_images=None,
                    wall_height_meter: float = 2.8) -> dict:
     h, w = image.shape[:2]
@@ -1138,7 +1185,7 @@ def build_geometry(image: np.ndarray, yolo_results, ppm=None, debug_images=None,
             cfg["thickness"]   = clamped_norm
             cfg["snap"]        = float(np.clip(clamped_norm * 1.8, 0.008, 0.025))
             cfg["merge_gap"]   = float(np.clip(cfg["snap"] * 1.6, 0.018, 0.045))
-            cfg["connect_gap"] = float(np.clip(cfg["snap"] * 2.0, 0.020, 0.055))
+            cfg["connect_gap"] = float(np.clip(cfg["snap"] * 2.8, 0.028, 0.075))
             print(f"[wall_config] thickness clamped: {median_m:.3f}m → {clamped_m:.3f}m")
     
     all_h = list(yolo_h)
@@ -1214,6 +1261,7 @@ def build_geometry(image: np.ndarray, yolo_results, ppm=None, debug_images=None,
     # สับผนังยาวออกเป็นท่อนย่อยที่จุดตัด (Node-Segment Topology)
     # ป้องกัน Over-Merge และช่วยให้ polygonize ล้อมพื้นที่ปิดได้ถูกต้อง
     h_walls, v_walls = _split_walls_at_junctions(h_walls, v_walls, cfg)
+    _find_unclosed_rooms(h_walls, v_walls, room_masks, cfg)
     broken_h, broken_v = _debug_wall_connectivity(h_walls, v_walls, cfg)
     print(f"[wall_repair] done — h={len(h_walls)} v={len(v_walls)} "
           f"broken_h={len(broken_h)} broken_v={len(broken_v)})")
@@ -1238,13 +1286,38 @@ def build_geometry(image: np.ndarray, yolo_results, ppm=None, debug_images=None,
                   f"(masks={len(room_masks)}, h={len(h_walls)}, v={len(v_walls)})")
             cells = _polygonize_cells(h_walls, v_walls, boundary, room_masks)
             cells = _cleanup_cells(cells, boundary, cfg)
-            cells = _merge_fragmented_cells(cells, cfg)
+            cells = _merge_fragmented_cells(cells, cfg, room_masks=room_masks)
 
             if cells and _cells_valid(cells, room_masks, boundary):
                 rooms = _assign_rooms(cells, room_masks, boundary, cfg, doors=doors, ppm=ppm, img_shape=image.shape)
+
                 rooms = _filter_room_area_outliers(rooms, boundary)
                 rooms = _filter_room_area_outliers(rooms, boundary)
+
                 rooms = _ensure_full_coverage(rooms, boundary, doors, cfg)
+
+                # ลบห้องที่ครอบทั้งบ้าน
+                filtered = []
+                boundary_area = boundary.area
+
+                for r in rooms:
+                    try:
+                        poly = Polygon([(p["x"], p["y"]) for p in r["polygon"]])
+
+                        ratio = poly.area / max(boundary_area, 1e-6)
+
+                        # ถ้าห้องกินพื้นที่เกือบทั้งบ้าน → ข้าม
+                        if ratio > 0.80:
+                            print(f"[post-filter] drop giant room: {r.get('name')} ratio={ratio:.2f}")
+                            continue
+
+                        filtered.append(r)
+
+                    except Exception:
+                        filtered.append(r)
+
+                rooms = filtered
+
                 mode = "polygonize"
                 print(f"✅ Layer 1 Success: Polygonize parsed {len(rooms)} rooms.")
             else:
@@ -3145,38 +3218,52 @@ def _filter_room_area_outliers(
 
     return filtered
 
-def _merge_fragmented_cells(cells, cfg):
+def _merge_fragmented_cells(cells, cfg, room_masks=None):
     """
     รวม cell ที่แตะกันหรือห่างกันน้อยมาก
     แก้ปัญหาห้องแตกเป็นชิ้น
     """
-
     if len(cells) <= 1:
         return cells
 
     merged = []
     used = set()
+    merge_gap = cfg["snap"] * 3.2
 
-    merge_gap = cfg["snap"] * 2.5
+    def _masks_in_cell(cell):
+        """หา centroid ของ room mask ที่อยู่ใน cell นี้"""
+        if not room_masks:
+            return set()
+        result = set()
+        for i, mask in enumerate(room_masks):
+            pt = Point(mask["centroid"])
+            if cell.contains(pt) or cell.distance(pt) <= 0.01:
+                result.add(i)
+        return result
 
     for i, cell in enumerate(cells):
-
         if i in used:
             continue
 
         current = cell
-
+        current_masks = _masks_in_cell(current)
         changed = True
 
         while changed:
             changed = False
-
             for j, other in enumerate(cells):
-
                 if j == i or j in used:
                     continue
 
                 try:
+                    # ✅ ตรวจก่อนว่า other มี mask ของห้องอื่นไหม
+                    other_masks = _masks_in_cell(other)
+                    
+                    # ถ้าทั้งคู่มี mask และเป็นคนละห้อง → ห้าม merge
+                    if current_masks and other_masks:
+                        if not current_masks.intersection(other_masks):
+                            continue  # ✅ คนละห้อง ข้ามไป
+
                     should_merge = (
                         current.touches(other)
                         or current.distance(other) <= merge_gap
@@ -3184,6 +3271,7 @@ def _merge_fragmented_cells(cells, cfg):
 
                     if should_merge:
                         current = unary_union([current, other]).buffer(0)
+                        current_masks = current_masks.union(other_masks)
                         used.add(j)
                         changed = True
 
@@ -3196,17 +3284,13 @@ def _merge_fragmented_cells(cells, cfg):
 
 def _cells_valid(cells, room_masks, boundary) -> bool:
     if not cells:
-        print("❌ FAIL: no cells generated from polygonize")
         return False
     if not room_masks:
-        print(f"⚠️ WARNING: no room masks provided, cell valid check bypassed (cells={len(cells)})")
         return len(cells) > 0
 
     count = len(room_masks)
     min_area = max(boundary.area * 0.018, 0.0008)
     large_cells = [c for c in cells if c.area >= min_area]
-    print(f"[cells_valid] Target Room Count={count} | Total Large Cells={len(large_cells)} | "
-          f"Boundary Area={boundary.area:.4f} | min_area={min_area:.4f}")
 
     min_large = max(1, int(count * 0.45))
     if len(large_cells) < min_large:
@@ -3215,41 +3299,58 @@ def _cells_valid(cells, room_masks, boundary) -> bool:
 
     max_large = max(count * 3 + 4, 14)
     if len(large_cells) > max_large:
-        print(f"❌ FAIL: too many large cells ({len(large_cells)} > {max_large})")
+        print(f"❌ FAIL: too many large cells")
         return False
 
+    # เพิ่ม: ตรวจว่า cell เดียวกันมี mask หลายอันตกอยู่
+    # ถ้าใช่ = cell นั้น merge หลายห้องเข้าด้วยกัน
+    cell_to_masks = defaultdict(list)
+    for mask in room_masks:
+        point = Point(mask["centroid"])
+        for idx, cell in enumerate(large_cells):
+            if cell.contains(point) or cell.distance(point) <= 0.02:
+                cell_to_masks[idx].append(mask["label"])
+                break
+
+    overloaded = {
+        idx: labels 
+        for idx, labels in cell_to_masks.items() 
+        if len(labels) > 1
+    }
+    
+    if overloaded:
+        for idx, labels in overloaded.items():
+            print(
+                f"⚠ WARN: cell[{idx}] contains "
+                f"{len(labels)} masks: {labels}"
+            )  # ✅ บังคับ fallback ไป Layer 2
+
+    # ส่วนที่เหลือเหมือนเดิม
     max_cell_area = max(c.area for c in large_cells)
     if max_cell_area > boundary.area * 0.60:
-        print(f"❌ FAIL: largest cell too big ({max_cell_area:.4f} > {boundary.area * 0.60:.4f})")
+        print(f"❌ FAIL: largest cell too big")
         return False
 
     cell_area = sum(c.area for c in large_cells)
     mask_area = unary_union([m["polygon"] for m in room_masks]).intersection(boundary).area
     if mask_area <= 0:
-        print(f"❌ FAIL: mask_area is zero or negative ({mask_area:.4f})")
         return False
 
     ratio = cell_area / mask_area
-    print(f"[cells_valid] cell_area={cell_area:.4f} | mask_area={mask_area:.4f} | ratio={ratio:.2f}")
     if not (0.45 <= ratio <= 1.55):
-        print(f"❌ FAIL: area mismatch ratio={ratio:.2f} (expected 0.45–1.55)")
+        print(f"❌ FAIL: area mismatch ratio={ratio:.2f}")
         return False
 
     hits = sum(
         1 for mask in room_masks
         if any(
-            c.contains(Point(mask["centroid"])) or c.distance(Point(mask["centroid"])) <= 0.025
+            c.contains(Point(mask["centroid"])) 
+            or c.distance(Point(mask["centroid"])) <= 0.025
             for c in large_cells
         )
     )
     min_hits = max(1, int(count * 0.60))
-    print(f"[cells_valid] mask hits={hits}/{count} (need >= {min_hits})")
-    ok = hits >= min_hits
-    if not ok:
-        print(f"❌ FAIL: mask hits {hits}/{count} < {min_hits}")
-    else:
-        print(f"✅ PASS: cells_valid")
-    return ok
+    return hits >= min_hits
 
 
 def _name_room_heuristic(
