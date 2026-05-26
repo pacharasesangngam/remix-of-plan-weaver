@@ -1260,9 +1260,32 @@ def build_geometry(image: np.ndarray, yolo_results, ppm=None, debug_images=None,
     h_walls, v_walls = _merge_collinear_walls(h_walls, v_walls, cfg)
     # สับผนังยาวออกเป็นท่อนย่อยที่จุดตัด (Node-Segment Topology)
     # ป้องกัน Over-Merge และช่วยให้ polygonize ล้อมพื้นที่ปิดได้ถูกต้อง
-    h_walls, v_walls = _split_walls_at_junctions(h_walls, v_walls, cfg)
-    _find_unclosed_rooms(h_walls, v_walls, room_masks, cfg)
-    broken_h, broken_v = _debug_wall_connectivity(h_walls, v_walls, cfg)
+    h_walls, v_walls = _split_walls_at_junctions(
+        h_walls,
+        v_walls,
+        cfg
+    )
+
+    # สำคัญมาก:
+    # ปัด coordinate ให้ลง grid เดียวกันก่อน polygonize
+    h_walls, v_walls = _quantize_wall_graph(
+        h_walls,
+        v_walls,
+        precision=4
+    )
+
+    _find_unclosed_rooms(
+        h_walls,
+        v_walls,
+        room_masks,
+        cfg
+    )
+
+    broken_h, broken_v = _debug_wall_connectivity(
+        h_walls,
+        v_walls,
+        cfg
+    )
     print(f"[wall_repair] done — h={len(h_walls)} v={len(v_walls)} "
           f"broken_h={len(broken_h)} broken_v={len(broken_v)})")
 
@@ -1773,7 +1796,18 @@ def _debug_wall_connectivity(h_walls, v_walls, cfg):
         print(f"  broken V: x={seg['x']:.3f} y=[{seg['y1']:.3f},{seg['y2']:.3f}] src={seg.get('source')} miss={missing}")
 
     return broken_h, broken_v
+def _quantize_wall_graph(h_walls, v_walls, precision=4):
+    for h in h_walls:
+        h["x1"] = round(h["x1"], precision)
+        h["x2"] = round(h["x2"], precision)
+        h["y"]  = round(h["y"], precision)
 
+    for v in v_walls:
+        v["x"]  = round(v["x"], precision)
+        v["y1"] = round(v["y1"], precision)
+        v["y2"] = round(v["y2"], precision)
+
+    return h_walls, v_walls
 def _process_wall_graph(h_raw, v_raw, openings, boundary, cfg):
     h_walls, v_walls = [dict(seg) for seg in h_raw], [dict(seg) for seg in v_raw]
     h_walls, v_walls = _snap_merge(h_walls, v_walls, cfg)
@@ -1797,7 +1831,37 @@ def _process_wall_graph(h_raw, v_raw, openings, boundary, cfg):
     h_walls, v_walls = _clip_to_boundary(h_walls, v_walls, boundary, cfg)
     h_walls, v_walls = _filter_structural(h_walls, v_walls, boundary, cfg)
     _snap_anchors(h_walls, v_walls, cfg)
-    h_walls, v_walls = _split_at_junctions(h_walls, v_walls)
+    h_walls, v_walls = _split_at_junctions(
+        h_walls,
+        v_walls
+    )
+
+    h_walls, v_walls = _weld_near_endpoints(
+        h_walls,
+        v_walls,
+        tol=0.01
+    )
+
+    h_walls, v_walls = _bridge_small_wall_gaps(
+        h_walls,
+        v_walls,
+        gap_tol=0.08
+    )
+
+    print("\n=== AFTER SPLIT ===")
+
+    for h in h_walls:
+        if abs(h["y"] - 0.723) < 0.01:
+            print(
+                f'H y={h["y"]:.3f} '
+                f'{h["x1"]:.3f}->{h["x2"]:.3f}'
+            )
+    # debug หลัง bridge
+    _debug_wall_connectivity(
+        h_walls,
+        v_walls,
+        cfg
+    )
     return h_walls, v_walls
 
 
@@ -1830,7 +1894,11 @@ def _merge_collinear_walls(h_walls: list, v_walls: list, cfg: dict) -> tuple:
         result = []
         cur = dict(segs[0])
         for seg in segs[1:]:
-            if seg["x1"] <= cur["x2"] + 1e-6:          # overlap หรือแตะ
+            if (
+                seg["x1"] <= cur["x2"] + 1e-6
+                and seg.get("source") != "gap_bridge"
+                and cur.get("source") != "gap_bridge"
+            ):        # overlap หรือแตะ
                 cur["x2"] = max(cur["x2"], seg["x2"])
                 cur["t"]   = max(cur.get("t", 0.012), seg.get("t", 0.012))
                 cur["conf"] = max(cur.get("conf", 0), seg.get("conf", 0))
@@ -2784,6 +2852,45 @@ def _split_at_junctions(h_walls, v_walls):
  
     return split_h, split_v
 
+def _weld_near_endpoints(h_walls, v_walls, tol=0.01):
+    
+    xs = []
+    ys = []
+
+    for h in h_walls:
+        xs.extend([h["x1"], h["x2"]])
+        ys.append(h["y"])
+
+    for v in v_walls:
+        xs.append(v["x"])
+        ys.extend([v["y1"], v["y2"]])
+
+    def snap(val, pool):
+
+        best = val
+
+        for p in pool:
+            if abs(val - p) < tol:
+                best = p
+                break
+
+        return best
+
+    # snap H
+    for h in h_walls:
+
+        h["x1"] = snap(h["x1"], xs)
+        h["x2"] = snap(h["x2"], xs)
+        h["y"] = snap(h["y"], ys)
+
+    # snap V
+    for v in v_walls:
+
+        v["x"] = snap(v["x"], xs)
+        v["y1"] = snap(v["y1"], ys)
+        v["y2"] = snap(v["y2"], ys)
+
+    return h_walls, v_walls
 
 def _build_boundary(room_masks, h_walls, v_walls) -> Polygon:
     polys = []
@@ -3228,7 +3335,7 @@ def _merge_fragmented_cells(cells, cfg, room_masks=None):
 
     merged = []
     used = set()
-    merge_gap = cfg["snap"] * 3.2
+    merge_gap = cfg["snap"] *  4.2
 
     def _masks_in_cell(cell):
         """หา centroid ของ room mask ที่อยู่ใน cell นี้"""
@@ -4098,6 +4205,130 @@ def _connect_openings_to_walls(
 
     return h_walls, v_walls
 
+def _bridge_small_wall_gaps(h_walls, v_walls, gap_tol=0.08):
+    
+    print("[bridge_small_wall_gaps] RUN")
+    print(f"h={len(h_walls)} v={len(v_walls)}")
+
+    new_h = list(h_walls)
+    new_v = list(v_walls)
+
+    # ---------- HORIZONTAL ----------
+    added_h = 0
+
+    for i in range(len(h_walls)):
+        a = h_walls[i]
+
+        for j in range(i + 1, len(h_walls)):
+            b = h_walls[j]
+
+            # y ต้องตรงกันจริง
+            if abs(a["y"] - b["y"]) > 0.003:
+                continue
+
+            left, right = sorted([a, b], key=lambda s: s["x1"])
+            print(
+                f"[PAIR] "
+                f"yA={a['y']:.6f} "
+                f"yB={b['y']:.6f} "
+                f"L={left['x2']:.3f} "
+                f"R={right['x1']:.3f}"
+            )
+            # ต้องไม่ overlap
+            if right["x1"] <= left["x2"]:
+                continue
+
+            gap = right["x1"] - left["x2"]
+
+            # gap เล็ก
+            if gap > gap_tol:
+                continue
+
+            # ต้องมี vertical wall รองรับปลายทั้งสอง
+            has_left_support = any(
+                abs(v["x"] - left["x2"]) < 0.01
+                and v["y1"] <= a["y"] <= v["y2"]
+                for v in v_walls
+            )
+
+            has_right_support = any(
+                abs(v["x"] - right["x1"]) < 0.01
+                and v["y1"] <= a["y"] <= v["y2"]
+                for v in v_walls
+            )
+
+            if not (has_left_support and has_right_support):
+                continue
+
+            bridge = {
+                "x1": left["x2"],
+                "x2": right["x1"],
+                "y": a["y"],
+                "t": max(a.get("t", 0.012), b.get("t", 0.012)),
+                "conf": max(a.get("conf", 0.5), b.get("conf", 0.5)),
+                "is_structural": True,
+                "source": "gap_bridge"
+            }
+
+            new_h.append(bridge)
+            added_h += 1
+
+            print(
+                f"[bridge_gap] H "
+                f"{left['x2']:.3f}->{right['x1']:.3f} "
+                f"gap={gap:.3f}"
+            )
+
+    # ---------- VERTICAL ----------
+    added_v = 0
+
+    for i in range(len(v_walls)):
+        a = v_walls[i]
+
+        for j in range(i + 1, len(v_walls)):
+            b = v_walls[j]
+
+            if abs(a["x"] - b["x"]) > 0.01:
+                continue
+
+            top, bottom = sorted([a, b], key=lambda s: s["y1"])
+
+            gap = bottom["y1"] - top["y2"]
+
+            if 0 < gap < gap_tol:
+
+                bridge = {
+                    "x": a["x"],
+                    "y1": top["y2"],
+                    "y2": bottom["y1"],
+                    "t": max(a.get("t", 0.012), b.get("t", 0.012)),
+                    "conf": max(a.get("conf", 0.5), b.get("conf", 0.5)),
+                    "is_structural": True,
+                    "source": "gap_bridge"
+                }
+
+                new_v.append(bridge)
+                added_v += 1
+
+                print(
+                    f"[bridge_gap] V "
+                    f"{top['y2']:.3f}->{bottom['y1']:.3f} "
+                    f"gap={gap:.3f}"
+                )
+
+    print(
+        f"[bridge_small_wall_gaps] "
+        f"added_h={added_h} added_v={added_v}"
+    )
+
+    print(
+        f"[bridge_small_wall_gaps] OUT "
+        f"h={len(new_h)} v={len(new_v)}"
+    )
+    for h in h_walls:
+        if h.get("source") == "gap_bridge":
+            print("[KEEP_BRIDGE]", h)
+    return new_h, new_v
 
 def _force_connect_broken(h_walls: list, v_walls: list, cfg: dict, image=None) -> tuple:
     """
