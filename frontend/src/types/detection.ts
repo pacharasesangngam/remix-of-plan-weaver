@@ -1,4 +1,5 @@
 import type { NormalizedPoint, Room } from "./floorplan";
+import type { WallTextureId } from "./materialCatalog";
 
 export type { BBox, NormalizedPoint } from "./floorplan";
 
@@ -43,6 +44,7 @@ export interface DetectedWallSegment {
   scgPaintCode?: string;
   wallColor?: string;
   wallFinish?: string;
+  wallTexture?: WallTextureId;
 }
 
 export interface DetectionResult {

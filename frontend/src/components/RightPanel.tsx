@@ -11,12 +11,15 @@ import {
   SCG_PAINT_CATALOG,
   SCG_TILE_CATALOG,
   SCG_WINDOW_CATALOG,
+  WALL_TEXTURE_CATALOG,
   findScgDoor,
   findScgPaint,
   findScgTile,
   findScgWindow,
   type ScgTileOption,
 } from "@/types/materialCatalog";
+import { createWallTexture } from "@/lib/wallTextures";
+import { createStoneBlockSpecs } from "@/lib/stoneWallPanels";
 
 interface RightPanelProps {
   rooms: Room[];
@@ -1072,6 +1075,9 @@ function WallSegmentMesh({
   const thickness = getWallThicknessM(wall, pw);
   const paint = findScgPaint(wall.scgPaintCode);
   const wallColor = wall.wallColor ?? paint.hex;
+  const wallTexture = useMemo(() => createWallTexture(wall.wallTexture, wallColor), [wall.wallTexture, wallColor]);
+
+  useEffect(() => () => wallTexture?.dispose(), [wallTexture]);
 
   const x1 = wall.x1 * pw - pw / 2;
   const z1 = wall.y1 * ph - ph / 2;
@@ -1117,28 +1123,42 @@ function WallSegmentMesh({
         });
 
         return (
-          <mesh
+          <group
             key={i}
             position={[localX, localY, 0]}
-            onPointerMove={(e) => {
-              if (!onPlacementHover && !onTargetHover) return;
-              e.stopPropagation();
-              const point = getEventPoint(e.point);
-              onPlacementHover?.(wall.id, point);
-              onTargetHover?.({ type: "wall", id: wall.id, point });
-            }}
-            onPointerLeave={() => {
-              onPlacementLeave?.();
-              onTargetHover?.(null);
-            }}
-            onClick={(e) => {
-              e.stopPropagation();
-              onSelect(wall.id, getEventPoint(e.point));
-            }}
           >
-            <boxGeometry args={[segLen, segH, thickness]} />
-            <meshStandardMaterial color={wallColor} roughness={0.72} metalness={0.03} />
-          </mesh>
+            <mesh
+              onPointerMove={(e) => {
+                if (!onPlacementHover && !onTargetHover) return;
+                e.stopPropagation();
+                const point = getEventPoint(e.point);
+                onPlacementHover?.(wall.id, point);
+                onTargetHover?.({ type: "wall", id: wall.id, point });
+              }}
+              onPointerLeave={() => {
+                onPlacementLeave?.();
+                onTargetHover?.(null);
+              }}
+              onClick={(e) => {
+                e.stopPropagation();
+                onSelect(wall.id, getEventPoint(e.point));
+              }}
+            >
+              <boxGeometry args={[segLen, segH, thickness]} />
+              <meshStandardMaterial color={wallColor} map={wallTexture ?? undefined} roughness={0.72} metalness={0.03} />
+            </mesh>
+            {wall.wallTexture === "stone-block-panel" &&
+              createStoneBlockSpecs(segLen, segH).map((block, blockIndex) => (
+                <mesh
+                  key={blockIndex}
+                  position={[block.x, block.y - segH / 2, thickness / 2 + block.depth / 2 + 0.002]}
+                  raycast={() => null}
+                >
+                  <boxGeometry args={[block.w, block.h, block.depth]} />
+                  <meshStandardMaterial color={block.color} roughness={0.92} metalness={0.01} />
+                </mesh>
+              ))}
+          </group>
         );
       })}
     </group>
@@ -2742,6 +2762,20 @@ const RightPanel = ({
                     {SCG_PAINT_CATALOG.map((paint) => (
                       <option key={paint.code} value={paint.code}>
                         {paint.code} - {paint.name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label className="block text-[11px] text-muted-foreground">
+                  Wall texture
+                  <select
+                    value={selectedWall.wallTexture ?? "painted"}
+                    onChange={(e) => onWallUpdate?.(selectedWall.id, "wallTexture", e.target.value)}
+                    className="mt-1 h-9 w-full rounded-xl border border-border bg-background px-3 text-xs text-foreground"
+                  >
+                    {WALL_TEXTURE_CATALOG.map((texture) => (
+                      <option key={texture.id} value={texture.id}>
+                        {texture.name}
                       </option>
                     ))}
                   </select>

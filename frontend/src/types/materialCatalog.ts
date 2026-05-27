@@ -5,6 +5,13 @@ export interface ScgPaintOption {
   finish: string;
 }
 
+export type WallTextureId = "painted" | "plaster" | "concrete" | "brick" | "vertical-panel" | "stone-block-panel";
+
+export interface WallTextureOption {
+  id: WallTextureId;
+  name: string;
+}
+
 export interface ScgTileOption {
   code: string;
   name: string;
@@ -47,6 +54,15 @@ export const SCG_PAINT_CATALOG: ScgPaintOption[] = [
   { code: "SCG-BL-426", name: "Pale Blue", hex: "#cbd8e4", finish: "eggshell" },
   { code: "SCG-GY-518", name: "Urban Grey", hex: "#b9bec3", finish: "satin" },
   { code: "SCG-CL-702", name: "Clay Beige", hex: "#d6bfa4", finish: "matte" },
+];
+
+export const WALL_TEXTURE_CATALOG: WallTextureOption[] = [
+  { id: "painted", name: "Painted Smooth" },
+  { id: "plaster", name: "Fine Plaster" },
+  { id: "concrete", name: "Cast Concrete" },
+  { id: "brick", name: "Painted Brick" },
+  { id: "vertical-panel", name: "Vertical Panel" },
+  { id: "stone-block-panel", name: "3D Stone Block Panel" },
 ];
 
 export const SCG_TILE_CATALOG: ScgTileOption[] = [
