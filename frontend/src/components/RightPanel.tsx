@@ -2,9 +2,10 @@ import { Component, Suspense, createContext, useContext, useEffect, useMemo, use
 import { Canvas, useFrame, useThree } from "@react-three/fiber";
 import { OrbitControls, Grid, PointerLockControls, Text, useGLTF } from "@react-three/drei";
 import * as THREE from "three";
-import { Box, ChevronLeft, Info, Move3D, Palette, Plus, Trash2 } from "lucide-react";
+import { Box, ChevronLeft, Download, Info, Move3D, Palette, Plus, Trash2 } from "lucide-react";
 import type { BBox, NormalizedPoint, Room } from "@/types/floorplan";
 import type { DetectedWallSegment, DetectedDoor, DetectedWindow } from "@/types/detection";
+import { exportFloorPlanGlb } from "@/lib/blenderExport";
 import {
   SCG_DOOR_CATALOG,
   SCG_PAINT_CATALOG,
@@ -2460,6 +2461,18 @@ const RightPanel = ({
     onWallUpdate(id, "wallHeight", Math.max(1.2, Math.min(8, current + deltaM)));
   };
 
+  const handleExportGlb = async () => {
+    await exportFloorPlanGlb({
+      rooms,
+      walls,
+      doors,
+      windows,
+      planWidth: pw,
+      planHeight: ph,
+      wallHeight: maxH,
+    });
+  };
+
   return (
     <div className="flex-1 flex items-center justify-center bg-background relative overflow-hidden">
       {!generated ? (
@@ -2590,6 +2603,14 @@ const RightPanel = ({
             >
               <Move3D className="w-3.5 h-3.5" />
               {walkMode ? "Walk Mode On" : "Walk Mode"}
+            </button>
+            <button
+              onClick={handleExportGlb}
+              className="flex items-center gap-2 rounded-lg border border-border bg-background px-3 py-2 text-xs font-semibold text-foreground transition-colors hover:bg-accent"
+              title="Export a .glb file for Blender"
+            >
+              <Download className="h-3.5 w-3.5" />
+              Export GLB
             </button>
           </div>
 

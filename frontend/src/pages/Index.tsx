@@ -6,6 +6,8 @@ import RightPanel from "@/components/RightPanel";
 import WallReview from "@/components/WallReview";
 import SplashScreen from "@/components/SplashScreen";
 import { detectFloorPlan } from "@/services/floorplanAI";
+import type { FloorPlanProject } from "@/lib/projectIO";
+import { createFloorPlanProject } from "@/lib/projectIO";
 import type { DetectedWallSegment, DetectedDoor, DetectedWindow } from "@/types/detection";
 import type { Room, FloorPlanData, AppMode, DimensionUnit } from "@/types/floorplan";
 
@@ -15,6 +17,8 @@ const Index = () => {
   const [showSplash, setShowSplash]   = useState(true);
   const [mode, setMode]               = useState<AppMode>("simple");
   const [imageUrl, setImageUrl]       = useState<string | null>(null);
+  const [imageDataUrl, setImageDataUrl] = useState<string | null>(null);
+  const [imageName, setImageName]     = useState<string | null>(null);
   const [originalImageUrl, setOriginalImageUrl] = useState<string | null>(null);
   const [fileType, setFileType]       = useState<string | null>(null);
   const [imageFile, setImageFile]     = useState<File | null>(null);
@@ -46,6 +50,13 @@ const Index = () => {
     setOriginalImageUrl(url);
     setFileType(file.type || null);
     setImageFile(file);
+    setImageName(file.name || null);
+    setImageDataUrl(null);
+    const reader = new FileReader();
+    reader.onload = () => {
+      if (typeof reader.result === "string") setImageDataUrl(reader.result);
+    };
+    reader.readAsDataURL(file);
     setDetected(false);
     setGenerated(false);
     setDetectError(null);
@@ -62,6 +73,8 @@ const Index = () => {
 
   const handleClear = useCallback(() => {
     setImageUrl(null);
+    setImageDataUrl(null);
+    setImageName(null);
     setFileType(null);
     setImageFile(null);
     setOriginalImageUrl(null);
@@ -158,7 +171,49 @@ const Index = () => {
 
   const handleGenerate = useCallback(() => setGenerated(true), []);
 
+  const handleProjectImport = useCallback((project: FloorPlanProject) => {
+    const importedImageUrl = project.image?.dataUrl ?? null;
+    setImageUrl(importedImageUrl);
+    setImageDataUrl(importedImageUrl);
+    setImageName(project.image?.name ?? null);
+    setOriginalImageUrl(importedImageUrl);
+    setFileType(project.image?.fileType ?? null);
+    setImageFile(null);
+    setRooms(project.rooms);
+    setWalls(project.walls);
+    setDoors(project.doors);
+    setWindows(project.windows);
+    setUnit(project.meta.unit);
+    setScale(project.meta.scale);
+    setPlanW(project.meta.planWidth);
+    setPlanH(project.meta.planHeight);
+    setDetected(true);
+    setDetecting(false);
+    setDetectError(null);
+    setDebugImages(null);
+    setCleanImageUrl(project.image?.cleanDataUrl ?? null);
+    setGenerated(true);
+  }, []);
+
   const floorPlanData: FloorPlanData = { meta: { unit, scale }, rooms };
+  const projectData = createFloorPlanProject({
+    unit,
+    scale,
+    planWidth: planW,
+    planHeight: planH,
+    rooms,
+    walls,
+    doors,
+    windows,
+    image: imageDataUrl
+      ? {
+          dataUrl: imageDataUrl,
+          cleanDataUrl: cleanImageUrl,
+          fileType,
+          name: imageName ?? undefined,
+        }
+      : null,
+  });
   // Use the clean preprocessed image (same coordinate space as detected walls/rooms).
   // Falls back to the annotated preview, then the original uploaded image.
   const wallReviewBackgroundUrl = cleanImageUrl ?? imageUrl;
@@ -213,6 +268,8 @@ const Index = () => {
             onGenerate={handleGenerate}
             onDebugToggle={() => setDebugMode((v) => !v)}
             floorPlanData={floorPlanData}
+            projectData={projectData}
+            onProjectImport={handleProjectImport}
           />
 
           {detecting ? (

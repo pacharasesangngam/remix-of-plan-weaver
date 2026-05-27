@@ -9,12 +9,15 @@ import {
   ChevronRight,
   Code,
   Copy,
+  Download,
   Loader2,
   ScanLine,
   Upload,
   X,
 } from "lucide-react";
 import type { Room, FloorPlanData, AppMode, DimensionUnit } from "@/types/floorplan";
+import type { FloorPlanProject } from "@/lib/projectIO";
+import { downloadProjectJson, parseFloorPlanProject } from "@/lib/projectIO";
 import DebugPanel from "@/components/DebugPanel";
 
 interface SidebarProps {
@@ -37,6 +40,8 @@ interface SidebarProps {
   onGenerate: () => void;
   onDebugToggle: () => void;
   floorPlanData: FloorPlanData | null;
+  projectData: FloorPlanProject;
+  onProjectImport: (project: FloorPlanProject) => void;
 }
 
 const Sidebar = ({
@@ -54,6 +59,8 @@ const Sidebar = ({
   onDetect,
   onDebugToggle,
   floorPlanData,
+  projectData,
+  onProjectImport,
 }: SidebarProps) => {
   const [collapsed, setCollapsed] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
@@ -61,6 +68,7 @@ const Sidebar = ({
   const [copied, setCopied] = useState(false);
   const [debugOpen, setDebugOpen] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
+  const importInputRef = useRef<HTMLInputElement>(null);
 
   const safeData = floorPlanData ?? { meta: { unit, scale }, rooms: [] };
 
@@ -83,6 +91,23 @@ const Sidebar = ({
       window.setTimeout(() => setCopied(false), 1400);
     } catch {
       setCopied(false);
+    }
+  };
+
+  const handleExportProject = () => {
+    downloadProjectJson(projectData);
+  };
+
+  const handleProjectFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    if (!file) return;
+
+    try {
+      const raw = await file.text();
+      onProjectImport(parseFloorPlanProject(JSON.parse(raw)));
+    } catch (err) {
+      window.alert(err instanceof Error ? err.message : "Could not import project file.");
     }
   };
 
@@ -135,25 +160,35 @@ const Sidebar = ({
 
               <div className="p-4">
                 {!imageUrl ? (
-                  <button
-                    type="button"
-                    onDragOver={(e) => { e.preventDefault(); setIsDragging(true); }}
-                    onDragLeave={() => setIsDragging(false)}
-                    onDrop={handleDrop}
-                    onClick={() => inputRef.current?.click()}
-                    className={`flex h-40 w-full flex-col items-center justify-center rounded-[24px] border-2 border-dashed px-4 text-center transition-all ${
-                      isDragging
-                        ? "border-primary bg-primary/10 shadow-[0_0_0_5px_hsl(var(--primary)/0.10)]"
-                        : "border-border bg-background hover:border-primary/35 hover:bg-accent/60"
-                    }`}
-                  >
-                    <div className="mb-3 rounded-2xl border border-border/70 bg-card p-3 shadow-sm">
-                      <Upload className="h-5 w-5 text-primary" />
-                    </div>
-                    <div className="text-sm font-medium text-foreground">Drop floor plan here</div>
-                    <div className="mt-1 text-[11px] text-muted-foreground">PNG, JPG, WEBP, PDF</div>
-                    <input ref={inputRef} type="file" accept="image/*,.pdf,application/pdf" className="hidden" onChange={handleFileChange} />
-                  </button>
+                  <div className="space-y-3">
+                    <button
+                      type="button"
+                      onDragOver={(e) => { e.preventDefault(); setIsDragging(true); }}
+                      onDragLeave={() => setIsDragging(false)}
+                      onDrop={handleDrop}
+                      onClick={() => inputRef.current?.click()}
+                      className={`flex h-40 w-full flex-col items-center justify-center rounded-[24px] border-2 border-dashed px-4 text-center transition-all ${
+                        isDragging
+                          ? "border-primary bg-primary/10 shadow-[0_0_0_5px_hsl(var(--primary)/0.10)]"
+                          : "border-border bg-background hover:border-primary/35 hover:bg-accent/60"
+                      }`}
+                    >
+                      <div className="mb-3 rounded-2xl border border-border/70 bg-card p-3 shadow-sm">
+                        <Upload className="h-5 w-5 text-primary" />
+                      </div>
+                      <div className="text-sm font-medium text-foreground">Drop floor plan here</div>
+                      <div className="mt-1 text-[11px] text-muted-foreground">PNG, JPG, WEBP, PDF</div>
+                      <input ref={inputRef} type="file" accept="image/*,.pdf,application/pdf" className="hidden" onChange={handleFileChange} />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => importInputRef.current?.click()}
+                      className="inline-flex h-11 w-full items-center justify-center gap-2 rounded-[20px] border border-border/55 bg-card px-3 text-sm font-medium text-foreground transition-colors hover:bg-accent"
+                    >
+                      <Download className="h-4 w-4" />
+                      Import Existing Project
+                    </button>
+                  </div>
                 ) : (
                 <div className="relative overflow-hidden rounded-[24px] border border-border/55 bg-background shadow-inner">
                     {isPdf ? (
@@ -273,6 +308,24 @@ const Sidebar = ({
                             {JSON.stringify(safeData, null, 2)}
                           </pre>
                         </div>
+                        <div className="mt-3 grid grid-cols-2 gap-2">
+                          <button
+                            type="button"
+                            onClick={() => importInputRef.current?.click()}
+                            className="inline-flex h-10 items-center justify-center gap-2 rounded-[18px] border border-border/55 bg-background px-3 text-xs font-medium text-foreground transition-colors hover:bg-accent"
+                          >
+                            <Upload className="h-3.5 w-3.5" />
+                            Import Project
+                          </button>
+                          <button
+                            type="button"
+                            onClick={handleExportProject}
+                            className="inline-flex h-10 items-center justify-center gap-2 rounded-[18px] border border-border/55 bg-background px-3 text-xs font-medium text-foreground transition-colors hover:bg-accent"
+                          >
+                            <Download className="h-3.5 w-3.5" />
+                            Export Project
+                          </button>
+                        </div>
                       </CollapsibleContent>
                     </Collapsible>
                     </>
@@ -295,6 +348,14 @@ const Sidebar = ({
           {collapsed ? "Open" : "Close"}
         </span>
       </button>
+
+      <input
+        ref={importInputRef}
+        type="file"
+        accept="application/json,.json"
+        className="hidden"
+        onChange={handleProjectFileChange}
+      />
 
       {debugImages && (
         <DebugPanel
