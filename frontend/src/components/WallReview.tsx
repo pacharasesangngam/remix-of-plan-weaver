@@ -3,7 +3,7 @@ import {
     CheckCircle2, AlertCircle, Pencil, Check, X,
     ArrowRight, Zap, ChevronLeft, ChevronRight,
     DoorOpen, AppWindow, Layers, Eye, EyeOff, Ruler,
-    Crosshair, RotateCcw,
+    Crosshair, RotateCcw, Building2,
 } from "lucide-react";
 import type { Room, DimensionUnit } from "@/types/floorplan";
 import type { DetectedWallSegment, DetectedDoor, DetectedWindow } from "@/types/detection";
@@ -22,14 +22,17 @@ interface WallReviewProps {
     walls?: DetectedWallSegment[];
     doors?: DetectedDoor[];
     windows?: DetectedWindow[];
-    scale: number;
+    scale: number; 
     onScaleChange: (s: number) => void;
     onPlanSizeChange?: (pw: number, ph: number) => void;
+    onPpmChange?: (ppm: number) => void;  
     onRoomUpdate: (id: string, field: keyof Room, value: number | string) => void;
     onWallUpdate?: (id: string, field: keyof DetectedWallSegment, value: number | string) => void;
     onWallAdd?: (wall: DetectedWallSegment) => void;
     onWallDelete?: (id: string) => void;
     onGenerate: () => void;
+    wallHeightMeter?: number;
+    onWallHeightChange?: (h: number) => void;
 }
 
 interface EditState {
@@ -79,7 +82,8 @@ const WallReview = ({
     backgroundImageUrl,
     walls = [], doors = [], windows = [],
     scale, onScaleChange, onPlanSizeChange,
-    onRoomUpdate, onWallUpdate, onWallAdd, onWallDelete, onGenerate,
+    onPpmChange, onRoomUpdate, onWallUpdate, onWallAdd, onWallDelete, onGenerate,
+    wallHeightMeter = 2.8, onWallHeightChange,
 }: WallReviewProps) => {
 
     const [editState,      setEditState]      = useState<EditState | null>(null);
@@ -91,6 +95,9 @@ const WallReview = ({
     const [layers,         setLayers]         = useState<Set<OverlayLayer>>(
         new Set(["walls", "doors", "windows", "image"])
     );
+
+    // Global wall height
+    const [localWallH, setLocalWallH] = useState(() => wallHeightMeter);
 
     // Calibration — restore "applied" state when returning from 3D view
     const [calibPhase,  setCalibPhase]  = useState<CalibPhase>(() => scale > 0 ? "applied" : "idle");
@@ -301,16 +308,20 @@ const WallReview = ({
 
     // ── Apply / reset ────────────────────────────────────────
     const applyCalibration = () => {
-        if (calibPts.length < 2) return;
-        const real = parseFloat(calibLength);
-        const px   = pixelDist(calibPts[0], calibPts[1]);
-        if (!real || real <= 0 || px === 0) return;
-        const s = real / px;
-        onScaleChange(s);
-        // Provide real-world plan dimensions to 3D view.
-        onPlanSizeChange?.(imgSize.w * s, imgSize.h * s);
-        setCalibPhase("applied");
-    };
+        const real = parseFloat(calibLength)          // เมตรที่ user ใส่
+        const px   = pixelDist(calibPts[0], calibPts[1])  // pixel บนหน้าจอ
+        if (!real || real <= 0 || px === 0) return
+
+        const screenScale = real / px
+        const screenPpm = px / real  
+
+        onScaleChange(screenScale)
+        onPlanSizeChange?.(imgSize.w * screenScale, imgSize.h * screenScale)
+        onPpmChange?.(screenPpm)
+
+        setCalibPhase("applied")
+
+    }
 
     const resetCalibration = () => {
         setCalibPhase("idle");
@@ -342,6 +353,12 @@ const WallReview = ({
             setMousePos(null);
             setCalibPhase("placing");
         }
+    };
+
+    const applyWallHeight = () => {
+        const h = Math.max(0.5, Math.min(20, localWallH || 2.8));
+        setLocalWallH(h);
+        onWallHeightChange?.(h);
     };
 
     const inCalibMode = calibPhase === "placing" || calibPhase === "ready";
@@ -576,6 +593,25 @@ const WallReview = ({
                                 </button>
                             </>
                         )}
+                    </div>
+
+                    {/* WALL HEIGHT GLOBAL */}
+                    <div className="flex items-center gap-1.5 rounded-lg px-3 py-1.5 border border-border bg-card/80"
+                         title="ความสูงผนังรวม (พื้น-ฝ้า) ทั้งบ้าน — ใช้สำหรับ Extrude 3D">
+                        <Building2 className="w-3.5 h-3.5 text-muted-foreground shrink-0" />
+                        <span className="text-[10px] text-muted-foreground whitespace-nowrap">H ผนัง</span>
+                        <input
+                            type="number"
+                            step="0.1"
+                            min="0.5"
+                            max="20"
+                            value={localWallH}
+                            onChange={e => setLocalWallH(parseFloat(e.target.value) || 2.8)}
+                            onKeyDown={e => { if (e.key === "Enter") applyWallHeight(); }}
+                            onBlur={applyWallHeight}
+                            className="h-7 w-14 rounded-md border border-input bg-background px-2 text-xs font-mono text-foreground focus:outline-none focus:ring-1 focus:ring-ring"
+                        />
+                        <span className="text-[10px] text-muted-foreground shrink-0">m</span>
                     </div>
 
                     {/* WALL DRAW TOOL */}
