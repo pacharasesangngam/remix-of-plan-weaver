@@ -5148,7 +5148,61 @@ def _make_room(label, index, poly, ppm=None, img_shape=None,
         "areaNorm": float(nia_poly.area),
         "areaSqm":  area_sqm,
     }
+def _segment_overlaps_opening(x1: float, y1: float, x2: float, y2: float, openings: list, tolerance: float = 0.01) -> bool:
+    """
+    ตรวจสอบว่าเส้นผนัง (Segment) ทับซ้อนหรืออยู่ใกล้กับแนวช่องเปิด (ประตู/หน้าต่าง) มากเกินไปหรือไม่
+    """
+    if not openings:
+        return False
+        
+    line = LineString([(x1, y1), (x2, y2)])
+    
+    for obj in openings:
+        if not isinstance(obj, dict):
+            continue
+        bbox = obj.get("bbox", obj)
+        if isinstance(bbox, dict):
+            ox1 = bbox.get("x", 0)
+            oy1 = bbox.get("y", 0)
+            ox2 = ox1 + bbox.get("w", 0)
+            oy2 = oy1 + bbox.get("h", 0)
+            
+            # สร้าง Polygon ของประตู/หน้าต่าง และขยายขอบออกเล็กน้อย (buffer) เพื่อตรวจระยะทับซ้อน
+            opening_poly = Polygon([(ox1, oy1), (ox2, oy1), (ox2, oy2), (ox1, oy2)]).buffer(tolerance)
+            
+            # ตรวจสอบว่าเส้นผนังทับซ้อน (Overlaps) หรืออยู่ในขอบเขตช่องเปิดไหม
+            if line.overlaps(opening_poly) or opening_poly.contains(line):
+                return True
+                
+    return False
 
+def _segment_crosses_opening_interior(x1: float, y1: float, x2: float, y2: float, openings: list) -> bool:
+    """
+    ตรวจสอบว่าเส้นตรง (Segment) ตัดผ่านช่องเปิด (ประตู/หน้าต่าง) หรือไม่
+    """
+    if not openings:
+        return False
+    
+    # สร้าง LineString จากจุดสองจุด
+    line = LineString([(x1, y1), (x2, y2)])
+    
+    for obj in openings:
+        if not isinstance(obj, dict):
+            continue
+        bbox = obj.get("bbox", obj)
+        if isinstance(bbox, dict):
+            ox1 = bbox.get("x", 0)
+            oy1 = bbox.get("y", 0)
+            ox2 = ox1 + bbox.get("w", 0)
+            oy2 = oy1 + bbox.get("h", 0)
+            
+            # สร้างกล่อง Polygon ของประตู/หน้าต่าง
+            opening_poly = Polygon([(ox1, oy1), (ox2, oy1), (ox2, oy2), (ox1, oy2)])
+            
+            # ถ้าเส้นตัดผ่านหรืออินเตอร์เซกกับช่องเปิด
+            if line.intersects(opening_poly):
+                return True
+    return False
 
 def _deoverlap(rooms, boundary, wall_thickness: float = 0.0) -> list:
     cleaned, occupied = [], GeometryCollection()
