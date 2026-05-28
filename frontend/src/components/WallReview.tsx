@@ -133,6 +133,10 @@ const WallReview = ({
     }, [imageUrl]);
 
     useEffect(() => {
+        setLocalWallH(wallHeightMeter);
+    }, [wallHeightMeter]);
+
+    useEffect(() => {
         if (rooms.length > 0 && !selectedId) setSelectedId(rooms[0].id);
     }, [rooms, selectedId]);
 
@@ -213,7 +217,7 @@ const WallReview = ({
             y2: end.y,
             type: "interior",
             thickness: 0.15,
-            wallHeight: 2.8,
+            wallHeight: wallHeightMeter,
         });
         selectWall(id);
     };
@@ -371,7 +375,7 @@ const WallReview = ({
     // ── Room editing ─────────────────────────────────────────
     // FIX: ถ้า calibrate แล้ว แสดงค่าจาก bbox × imgSize × scale แทน normalized width/height
     const getDisplay = (room: Room, field: "width" | "height" | "wallHeight") => {
-        if (field === "wallHeight") return +(room.wallHeight ?? 2.8).toFixed(2);
+        if (field === "wallHeight") return +(room.wallHeight ?? wallHeightMeter).toFixed(2);
         const bbox = roomBBox(room);
         if (calibrated && bbox) {
             const px = field === "width"
@@ -410,7 +414,7 @@ const WallReview = ({
     const getWallThickness = (w: DetectedWallSegment): number | null =>
         typeof w.thickness === "number" ? w.thickness : null;
     const getWallHeight = (w: DetectedWallSegment): number | null =>
-        typeof w.wallHeight === "number" ? w.wallHeight : null;
+        typeof w.wallHeight === "number" ? w.wallHeight : wallHeightMeter;
     const getWallThicknessLabel = (w: DetectedWallSegment) =>
         getWallThickness(w) !== null
             ? `${(getWallThickness(w)! * 100).toFixed(0)}cm`

@@ -15,6 +15,7 @@ interface RawRoom {
   wallPolygon?: RawPoint[] | null;
   center?: RawPoint | null;
   bbox?: BBox | null;
+  wallHeight?: number;
 }
 
 interface RawDoor {
@@ -117,7 +118,7 @@ function polygonToRoom(raw: RawRoom): Room {
     polygon: originalPolygon as NormalizedPoint[],
     wallPolygon: wallPolygon as NormalizedPoint[],
     center,
-    wallHeight: 2.8,
+    wallHeight: typeof raw.wallHeight === "number" ? raw.wallHeight : 2.8,
     bbox,
   };
 }

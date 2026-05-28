@@ -120,6 +120,8 @@ def run_pipeline(
     # แนบ wallHeight ทุกห้องให้ frontend ดึงไป Extrude ผนัง 3D ได้ทันที
     for room in geometry["rooms"]:
         room.setdefault("wallHeight", wall_height_meter)
+    for wall in geometry["walls"]:
+        wall.setdefault("wallHeight", wall_height_meter)
     dropped = [r for r in all_rooms if r.get("areaNorm", 0) < MIN_ROOM_AREA]
     if dropped:
         print(f"[post-filter] dropped {len(dropped)} room(s) with areaNorm < {MIN_ROOM_AREA}: "
@@ -1197,15 +1199,6 @@ def build_geometry(image: np.ndarray, yolo_results, ppm=None, debug_images=None,
         openings,
         cfg,
     )
-
-    # all_h, all_v = _build_outer_walls_from_rooms(
-    #     room_masks,
-    #     all_h,
-    #     all_v,
-    #     cfg,
-    # )
-
-    
     _classify_structural_walls(all_h, all_v, cfg)
 
     boundary = _build_boundary(
@@ -4331,24 +4324,8 @@ def _bridge_small_wall_gaps(h_walls, v_walls, gap_tol=0.08):
     return new_h, new_v
 
 def _force_connect_broken(h_walls: list, v_walls: list, cfg: dict, image=None) -> tuple:
-    """
-    เชื่อมปลายผนังที่ยังลอยอยู่โดยไม่มีผนังตั้งฉากรองรับ
-
-    การเปลี่ยนแปลงจากเวอร์ชันก่อน
-    ────────────────────────────────
-    1. force_snap: snap*3 → snap*2  ลดระยะเพื่อกัน false-wall
-    2. _gap_has_dark:
-       - thresh: 155 → 120  เข้มขึ้น (ต้องมืดจริงๆ ไม่ใช่แค่เทาอ่อน)
-       - n_samples: 5 → 9   สุ่มจุดเพิ่มเพื่อความแม่นยำ
-       - min_hit: n//2 → 60% ของจุดทั้งหมดต้องมืด (จากเดิมแค่ครึ่ง)
-       - เพิ่มการตรวจ ±1px รอบจุดตัวอย่าง เพราะเส้นผนังบางแปลนกว้างแค่ 1px
-    3. ห้ามสร้างผนังเชื่อมถ้าช่องว่างทับ bbox ประตู/หน้าต่าง
-       (ย้าย doors/windows เข้ามาเป็น parameter ใหม่)
-    4. ส่วนสร้างผนังใหม่ (new_h, new_v): เพิ่มเงื่อนไขว่าปลายผนังที่จะเชื่อม
-       ต้องอยู่บนแนว axis เดียวกันจริงๆ (ไม่ใช่แค่อยู่ในระยะ force_snap)
-    """
     snap       = cfg["snap"]
-    force_snap = snap * 2.0   # ลดจาก 3x → 2x
+    force_snap = snap * 2.0  
 
     gray_img = None
     if image is not None:
@@ -4357,22 +4334,20 @@ def _force_connect_broken(h_walls: list, v_walls: list, cfg: dict, image=None) -
         except Exception:
             gray_img = None
 
-    # ── helper: ตรวจว่าช่องว่างมีเส้นมืดในภาพจริงไหม ──────────────────────
     def _gap_has_dark(
         x1n: float, y1n: float, x2n: float, y2n: float,
         n_samples: int = 9,
-        thresh: int = 120,      # เข้มขึ้นจาก 155 → 120
-        min_ratio: float = 0.6, # ต้องผ่าน 60% ของจุดทั้งหมด
+        thresh: int = 120,  
+        min_ratio: float = 0.6,
     ) -> bool:
         if gray_img is None:
-            return True   # ถ้าไม่มีภาพ → ให้ผ่าน (conservative)
+            return True  
         hi, wi = gray_img.shape[:2]
         dark = 0
         for i in range(n_samples):
             t = i / max(n_samples - 1, 1)
             cx = int(np.clip((x1n + (x2n - x1n) * t) * wi, 0, wi - 1))
             cy = int(np.clip((y1n + (y2n - y1n) * t) * hi, 0, hi - 1))
-            # ตรวจ ±1px รอบจุด เพราะเส้นในแปลนบางบางแค่ 1px
             hit = False
             for dy in range(-1, 2):
                 for dx in range(-1, 2):
@@ -4387,8 +4362,7 @@ def _force_connect_broken(h_walls: list, v_walls: list, cfg: dict, image=None) -
                 dark += 1
         return (dark / n_samples) >= min_ratio
 
-    # ── Phase 1: ยืดปลายผนังที่มีอยู่แล้ว (ไม่สร้างใหม่) ──────────────────
-    # ทำซ้ำหลายรอบเพราะการยืดรอบหนึ่งอาจทำให้รอบต่อไปยืดได้เพิ่ม
+
     changed = True
     rounds  = 0
     while changed and rounds < 3:
@@ -4398,16 +4372,15 @@ def _force_connect_broken(h_walls: list, v_walls: list, cfg: dict, image=None) -
         for seg in h_walls:
             y = seg["y"]
 
-            # ปลายซ้าย (x1) — หาผนังตั้งที่อยู่ทางซ้าย ในระยะ force_snap
             if not _h_anchored(seg["x1"], y, v_walls, snap):
                 candidates = [
                     v for v in v_walls
-                    if v["x"] < seg["x1"]                        # ต้องอยู่ซ้ายจริงๆ
-                    and seg["x1"] - v["x"] <= force_snap          # ในระยะ
-                    and v["y1"] - snap <= y <= v["y2"] + snap     # ผ่านแนว y นี้
+                    if v["x"] < seg["x1"]        
+                    and seg["x1"] - v["x"] <= force_snap        
+                    and v["y1"] - snap <= y <= v["y2"] + snap   
                 ]
                 if candidates:
-                    hit = max(candidates, key=lambda v: v["x"])   # ใกล้ที่สุด
+                    hit = max(candidates, key=lambda v: v["x"]) 
                     gap_dist = seg["x1"] - hit["x"]
                     if 0 <= gap_dist <= snap * 0.5:
                         seg["x1"] = hit["x"]
@@ -4424,7 +4397,6 @@ def _force_connect_broken(h_walls: list, v_walls: list, cfg: dict, image=None) -
                             hit["y2"] = y
                         changed = True
 
-            # ปลายขวา (x2)
             if not _h_anchored(seg["x2"], y, v_walls, snap):
                 candidates = [
                     v for v in v_walls
@@ -4453,7 +4425,6 @@ def _force_connect_broken(h_walls: list, v_walls: list, cfg: dict, image=None) -
         for seg in v_walls:
             x = seg["x"]
 
-            # ปลายบน (y1)
             if not _v_anchored(x, seg["y1"], h_walls, snap):
                 candidates = [
                     h for h in h_walls
@@ -4479,7 +4450,6 @@ def _force_connect_broken(h_walls: list, v_walls: list, cfg: dict, image=None) -
                             hit["x2"] = x
                         changed = True
 
-            # ปลายล่าง (y2)
             if not _v_anchored(x, seg["y2"], h_walls, snap):
                 candidates = [
                     h for h in h_walls
@@ -4504,24 +4474,17 @@ def _force_connect_broken(h_walls: list, v_walls: list, cfg: dict, image=None) -
                         elif x > hit["x2"] + 1e-6:
                             hit["x2"] = x
                         changed = True
-
-    # ── Phase 2: สร้างผนังเชื่อมช่องว่างที่ยังเหลืออยู่ ──────────────────
-    # เข้มกว่า Phase 1: ต้องมี dark pixel ยืนยัน และ gap ต้องน้อยกว่า force_snap
-    # เพิ่มเงื่อนไข: ปลายผนังต้องอยู่บน axis เดียวกันกับผนังตรงข้ามพอดี
-    #   (ไม่ใช่แค่ "อยู่ในระยะ" ซึ่งทำให้สร้างผนังเฉียงผิดๆ ได้)
     new_h, new_v = [], []
 
-    # V-wall ที่ปลายบน/ล่างยังไม่ชน H-wall
     for seg in v_walls:
         x = seg["x"]
 
-        # ปลายบน: หา H-wall ที่อยู่เหนือขึ้นไป และ x อยู่ในช่วง [x1, x2]
         if not _v_anchored(x, seg["y1"], h_walls, snap * 2):
             above = [
                 h for h in h_walls
                 if h["y"] < seg["y1"]
                 and seg["y1"] - h["y"] <= force_snap
-                and h["x1"] - snap <= x <= h["x2"] + snap   # x ต้องอยู่ในช่วงผนังนอน
+                and h["x1"] - snap <= x <= h["x2"] + snap\
             ]
             if above:
                 hit = max(above, key=lambda h: h["y"])
@@ -4537,7 +4500,6 @@ def _force_connect_broken(h_walls: list, v_walls: list, cfg: dict, image=None) -
                         "synthetic": True,
                     })
 
-        # ปลายล่าง
         if not _v_anchored(x, seg["y2"], h_walls, snap * 2):
             below = [
                 h for h in h_walls
@@ -4559,17 +4521,15 @@ def _force_connect_broken(h_walls: list, v_walls: list, cfg: dict, image=None) -
                         "synthetic": True,
                     })
 
-    # H-wall ที่ปลายซ้าย/ขวายังไม่ชน V-wall
     for seg in h_walls:
         y = seg["y"]
 
-        # ปลายซ้าย
         if not _h_anchored(seg["x1"], y, v_walls, snap * 2):
             left_v = [
                 v for v in v_walls
                 if v["x"] < seg["x1"]
                 and seg["x1"] - v["x"] <= force_snap
-                and v["y1"] - snap <= y <= v["y2"] + snap   # y ต้องอยู่ในช่วงผนังตั้ง
+                and v["y1"] - snap <= y <= v["y2"] + snap 
             ]
             if left_v:
                 hit = max(left_v, key=lambda v: v["x"])
@@ -4585,7 +4545,6 @@ def _force_connect_broken(h_walls: list, v_walls: list, cfg: dict, image=None) -
                         "synthetic": True,
                     })
 
-        # ปลายขวา
         if not _h_anchored(seg["x2"], y, v_walls, snap * 2):
             right_v = [
                 v for v in v_walls
@@ -4622,13 +4581,6 @@ def _force_connect_broken(h_walls: list, v_walls: list, cfg: dict, image=None) -
 def _extend_walls_at_junctions(
     h_walls: list, v_walls: list, cfg: dict, image=None
 ) -> tuple:
-    """
-    ยืด H-wall ที่มีอยู่แล้วให้ครอบ V-wall endpoint ที่ยังลอยอยู่ (และกลับกัน)
-    แก้กรณีที่ YOLO ตรวจจับผนังได้เพียงบางส่วน แต่ส่วนที่ขาดหายมีเส้นมืดยืนยันในภาพ
-
-    EXT_STRUCTURAL = 0.20  ← max extension สำหรับผนังโครงบ้าน
-    EXT_INTERNAL   = 0.16  ← max extension สำหรับผนังภายใน (pixel-verified)
-    """
     snap = cfg["snap"]
     EXT_STRUCTURAL = 0.20
     EXT_INTERNAL   = 0.16
@@ -4674,7 +4626,6 @@ def _extend_walls_at_junctions(
         changed = False
         rounds += 1
 
-        # ── ยืด H-wall ให้ครอบ V endpoint ที่ลอยอยู่ ──────────────────────
         for v in v_walls:
             x          = v["x"]
             is_v_struct = v.get("is_structural", False)
@@ -4694,7 +4645,6 @@ def _extend_walls_at_junctions(
                         if gap <= max_ext and _line_dark(x, h["y"], h["x1"], h["y"]):
                             print(f"[extend_junc] H y={h['y']:.3f} x1 {h['x1']:.3f}→{x:.3f} (gap={gap:.3f})")
                             h["x1"] = x
-                            # snap V endpoint ให้ชนกับ H พอดี
                             if ep_idx == 0:
                                 v["y1"] = h["y"]
                             else:
@@ -4715,7 +4665,6 @@ def _extend_walls_at_junctions(
                             total_ext += 1
                             break
 
-        # ── ยืด V-wall ให้ครอบ H endpoint ที่ลอยอยู่ ──────────────────────
         for h in h_walls:
             y          = h["y"]
             is_h_struct = h.get("is_structural", False)
