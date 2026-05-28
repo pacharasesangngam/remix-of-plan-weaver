@@ -1250,17 +1250,34 @@ def build_geometry(image: np.ndarray, yolo_results, ppm=None, debug_images=None,
     # เติมผนังตาม boundary polygon ที่ยังขาด (รองรับกรณีไม่มี room mask เช่น Sunroom)
     h_walls, v_walls = _fill_boundary_gaps(h_walls, v_walls, boundary, image, cfg)
     # [ด่าน 1] รอบสุดท้าย: รวมผนังซ้อนทับที่เกิดจาก bridge/heal functions ทั้งหมด
+    # 1. merge ก่อน
     h_walls, v_walls = _merge_collinear_walls(h_walls, v_walls, cfg)
-    # สับผนังยาวออกเป็นท่อนย่อยที่จุดตัด (Node-Segment Topology)
-    # ป้องกัน Over-Merge และช่วยให้ polygonize ล้อมพื้นที่ปิดได้ถูกต้อง
-    h_walls, v_walls = _split_walls_at_junctions(
+
+    # 2. split จุดตัด
+    h_walls, v_walls = _split_at_junctions(h_walls, v_walls)
+
+    # 3. weld endpoint ให้ชน grid เดียวกัน
+    h_walls, v_walls = _weld_near_endpoints(
+        h_walls,
+        v_walls,
+        tol=cfg["snap"]
+    )
+
+    # 4. bridge ช่องเล็ก "หลัง split แล้วเท่านั้น"
+    h_walls, v_walls = _bridge_small_wall_gaps(
+        h_walls,
+        v_walls,
+        gap_tol=min(cfg["snap"] * 1.5, 0.025)
+    )
+
+    # 5. merge อีกรอบหลัง bridge
+    h_walls, v_walls = _merge_collinear_walls(
         h_walls,
         v_walls,
         cfg
     )
 
-    # สำคัญมาก:
-    # ปัด coordinate ให้ลง grid เดียวกันก่อน polygonize
+    # 6. quantize รอบสุดท้าย
     h_walls, v_walls = _quantize_wall_graph(
         h_walls,
         v_walls,
@@ -1829,32 +1846,8 @@ def _process_wall_graph(h_raw, v_raw, openings, boundary, cfg):
         v_walls
     )
 
-    h_walls, v_walls = _weld_near_endpoints(
-        h_walls,
-        v_walls,
-        tol=0.01
-    )
 
-    h_walls, v_walls = _bridge_small_wall_gaps(
-        h_walls,
-        v_walls,
-        gap_tol=0.08
-    )
-
-    print("\n=== AFTER SPLIT ===")
-
-    for h in h_walls:
-        if abs(h["y"] - 0.723) < 0.01:
-            print(
-                f'H y={h["y"]:.3f} '
-                f'{h["x1"]:.3f}->{h["x2"]:.3f}'
-            )
-    # debug หลัง bridge
-    _debug_wall_connectivity(
-        h_walls,
-        v_walls,
-        cfg
-    )
+   
     return h_walls, v_walls
 
 
@@ -2819,30 +2812,53 @@ def _filter_structural(h_walls, v_walls, boundary, cfg):
 
 
 def _split_at_junctions(h_walls, v_walls):
+    
     snap = MIN_SEG * 0.5
+
     split_h = []
+
     for seg in h_walls:
+
         cuts = [
             v["x"] for v in v_walls
             if seg["x1"] < v["x"] < seg["x2"]
             and v["y1"] - snap <= seg["y"] <= v["y2"] + snap
         ]
+
         xs = sorted([seg["x1"], *cuts, seg["x2"]])
+
         for i in range(len(xs) - 1):
+
             if xs[i + 1] - xs[i] > 1e-5:
-                split_h.append({**seg, "x1": xs[i], "x2": xs[i + 1]})
+
+                split_h.append({
+                    **seg,
+                    "x1": xs[i],
+                    "x2": xs[i + 1]
+                })
+
     split_v = []
+
     for seg in v_walls:
+
         cuts = [
             h["y"] for h in split_h
             if seg["y1"] < h["y"] < seg["y2"]
             and h["x1"] - snap <= seg["x"] <= h["x2"] + snap
         ]
+
         ys = sorted([seg["y1"], *cuts, seg["y2"]])
+
         for i in range(len(ys) - 1):
+
             if ys[i + 1] - ys[i] >= MIN_SEG / 2:
-                split_v.append({**seg, "y1": ys[i], "y2": ys[i + 1]})
- 
+
+                split_v.append({
+                    **seg,
+                    "y1": ys[i],
+                    "y2": ys[i + 1]
+                })
+
     return split_h, split_v
 
 def _weld_near_endpoints(h_walls, v_walls, tol=0.01):
@@ -2859,26 +2875,33 @@ def _weld_near_endpoints(h_walls, v_walls, tol=0.01):
         ys.extend([v["y1"], v["y2"]])
 
     def snap(val, pool):
-
+    
         best = val
+        best_dist = tol
 
         for p in pool:
-            if abs(val - p) < tol:
+
+            d = abs(val - p)
+
+            if d < best_dist:
                 best = p
-                break
+                best_dist = d
 
         return best
 
     # snap H
     for h in h_walls:
-
+        if h.get("source") == "gap_bridge":
+            continue
         h["x1"] = snap(h["x1"], xs)
         h["x2"] = snap(h["x2"], xs)
         h["y"] = snap(h["y"], ys)
 
     # snap V
     for v in v_walls:
-
+    
+        if v.get("source") == "gap_bridge":
+            continue
         v["x"] = snap(v["x"], xs)
         v["y1"] = snap(v["y1"], ys)
         v["y2"] = snap(v["y2"], ys)
@@ -3328,7 +3351,7 @@ def _merge_fragmented_cells(cells, cfg, room_masks=None):
 
     merged = []
     used = set()
-    merge_gap = cfg["snap"] *  4.2
+    merge_gap = cfg["snap"] * 3.5
 
     def _masks_in_cell(cell):
         """หา centroid ของ room mask ที่อยู่ใน cell นี้"""
@@ -4062,7 +4085,7 @@ def _connect_openings_to_walls(
     image=None,
 ) -> tuple:
     snap = cfg["snap"]
-    reach = snap * 5.0  # ระยะสูงสุดจาก endpoint ของผนังถึงขอบ bbox
+    reach = snap * 5.0
 
     openings = list(doors or []) + list(windows or [])
 
@@ -4071,10 +4094,9 @@ def _connect_openings_to_walls(
         try:
             gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
         except Exception:
-            pass
+            gray = None
 
-    def _dark(nx: float, ny: float, thresh: int = 115) -> bool:
-        """True ถ้าจุด (nx, ny) ในภาพเป็นสีมืด (มีเส้นผนัง)"""
+    def _dark(nx: float, ny: float, thresh: int = 120) -> bool:
         if gray is None:
             return True
         hi, wi = gray.shape[:2]
@@ -4083,17 +4105,14 @@ def _connect_openings_to_walls(
         return int(gray[py, px]) < thresh
 
     def _h_present(y_val: float, x_lo: float, x_hi: float) -> bool:
-        """มี H-wall ที่ y≈y_val และครอบช่วง [x_lo, x_hi] บางส่วนไหม"""
         for h in h_walls:
             if abs(h["y"] - y_val) > snap * 2:
                 continue
-            # ผนังต้องทับกับช่วง opening (อย่างน้อยส่วนหนึ่ง)
             if h["x2"] >= x_lo - snap and h["x1"] <= x_hi + snap:
                 return True
         return False
 
     def _v_present(x_val: float, y_lo: float, y_hi: float) -> bool:
-        """มี V-wall ที่ x≈x_val และครอบช่วง [y_lo, y_hi] บางส่วนไหม"""
         for v in v_walls:
             if abs(v["x"] - x_val) > snap * 2:
                 continue
@@ -4101,100 +4120,149 @@ def _connect_openings_to_walls(
                 return True
         return False
 
+    # Conservative extension: only extend existing wall endpoints when very close
     for obj in openings:
         if not isinstance(obj, dict):
             continue
         bbox = obj.get("bbox", obj)
         if not isinstance(bbox, dict):
             continue
-        bx  = bbox.get("x", 0.0)
-        by  = bbox.get("y", 0.0)
-        bw  = bbox.get("w", 0.0)
-        bh  = bbox.get("h", 0.0)
-        if bw < 1e-4 or bh < 1e-4:
+        bx = float(bbox.get("x", 0.0))
+        by = float(bbox.get("y", 0.0))
+        bw = float(bbox.get("w", 0.0))
+        bh = float(bbox.get("h", 0.0))
+        if bw <= 0 or bh <= 0:
             continue
         bx2 = bx + bw
         by2 = by + bh
 
-        # ── TOP edge: H-wall ที่ y≈by ────────────────────────────────────
+        # tolerances scaled to opening size (conservative)
+        wall_x_tol = max(snap * 1.0, bw * 0.15)
+        wall_y_tol = max(snap * 1.0, bh * 0.15)
+        max_ext_x = min(reach, bw * 0.6, snap * 1.5)
+        max_ext_y = min(reach, bh * 0.6, snap * 1.5)
+
+        # TOP edge: try extend H-wall endpoint from left or right into opening edge
         if not _h_present(by, bx, bx2):
-            best, best_d = None, reach
+            candidates = []
             for h in h_walls:
                 if abs(h["y"] - by) > snap * 3:
                     continue
-                # ปลายขวา (x2) อยู่ทางซ้ายของ bx → ยืดมาถึง bx
-                d = bx - h["x2"]
-                if 0 < d < best_d and _dark(h["x2"], h["y"]):
-                    best_d = d; best = ("x2→bx", h)
-                # ปลายซ้าย (x1) อยู่ทางขวาของ bx2 → ยืดมาถึง bx2
-                d = h["x1"] - bx2
-                if 0 < d < best_d and _dark(h["x1"], h["y"]):
-                    best_d = d; best = ("x1→bx2", h)
-            if best:
-                kind, h = best
-                if kind == "x2→bx":
-                    h["x2"] = bx    # ยืดมาถึงขอบซ้ายของช่องเปิด
+                # right endpoint left of opening
+                if h["x2"] < bx:
+                    d = bx - h["x2"]
+                    if 0 < d <= max_ext_x and h["x2"] >= bx - wall_x_tol and _dark(h["x2"], h["y"]):
+                        candidates.append((d, "x2", h))
+                # left endpoint right of opening
+                if h["x1"] > bx2:
+                    d = h["x1"] - bx2
+                    if 0 < d <= max_ext_x and h["x1"] <= bx2 + wall_x_tol and _dark(h["x1"], h["y"]):
+                        candidates.append((d, "x1", h))
+            if candidates:
+                candidates.sort(key=lambda x: x[0])
+                d, kind, h = candidates[0]
+                if kind == "x2":
+                    if _segment_overlaps_opening(h["x2"], h["y"], bx, h["y"], openings) or _segment_crosses_opening_interior(h["x2"], h["y"], bx, h["y"], openings):
+                        print(f"[connect_openings] SKIP TOP extend H from x2 due overlap/crossing: {h['x2']:.3f}->{bx:.3f} y={h['y']:.3f}")
+                    else:
+                        print(f"[connect_openings] EXTEND TOP H x2 {h['x2']:.3f}->{bx:.3f} y={h['y']:.3f}")
+                        h["x2"] = bx
                 else:
-                    h["x1"] = bx2   # ยืดมาถึงขอบขวาของช่องเปิด
+                    if _segment_overlaps_opening(h["x1"], h["y"], bx2, h["y"], openings) or _segment_crosses_opening_interior(h["x1"], h["y"], bx2, h["y"], openings):
+                        print(f"[connect_openings] SKIP TOP extend H from x1 due overlap/crossing: {h['x1']:.3f}->{bx2:.3f} y={h['y']:.3f}")
+                    else:
+                        print(f"[connect_openings] EXTEND TOP H x1 {h['x1']:.3f}->{bx2:.3f} y={h['y']:.3f}")
+                        h["x1"] = bx2
 
-        # ── BOTTOM edge: H-wall ที่ y≈by2 ───────────────────────────────
+        # BOTTOM edge
         if not _h_present(by2, bx, bx2):
-            best, best_d = None, reach
+            candidates = []
             for h in h_walls:
                 if abs(h["y"] - by2) > snap * 3:
                     continue
-                d = bx - h["x2"]
-                if 0 < d < best_d and _dark(h["x2"], h["y"]):
-                    best_d = d; best = ("x2→bx", h)
-                d = h["x1"] - bx2
-                if 0 < d < best_d and _dark(h["x1"], h["y"]):
-                    best_d = d; best = ("x1→bx2", h)
-            if best:
-                kind, h = best
-                if kind == "x2→bx":
-                    h["x2"] = bx
+                if h["x2"] < bx:
+                    d = bx - h["x2"]
+                    if 0 < d <= max_ext_x and h["x2"] >= bx - wall_x_tol and _dark(h["x2"], h["y"]):
+                        candidates.append((d, "x2", h))
+                if h["x1"] > bx2:
+                    d = h["x1"] - bx2
+                    if 0 < d <= max_ext_x and h["x1"] <= bx2 + wall_x_tol and _dark(h["x1"], h["y"]):
+                        candidates.append((d, "x1", h))
+            if candidates:
+                candidates.sort(key=lambda x: x[0])
+                d, kind, h = candidates[0]
+                if kind == "x2":
+                    if _segment_overlaps_opening(h["x2"], h["y"], bx, h["y"], openings) or _segment_crosses_opening_interior(h["x2"], h["y"], bx, h["y"], openings):
+                        print(f"[connect_openings] SKIP BOTTOM extend H from x2 due overlap/crossing: {h['x2']:.3f}->{bx:.3f} y={h['y']:.3f}")
+                    else:
+                        print(f"[connect_openings] EXTEND BOTTOM H x2 {h['x2']:.3f}->{bx:.3f} y={h['y']:.3f}")
+                        h["x2"] = bx
                 else:
-                    h["x1"] = bx2
+                    if _segment_overlaps_opening(h["x1"], h["y"], bx2, h["y"], openings) or _segment_crosses_opening_interior(h["x1"], h["y"], bx2, h["y"], openings):
+                        print(f"[connect_openings] SKIP BOTTOM extend H from x1 due overlap/crossing: {h['x1']:.3f}->{bx2:.3f} y={h['y']:.3f}")
+                    else:
+                        print(f"[connect_openings] EXTEND BOTTOM H x1 {h['x1']:.3f}->{bx2:.3f} y={h['y']:.3f}")
+                        h["x1"] = bx2
 
-        # ── LEFT edge: V-wall ที่ x≈bx ──────────────────────────────────
+        # LEFT edge: V walls
         if not _v_present(bx, by, by2):
-            best, best_d = None, reach
+            candidates = []
             for v in v_walls:
                 if abs(v["x"] - bx) > snap * 3:
                     continue
-                # ปลายล่าง (y2) อยู่เหนือ by → ยืดมาถึง by
-                d = by - v["y2"]
-                if 0 < d < best_d and _dark(v["x"], v["y2"]):
-                    best_d = d; best = ("y2→by", v)
-                # ปลายบน (y1) อยู่ใต้ by2 → ยืดมาถึง by2
-                d = v["y1"] - by2
-                if 0 < d < best_d and _dark(v["x"], v["y1"]):
-                    best_d = d; best = ("y1→by2", v)
-            if best:
-                kind, v = best
-                if kind == "y2→by":
-                    v["y2"] = by    # ยืดมาถึงขอบบนของช่องเปิด
+                if v["y2"] < by:
+                    d = by - v["y2"]
+                    if 0 < d <= max_ext_y and v["y2"] >= by - wall_y_tol and _dark(v["x"], v["y2"]):
+                        candidates.append((d, "y2", v))
+                if v["y1"] > by2:
+                    d = v["y1"] - by2
+                    if 0 < d <= max_ext_y and v["y1"] <= by2 + wall_y_tol and _dark(v["x"], v["y1"]):
+                        candidates.append((d, "y1", v))
+            if candidates:
+                candidates.sort(key=lambda x: x[0])
+                d, kind, v = candidates[0]
+                if kind == "y2":
+                    if _segment_overlaps_opening(v["x"], v["y2"], v["x"], by, openings) or _segment_crosses_opening_interior(v["x"], v["y2"], v["x"], by, openings):
+                        print(f"[connect_openings] SKIP LEFT extend V from y2 due overlap/crossing: x={v['x']:.3f} {v['y2']:.3f}->{by:.3f}")
+                    else:
+                        print(f"[connect_openings] EXTEND LEFT V y2 {v['y2']:.3f}->{by:.3f} x={v['x']:.3f}")
+                        v["y2"] = by
                 else:
-                    v["y1"] = by2   # ยืดมาถึงขอบล่างของช่องเปิด
+                    if _segment_overlaps_opening(v["x"], v["y1"], v["x"], by2, openings) or _segment_crosses_opening_interior(v["x"], v["y1"], v["x"], by2, openings):
+                        print(f"[connect_openings] SKIP LEFT extend V from y1 due overlap/crossing: x={v['x']:.3f} {v['y1']:.3f}->{by2:.3f}")
+                    else:
+                        print(f"[connect_openings] EXTEND LEFT V y1 {v['y1']:.3f}->{by2:.3f} x={v['x']:.3f}")
+                        v["y1"] = by2
 
-        # ── RIGHT edge: V-wall ที่ x≈bx2 ────────────────────────────────
+        # RIGHT edge: V walls
         if not _v_present(bx2, by, by2):
-            best, best_d = None, reach
+            candidates = []
             for v in v_walls:
                 if abs(v["x"] - bx2) > snap * 3:
                     continue
-                d = by - v["y2"]
-                if 0 < d < best_d and _dark(v["x"], v["y2"]):
-                    best_d = d; best = ("y2→by", v)
-                d = v["y1"] - by2
-                if 0 < d < best_d and _dark(v["x"], v["y1"]):
-                    best_d = d; best = ("y1→by2", v)
-            if best:
-                kind, v = best
-                if kind == "y2→by":
-                    v["y2"] = by
+                if v["y2"] < by:
+                    d = by - v["y2"]
+                    if 0 < d <= max_ext_y and v["y2"] >= by - wall_y_tol and _dark(v["x"], v["y2"]):
+                        candidates.append((d, "y2", v))
+                if v["y1"] > by2:
+                    d = v["y1"] - by2
+                    if 0 < d <= max_ext_y and v["y1"] <= by2 + wall_y_tol and _dark(v["x"], v["y1"]):
+                        candidates.append((d, "y1", v))
+            if candidates:
+                candidates.sort(key=lambda x: x[0])
+                d, kind, v = candidates[0]
+                if kind == "y2":
+                    if _segment_overlaps_opening(v["x"], v["y2"], v["x"], by, openings) or _segment_crosses_opening_interior(v["x"], v["y2"], v["x"], by, openings):
+                        print(f"[connect_openings] SKIP RIGHT extend V from y2 due overlap/crossing: x={v['x']:.3f} {v['y2']:.3f}->{by:.3f}")
+                    else:
+                        print(f"[connect_openings] EXTEND RIGHT V y2 {v['y2']:.3f}->{by:.3f} x={v['x']:.3f}")
+                        v["y2"] = by
                 else:
-                    v["y1"] = by2
+                    if _segment_overlaps_opening(v["x"], v["y1"], v["x"], by2, openings) or _segment_crosses_opening_interior(v["x"], v["y1"], v["x"], by2, openings):
+                        print(f"[connect_openings] SKIP RIGHT extend V from y1 due overlap/crossing: x={v['x']:.3f} {v['y1']:.3f}->{by2:.3f}")
+                    else:
+                        print(f"[connect_openings] EXTEND RIGHT V y1 {v['y1']:.3f}->{by2:.3f} x={v['x']:.3f}")
+                        v["y1"] = by2
 
     return h_walls, v_walls
 
@@ -4216,7 +4284,7 @@ def _bridge_small_wall_gaps(h_walls, v_walls, gap_tol=0.08):
             b = h_walls[j]
 
             # y ต้องตรงกันจริง
-            if abs(a["y"] - b["y"]) > 0.003:
+            if abs(a["y"] - b["y"]) > 1e-4:
                 continue
 
             left, right = sorted([a, b], key=lambda s: s["x1"])
@@ -4237,6 +4305,11 @@ def _bridge_small_wall_gaps(h_walls, v_walls, gap_tol=0.08):
             if gap > gap_tol:
                 continue
 
+            # กันเติม doorway / closet opening
+            # opening จริงมักกว้างเกิน 0.045
+            if gap > 0.045:
+                continue
+
             # ต้องมี vertical wall รองรับปลายทั้งสอง
             has_left_support = any(
                 abs(v["x"] - left["x2"]) < 0.01
@@ -4252,7 +4325,12 @@ def _bridge_small_wall_gaps(h_walls, v_walls, gap_tol=0.08):
 
             if not (has_left_support and has_right_support):
                 continue
-
+            # ห้าม bridge ถ้าปลายทั้งสองมาจาก room shell/open edge
+            if (
+                left.get("source") in ("room_shell", "boundary_fill")
+                or right.get("source") in ("room_shell", "boundary_fill")
+            ):
+                continue
             bridge = {
                 "x1": left["x2"],
                 "x2": right["x1"],
