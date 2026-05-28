@@ -451,6 +451,29 @@ const WallReview = ({
         return { x, y, w: Math.max(...xs) - x, h: Math.max(...ys) - y };
     };
 
+    const polygonArea = (polygon?: { x: number; y: number }[] | null, pw = 1, ph = 1): number => {
+        if (!polygon || polygon.length < 3) return 0;
+        let area = 0;
+        for (let i = 0; i < polygon.length; i += 1) {
+            const p1 = polygon[i];
+            const p2 = polygon[(i + 1) % polygon.length];
+            area += p1.x * p2.y - p2.x * p1.y;
+        }
+        return Math.abs(area) * 0.5 * pw * ph;
+    };
+
+    const getRoomAreaM2 = (room: Room): number | null => {
+        if (typeof room.areaSqm === "number" && room.areaSqm > 0) return room.areaSqm;
+        if (room.width > 1 || room.height > 1) return room.width * room.height;
+        const polygon = room.polygon && room.polygon.length >= 3
+            ? room.polygon
+            : room.wallPolygon && room.wallPolygon.length >= 3
+                ? room.wallPolygon
+                : null;
+        if (!calibrated || !polygon) return null;
+        return polygonArea(polygon, imgSize.w * scale, imgSize.h * scale);
+    };
+
     // FIX: คืน null เมื่อยังไม่ calibrate เพื่อให้ panel ขวา block ตัวเลขเมตร
     const bboxToM = (normDim: number, axis: "w" | "h"): number | null =>
         calibrated ? normDim * (axis === "w" ? imgSize.w : imgSize.h) * scale : null;
@@ -1092,31 +1115,23 @@ const WallReview = ({
                                 <EditableCell room={selectedRoom} field="height"     label="D (m)" suffix="m" />
                                 <EditableCell room={selectedRoom} field="wallHeight" label="H (m)" suffix="m" />
                             </div>
-                            {/* FIX: Area แสดงเฉพาะเมื่อ calibrate แล้ว */}
-                            {calibrated && (() => {
-                                const bbox = roomBBox(selectedRoom);
-                                if (!bbox) return null;
-                                const rw = bboxToM(bbox.w, "w"), rh = bboxToM(bbox.h, "h");
-                                if (!rw || !rh) return null;
-                                return (
-                                    <>
-                                        <div className="text-[10px] text-muted-foreground font-mono flex justify-between">
+                            {(() => {
+                                const area = getRoomAreaM2(selectedRoom);
+                                if (area == null) {
+                                    return (
+                                        <div className="text-[10px] text-muted-foreground/40 font-mono flex justify-between">
                                             <span>Area</span>
-                                            <span className="text-foreground font-medium">{(rw * rh).toFixed(2)} m²</span>
+                                            <span>— m²</span>
                                         </div>
-                                        <div className="text-[10px] font-mono text-emerald-400/80 flex justify-between border-t border-border pt-2">
-                                            <span>Calibrated area</span>
-                                            <span className="font-semibold">{(rw * rh).toFixed(2)} m²</span>
-                                        </div>
-                                    </>
+                                    );
+                                }
+                                return (
+                                    <div className="text-[10px] text-muted-foreground font-mono flex justify-between">
+                                        <span>Area</span>
+                                        <span className="text-foreground font-medium">{area.toFixed(2)} m²</span>
+                                    </div>
                                 );
                             })()}
-                            {!calibrated && (
-                                <div className="text-[10px] text-muted-foreground/40 font-mono flex justify-between">
-                                    <span>Area</span>
-                                    <span>— m²</span>
-                                </div>
-                            )}
                         </div>
                     )}
 

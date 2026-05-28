@@ -24,6 +24,7 @@ export interface Room {
   wallPolygon?: NormalizedPoint[];
   center?: NormalizedPoint;
   bbox?: BBox;     // normalized bbox derived from polygon
+  areaSqm?: number;
   // Pro mode fields
   material?: string;
   floorColor?: string;

@@ -127,7 +127,12 @@ const Index = () => {
   const handleRoomUpdate = useCallback((id: string, field: keyof Room, value: number | string) => {
     setRooms(prev =>
       prev.map(r => r.id === id
-        ? { ...r, [field]: value, confidence: (field === "width" || field === "height") ? "manual" : r.confidence }
+        ? {
+            ...r,
+            [field]: value,
+            confidence: (field === "width" || field === "height") ? "manual" : r.confidence,
+            ...(field === "width" || field === "height" ? { areaSqm: undefined } : {}),
+          }
         : r
       )
     );

@@ -205,6 +205,27 @@ const polygonArea = (polygon?: NormalizedPoint[] | null, pw = PLAN_SIZE, ph = PL
   return Math.abs(area) * 0.5 * pw * ph;
 };
 
+const parseTileSizeM = (sizeCm: string): { width: number; height: number } | null => {
+  const match = sizeCm.trim().toLowerCase().match(/^(\d+(?:\.\d+)?)\s*x\s*(\d+(?:\.\d+)?)$/);
+  if (!match) return null;
+
+  const width = Number(match[1]) / 100;
+  const height = Number(match[2]) / 100;
+  if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) return null;
+
+  return { width, height };
+};
+
+const estimateTileCount = (areaM2: number, tile: ScgTileOption, wasteRate = 0.1): number | null => {
+  const size = parseTileSizeM(tile.sizeCm);
+  if (!size) return null;
+
+  const tileArea = size.width * size.height;
+  if (tileArea <= 0) return null;
+
+  return Math.ceil((areaM2 / tileArea) * (1 + wasteRate));
+};
+
 const polygonCentroid = (polygon?: NormalizedPoint[] | null): NormalizedPoint | null => {
   if (!polygon || polygon.length < 3) return null;
 
@@ -2227,6 +2248,8 @@ const RightPanel = ({
   const selectedWallPaint = findScgPaint(selectedWall?.scgPaintCode);
   const selectedDoorOption = findScgDoor(selectedDoor?.scgDoorCode);
   const selectedWindowOption = findScgWindow(selectedWindow?.scgWindowCode);
+  const selectedRoomFloorArea = selectedRoom ? polygonArea(getRoomFloorPolygon(selectedRoom), pw, ph) : 0;
+  const selectedRoomTileCount = selectedRoom ? estimateTileCount(selectedRoomFloorArea, selectedRoomTile) : null;
 
   const applyPaintToWall = (wallId: string, code: string) => {
     const paint = findScgPaint(code);
@@ -2710,6 +2733,25 @@ const RightPanel = ({
                     {selectedRoom.tileName ?? selectedRoomTile.name}
                   </span>
                 </label>
+                <div className="rounded-2xl border border-border bg-background/70 p-3 space-y-1.5 text-[11px] font-mono">
+                  <div className="flex items-center justify-between gap-3">
+                    <span className="text-muted-foreground">Area</span>
+                    <span className="text-foreground">{selectedRoomFloorArea.toFixed(2)} m²</span>
+                  </div>
+                  <div className="flex items-center justify-between gap-3">
+                    <span className="text-muted-foreground">Tile size</span>
+                    <span className="text-foreground">{selectedRoomTile.sizeCm} cm</span>
+                  </div>
+                  <div className="flex items-center justify-between gap-3">
+                    <span className="text-muted-foreground">Needed</span>
+                    <span className="text-foreground font-semibold">
+                      {selectedRoomTileCount != null ? `${selectedRoomTileCount.toLocaleString()} แผ่น` : "N/A"}
+                    </span>
+                  </div>
+                  <div className="text-[10px] text-muted-foreground/70">
+                    Includes 10% waste for cuts and breakage
+                  </div>
+                </div>
                 <label className="flex items-center justify-between gap-3 text-[11px] text-muted-foreground">
                   Floor color
                   <input
