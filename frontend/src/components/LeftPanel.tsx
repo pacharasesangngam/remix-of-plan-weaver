@@ -70,10 +70,15 @@ const LeftPanel = ({
     return { text: "Manual", icon: AlertCircle, cls: "text-muted-foreground" };
   };
 
+  const getRoomAreaSqm = (room: Room): number =>
+    typeof room.areaSqm === "number" && room.areaSqm > 0
+      ? room.areaSqm
+      : room.width * room.height;
+
   // Total cost estimate for Pro mode
   const totalCost = rooms.reduce((sum, r) => {
     const mat = MATERIALS.find((m) => m.id === r.material);
-    const area = r.width * r.height;
+    const area = getRoomAreaSqm(r);
     return sum + area * (mat?.costPerSqm ?? 0) + (r.finishCost ?? 0);
   }, 0);
 
@@ -183,7 +188,7 @@ const LeftPanel = ({
                     const displayW = +(room.width / currentUnit.toMeter).toFixed(2);
                     const displayH = +(room.height / currentUnit.toMeter).toFixed(2);
                     const mat = MATERIALS.find((m) => m.id === (room.material ?? "none"));
-                    const area = room.width * room.height;
+                    const area = getRoomAreaSqm(room);
                     const matCost = area * (mat?.costPerSqm ?? 0);
 
                     return (

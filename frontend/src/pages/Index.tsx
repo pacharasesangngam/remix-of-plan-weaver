@@ -98,6 +98,7 @@ const Index = () => {
   const handleWallHeightChange = useCallback((height: number) => {
     setWallHeightMeter(height);
     setRooms(prev => prev.map(r => ({ ...r, wallHeight: height })));
+    setWalls(prev => prev.map(w => ({ ...w, wallHeight: height })));
   }, []);
 
   const handleDetect = useCallback(async () => {
@@ -121,12 +122,17 @@ const Index = () => {
     } finally {
       setDetecting(false);
     }
-  }, [imageFile, debugMode]);
+  }, [imageFile, debugMode, wallHeightMeter]);
 
   const handleRoomUpdate = useCallback((id: string, field: keyof Room, value: number | string) => {
     setRooms(prev =>
       prev.map(r => r.id === id
-        ? { ...r, [field]: value, confidence: (field === "width" || field === "height") ? "manual" : r.confidence }
+        ? {
+            ...r,
+            [field]: value,
+            confidence: (field === "width" || field === "height") ? "manual" : r.confidence,
+            ...(field === "width" || field === "height" ? { areaSqm: undefined } : {}),
+          }
         : r
       )
     );

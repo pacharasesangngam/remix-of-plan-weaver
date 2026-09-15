@@ -3,7 +3,7 @@ import {
     CheckCircle2, AlertCircle, Pencil, Check, X,
     ArrowRight, Zap, ChevronLeft, ChevronRight,
     DoorOpen, AppWindow, Layers, Eye, EyeOff, Ruler,
-    Crosshair, RotateCcw, Building2,
+    Crosshair, RotateCcw, Building2, ZoomIn, ZoomOut, Maximize,
 } from "lucide-react";
 import type { Room, DimensionUnit } from "@/types/floorplan";
 import type { DetectedWallSegment, DetectedDoor, DetectedWindow } from "@/types/detection";
@@ -49,7 +49,7 @@ interface WallEditState {
 
 interface CalibPoint { x: number; y: number; }
 
-type SelectionType = "room" | "wall";
+type SelectionType = "room" | "wall" | "door" | "window";
 type OverlayLayer  = "rooms" | "walls" | "doors" | "windows" | "image";
 // idle → placing (dropping points) → ready (both down, enter real dist) → applied
 type CalibPhase    = "idle" | "placing" | "ready" | "applied";
@@ -73,6 +73,7 @@ const CONF_STYLE: Record<Room["confidence"], { stroke: string; label: string; la
 
 // Hit radius (normalised coords) — ใหญ่พอที่จะจับจุดได้ง่าย โดยเฉพาะ touch screen
 const DRAG_HIT = 0.045;
+const ZOOM_PRESETS = [0.25, 0.5, 0.75, 1, 1.25, 1.5, 2, 3, 4];
 
 // ─────────────────────────────────────────────────────────────
 // COMPONENT
@@ -91,9 +92,16 @@ const WallReview = ({
     const [selectedId,     setSelectedId]     = useState<string | null>(rooms[0]?.id ?? null);
     const [selectionType,  setSelectionType]  = useState<SelectionType>("room");
     const [selectedWallId, setSelectedWallId] = useState<string | null>(null);
+    const [selectedDoorId, setSelectedDoorId] = useState<string | null>(null);
+    const [selectedWindowId, setSelectedWindowId] = useState<string | null>(null);
     const [imgSize,        setImgSize]        = useState({ w: 1, h: 1 });
+    const [sourceSize,     setSourceSize]     = useState({ w: 0, h: 0 });
+    const [viewZoom,       setViewZoom]       = useState(1);
+    const [viewPan,        setViewPan]        = useState({ x: 0, y: 0 });
+    const [isEditingZoom,  setIsEditingZoom]  = useState(false);
+    const [zoomInput,      setZoomInput]      = useState("100");
     const [layers,         setLayers]         = useState<Set<OverlayLayer>>(
-        new Set(["walls", "doors", "windows", "image"])
+        new Set(["rooms", "walls", "doors", "windows", "image"])
     );
 
     // Global wall height
@@ -116,25 +124,80 @@ const WallReview = ({
 
     const imgRef     = useRef<HTMLImageElement>(null);
     const overlayRef = useRef<HTMLDivElement>(null);
+    const workspaceRef = useRef<HTMLDivElement>(null);
+    const sidebarScrollRef = useRef<HTMLDivElement>(null);
+    const panStartRef = useRef<{ x: number; y: number; panX: number; panY: number; captured: boolean } | null>(null);
+    const manualWallHistoryRef = useRef<string[]>([]);
+    const fittedImageRef = useRef<string | null>(null);
+    const isAtFitRef = useRef(true);
+    const selectionInitializedRef = useRef(false);
+    const [isPanning, setIsPanning] = useState(false);
     const currentUnit = UNITS.find((u) => u.value === unit) ?? UNITS[0];
+
+    useEffect(() => {
+        const selectedObjectId = selectionType === "room" ? selectedId
+            : selectionType === "wall" ? selectedWallId
+            : selectionType === "door" ? selectedDoorId
+            : selectedWindowId;
+        const sidebar = sidebarScrollRef.current;
+        if (!sidebar || !selectedObjectId) return;
+        const item = sidebar.querySelector<HTMLElement>(`[data-plan-selection="${selectionType}:${selectedObjectId}"]`);
+        if (!item) return;
+        const sidebarRect = sidebar.getBoundingClientRect();
+        const itemRect = item.getBoundingClientRect();
+        const delta = itemRect.top < sidebarRect.top
+            ? itemRect.top - sidebarRect.top
+            : itemRect.bottom > sidebarRect.bottom
+                ? itemRect.bottom - sidebarRect.bottom
+                : 0;
+        if (delta) sidebar.scrollBy({ top: delta, behavior: "smooth" });
+    }, [selectedDoorId, selectedId, selectedWallId, selectedWindowId, selectionType]);
 
     // ── scale ใช้งานได้จริงเมื่อ calibrate แล้วเท่านั้น ──────
     const calibrated = calibPhase === "applied" && scale > 0;
 
-    // Track image size
-    useEffect(() => {
-        const el = imgRef.current;
-        if (!el) return;
-        const measure = () => setImgSize({ w: el.clientWidth, h: el.clientHeight });
-        if (el.complete) measure();
-        const ro = new ResizeObserver(measure);
-        ro.observe(el);
-        return () => ro.disconnect();
-    }, [imageUrl]);
+    // The base plane is fitted to the workspace. Zoom and pan are applied later as
+    // a shared visual transform, so they never alter plan coordinates.
+    const fitToScreen = useCallback(() => {
+        const workspace = workspaceRef.current;
+        if (!workspace || !sourceSize.w || !sourceSize.h) return;
+        const padding = 32;
+        const fitScale = Math.min(
+            Math.max(1, workspace.clientWidth - padding) / sourceSize.w,
+            Math.max(1, workspace.clientHeight - padding) / sourceSize.h,
+        );
+        setImgSize({ w: sourceSize.w * fitScale, h: sourceSize.h * fitScale });
+        setViewZoom(1);
+        setViewPan({ x: 0, y: 0 });
+        isAtFitRef.current = true;
+    }, [sourceSize]);
 
     useEffect(() => {
-        if (rooms.length > 0 && !selectedId) setSelectedId(rooms[0].id);
-    }, [rooms, selectedId]);
+        const workspace = workspaceRef.current;
+        if (!workspace) return;
+        const ro = new ResizeObserver(() => {
+            if (isAtFitRef.current && fittedImageRef.current === (backgroundImageUrl ?? imageUrl)) fitToScreen();
+        });
+        ro.observe(workspace);
+        return () => ro.disconnect();
+    }, [backgroundImageUrl, fitToScreen, imageUrl]);
+
+    useEffect(() => {
+        if (!sourceSize.w || !sourceSize.h) return;
+        fitToScreen();
+        fittedImageRef.current = backgroundImageUrl ?? imageUrl;
+    }, [backgroundImageUrl, fitToScreen, imageUrl, sourceSize]);
+
+    useEffect(() => {
+        setLocalWallH(wallHeightMeter);
+    }, [wallHeightMeter]);
+
+    useEffect(() => {
+        if (!selectionInitializedRef.current && rooms.length > 0) {
+            setSelectedId(rooms[0].id);
+            selectionInitializedRef.current = true;
+        }
+    }, [rooms]);
 
     // ── Coord helpers ────────────────────────────────────────
     const evToNorm = (e: React.PointerEvent | React.MouseEvent): CalibPoint | null => {
@@ -196,13 +259,21 @@ const WallReview = ({
     };
 
     const undoLastManualWall = () => {
-        const lastManual = [...walls].reverse().find((wall) => wall.id.startsWith("manual-wall-"));
-        if (lastManual && onWallDelete) onWallDelete(lastManual.id);
+        if (!onWallDelete) return;
+        let wallId = manualWallHistoryRef.current.pop();
+        while (wallId && !walls.some(wall => wall.id === wallId)) wallId = manualWallHistoryRef.current.pop();
+        if (wallId) onWallDelete(wallId);
     };
 
     const createManualWall = (start: CalibPoint, end: CalibPoint) => {
         const pxLen = pixelDist(start, end);
-        if (pxLen < 6 || !onWallAdd) return;
+        if (pxLen < 6 || !onWallAdd) return false;
+        const endpointDistance = (a: CalibPoint, b: CalibPoint) => Math.hypot(a.x - b.x, a.y - b.y);
+        const duplicate = walls.some(wall =>
+            (endpointDistance(start, { x: wall.x1, y: wall.y1 }) < 0.02 && endpointDistance(end, { x: wall.x2, y: wall.y2 }) < 0.02) ||
+            (endpointDistance(start, { x: wall.x2, y: wall.y2 }) < 0.02 && endpointDistance(end, { x: wall.x1, y: wall.y1 }) < 0.02)
+        );
+        if (duplicate) return false;
         const id = `manual-wall-${Date.now()}`;
 
         onWallAdd({
@@ -213,9 +284,11 @@ const WallReview = ({
             y2: end.y,
             type: "interior",
             thickness: 0.15,
-            wallHeight: 2.8,
+            wallHeight: wallHeightMeter,
         });
+        manualWallHistoryRef.current.push(id);
         selectWall(id);
+        return true;
     };
 
     const onWallDrawPointerDown = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
@@ -229,9 +302,10 @@ const WallReview = ({
             return;
         }
 
-        createManualWall(wallDraftStart, pt);
+        const created = createManualWall(wallDraftStart, pt);
         setWallDraftStart(null);
         setWallDraftMouse(null);
+        if (created) stopWallDraw();
     }, [wallDraftStart, onWallAdd, imgSize]);
 
     const onWallDrawPointerMove = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
@@ -306,6 +380,113 @@ const WallReview = ({
         }
     }, [isDragging]);
 
+    const inCalibMode = calibPhase === "placing" || calibPhase === "ready";
+    const inPointerMode = inCalibMode || wallDrawMode;
+
+    const clampPan = useCallback((pan: { x: number; y: number }, zoom = viewZoom) => {
+        const workspace = workspaceRef.current;
+        if (!workspace) return pan;
+        const maxX = Math.max(0, (imgSize.w * zoom - workspace.clientWidth) / 2);
+        const maxY = Math.max(0, (imgSize.h * zoom - workspace.clientHeight) / 2);
+        return {
+            x: Math.max(-maxX, Math.min(maxX, pan.x)),
+            y: Math.max(-maxY, Math.min(maxY, pan.y)),
+        };
+    }, [imgSize, viewZoom]);
+
+    const setZoom = useCallback((nextZoom: number, anchor?: { x: number; y: number }) => {
+        const clampedZoom = Math.max(0.25, Math.min(4, nextZoom));
+        isAtFitRef.current = clampedZoom === 1 && !anchor;
+        if (anchor && workspaceRef.current) {
+            const rect = workspaceRef.current.getBoundingClientRect();
+            const anchorFromCenter = { x: anchor.x - rect.left - rect.width / 2, y: anchor.y - rect.top - rect.height / 2 };
+            const ratio = clampedZoom / viewZoom;
+            setViewPan(current => clampPan({
+                x: anchorFromCenter.x - (anchorFromCenter.x - current.x) * ratio,
+                y: anchorFromCenter.y - (anchorFromCenter.y - current.y) * ratio,
+            }, clampedZoom));
+        } else {
+            setViewPan(current => clampPan(current, clampedZoom));
+        }
+        setViewZoom(clampedZoom);
+        setZoomInput(String(Math.round(clampedZoom * 100)));
+    }, [clampPan, viewZoom]);
+
+    const stepZoom = useCallback((direction: -1 | 1) => {
+        const currentIndex = direction > 0
+            ? ZOOM_PRESETS.findIndex(level => level > viewZoom + 0.0001)
+            : [...ZOOM_PRESETS].reverse().findIndex(level => level < viewZoom - 0.0001);
+        const next = direction > 0
+            ? ZOOM_PRESETS[currentIndex === -1 ? ZOOM_PRESETS.length - 1 : currentIndex]
+            : ZOOM_PRESETS[currentIndex === -1 ? 0 : ZOOM_PRESETS.length - 1 - currentIndex];
+        setZoom(next);
+    }, [setZoom, viewZoom]);
+
+    const commitZoomInput = useCallback(() => {
+        const value = parseFloat(zoomInput.replace("%", ""));
+        if (!Number.isNaN(value)) setZoom(value / 100);
+        else setZoomInput(String(Math.round(viewZoom * 100)));
+        setIsEditingZoom(false);
+    }, [setZoom, viewZoom, zoomInput]);
+
+    const onWorkspaceWheel = useCallback((e: React.WheelEvent<HTMLDivElement>) => {
+        e.preventDefault();
+        // Browser pinch gestures are delivered as ctrl+wheel. Trackpads normally
+        // produce small pixel deltas (or horizontal deltas) for two-finger panning.
+        const isTrackpadPan = !e.ctrlKey && (e.deltaX !== 0 || (e.deltaMode === 0 && Math.abs(e.deltaY) < 50));
+        if (!isTrackpadPan) {
+            setZoom(viewZoom * Math.exp(-e.deltaY * 0.002), { x: e.clientX, y: e.clientY });
+            return;
+        }
+        isAtFitRef.current = false;
+        setViewPan(current => clampPan({ x: current.x - e.deltaX, y: current.y - e.deltaY }));
+    }, [clampPan, setZoom, viewZoom]);
+
+    // Chromium reports a trackpad pinch as Ctrl+wheel. React's delegated wheel
+    // handler may be passive, so cancel it with a native non-passive listener at
+    // the workspace boundary before the browser can zoom the entire page.
+    useEffect(() => {
+        const workspace = workspaceRef.current;
+        if (!workspace) return;
+        const preventBrowserPinchZoom = (event: WheelEvent) => {
+            if (event.ctrlKey) event.preventDefault();
+        };
+        workspace.addEventListener("wheel", preventBrowserPinchZoom, { passive: false });
+        return () => workspace.removeEventListener("wheel", preventBrowserPinchZoom);
+    }, []);
+
+    const PAN_DRAG_THRESHOLD = 4; // px
+
+    const onPanPointerDown = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+        const target = e.target as Element;
+        if (viewZoom <= 1 || inPointerMode || target.closest("button, input")) return;
+        panStartRef.current = { x: e.clientX, y: e.clientY, panX: viewPan.x, panY: viewPan.y, captured: false };
+        isAtFitRef.current = false;
+        // ยังไม่ capture ตรงนี้ — รอดูก่อนว่าเป็น drag จริงหรือแค่ click
+    }, [inPointerMode, viewPan, viewZoom]);
+
+    const onPanPointerMove = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+        const start = panStartRef.current;
+        if (!start) return;
+        const dx = e.clientX - start.x;
+        const dy = e.clientY - start.y;
+        if (!start.captured) {
+            if (Math.hypot(dx, dy) < PAN_DRAG_THRESHOLD) return; // ยังไม่ขยับพอ อาจเป็นแค่คลิก
+            start.captured = true;
+            setIsPanning(true);
+            (e.currentTarget as HTMLDivElement).setPointerCapture(e.pointerId);
+        }
+        setViewPan(clampPan({ x: start.panX + dx, y: start.panY + dy }));
+    }, [clampPan]);
+
+    const onPanPointerUp = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+        if (panStartRef.current?.captured) {
+            e.currentTarget.releasePointerCapture(e.pointerId);
+        }
+        panStartRef.current = null;
+        setIsPanning(false);
+    }, []);
+
     // ── Apply / reset ────────────────────────────────────────
     const applyCalibration = () => {
         const real = parseFloat(calibLength)          // เมตรที่ user ใส่
@@ -361,9 +542,6 @@ const WallReview = ({
         onWallHeightChange?.(h);
     };
 
-    const inCalibMode = calibPhase === "placing" || calibPhase === "ready";
-    const inPointerMode = inCalibMode || wallDrawMode;
-
     // ── Layer toggle ─────────────────────────────────────────
     const toggleLayer = (layer: OverlayLayer) =>
         setLayers(prev => { const s = new Set(prev); s.has(layer) ? s.delete(layer) : s.add(layer); return s; });
@@ -371,7 +549,7 @@ const WallReview = ({
     // ── Room editing ─────────────────────────────────────────
     // FIX: ถ้า calibrate แล้ว แสดงค่าจาก bbox × imgSize × scale แทน normalized width/height
     const getDisplay = (room: Room, field: "width" | "height" | "wallHeight") => {
-        if (field === "wallHeight") return +(room.wallHeight ?? 2.8).toFixed(2);
+        if (field === "wallHeight") return +(room.wallHeight ?? wallHeightMeter).toFixed(2);
         const bbox = roomBBox(room);
         if (calibrated && bbox) {
             const px = field === "width"
@@ -410,7 +588,7 @@ const WallReview = ({
     const getWallThickness = (w: DetectedWallSegment): number | null =>
         typeof w.thickness === "number" ? w.thickness : null;
     const getWallHeight = (w: DetectedWallSegment): number | null =>
-        typeof w.wallHeight === "number" ? w.wallHeight : null;
+        typeof w.wallHeight === "number" ? w.wallHeight : wallHeightMeter;
     const getWallThicknessLabel = (w: DetectedWallSegment) =>
         getWallThickness(w) !== null
             ? `${(getWallThickness(w)! * 100).toFixed(0)}cm`
@@ -429,8 +607,40 @@ const WallReview = ({
     const isWallEditing = (id: string, f: WallEditState["field"]) => wallEditState?.wallId === id && wallEditState?.field === f;
 
     // ── Selection ────────────────────────────────────────────
-    const selectRoom = (id: string) => { setSelectedId(id); setSelectionType("room"); setSelectedWallId(null); };
-    const selectWall = (id: string) => { setSelectedWallId(id); setSelectionType("wall"); setSelectedId(null); };
+    const clearSelection = () => {
+        setSelectedId(null);
+        setSelectedWallId(null);
+        setSelectedDoorId(null);
+        setSelectedWindowId(null);
+    };
+    const selectRoom = (id: string) => {
+        setSelectedId(id); setSelectionType("room"); setSelectedWallId(null); setSelectedDoorId(null); setSelectedWindowId(null);
+    };
+    const selectWall = (id: string) => {
+        setSelectedWallId(id); setSelectionType("wall"); setSelectedId(null); setSelectedDoorId(null); setSelectedWindowId(null);
+    };
+    const selectDoor = (id: string) => {
+        setSelectedDoorId(id); setSelectionType("door"); setSelectedId(null); setSelectedWallId(null); setSelectedWindowId(null);
+    };
+    const selectWindow = (id: string) => {
+        setSelectedWindowId(id); setSelectionType("window"); setSelectedId(null); setSelectedWallId(null); setSelectedDoorId(null);
+    };
+    const deleteSelectedWall = () => {
+        if (!selectedWallId || !onWallDelete) return;
+        onWallDelete(selectedWallId);
+        clearSelection();
+    };
+    useEffect(() => {
+        const onKeyDown = (event: KeyboardEvent) => {
+            if ((event.key !== "Delete" && event.key !== "Backspace") || !selectedWallId || !onWallDelete) return;
+            const target = event.target as HTMLElement | null;
+            if (target && (target.isContentEditable || ["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName))) return;
+            event.preventDefault();
+            deleteSelectedWall();
+        };
+        window.addEventListener("keydown", onKeyDown);
+        return () => window.removeEventListener("keydown", onKeyDown);
+    }, [selectedWallId, onWallDelete]);
     const selectedRoom = rooms.find(r => r.id === selectedId);
     const selectedIdx  = rooms.findIndex(r => r.id === selectedId);
     const palette      = selectedIdx >= 0 ? ROOM_PALETTE[selectedIdx % ROOM_PALETTE.length] : ROOM_PALETTE[0];
@@ -445,6 +655,29 @@ const WallReview = ({
         const x = Math.min(...xs);
         const y = Math.min(...ys);
         return { x, y, w: Math.max(...xs) - x, h: Math.max(...ys) - y };
+    };
+
+    const polygonArea = (polygon?: { x: number; y: number }[] | null, pw = 1, ph = 1): number => {
+        if (!polygon || polygon.length < 3) return 0;
+        let area = 0;
+        for (let i = 0; i < polygon.length; i += 1) {
+            const p1 = polygon[i];
+            const p2 = polygon[(i + 1) % polygon.length];
+            area += p1.x * p2.y - p2.x * p1.y;
+        }
+        return Math.abs(area) * 0.5 * pw * ph;
+    };
+
+    const getRoomAreaM2 = (room: Room): number | null => {
+        if (typeof room.areaSqm === "number" && room.areaSqm > 0) return room.areaSqm;
+        if (room.width > 1 || room.height > 1) return room.width * room.height;
+        const polygon = room.polygon && room.polygon.length >= 3
+            ? room.polygon
+            : room.wallPolygon && room.wallPolygon.length >= 3
+                ? room.wallPolygon
+                : null;
+        if (!calibrated || !polygon) return null;
+        return polygonArea(polygon, imgSize.w * scale, imgSize.h * scale);
     };
 
     // FIX: คืน null เมื่อยังไม่ calibrate เพื่อให้ panel ขวา block ตัวเลขเมตร
@@ -465,6 +698,49 @@ const WallReview = ({
     const polygonPath = (points?: { x: number; y: number }[] | null): string | null => {
         if (!points || points.length < 3) return null;
         return points.map((p, idx) => `${idx === 0 ? "M" : "L"} ${p.x} ${p.y}`).join(" ") + " Z";
+    };
+
+    // Resolve selection from plan-space coordinates so direct selection remains
+    // reliable for thin detected lines and at every viewport zoom/pan level.
+    const onPlanClick = (e: React.MouseEvent<SVGSVGElement>) => {
+        if (inPointerMode) return;
+        const rect = e.currentTarget.getBoundingClientRect();
+        if (!rect.width || !rect.height) return;
+        const point = { x: (e.clientX - rect.left) / rect.width, y: (e.clientY - rect.top) / rect.height };
+        const inRect = (bbox: { x: number; y: number; w: number; h: number }, pad = 0) =>
+            point.x >= bbox.x - pad && point.x <= bbox.x + bbox.w + pad && point.y >= bbox.y - pad && point.y <= bbox.y + bbox.h + pad;
+        const inPolygon = (polygon: { x: number; y: number }[]) => {
+            let inside = false;
+            for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i++) {
+                const a = polygon[i], b = polygon[j];
+                if ((a.y > point.y) !== (b.y > point.y) && point.x < ((b.x - a.x) * (point.y - a.y)) / (b.y - a.y) + a.x) inside = !inside;
+            }
+            return inside;
+        };
+        const distanceToSegmentPx = (wall: DetectedWallSegment) => {
+            const ax = wall.x1 * rect.width, ay = wall.y1 * rect.height;
+            const bx = wall.x2 * rect.width, by = wall.y2 * rect.height;
+            const px = point.x * rect.width, py = point.y * rect.height;
+            const dx = bx - ax, dy = by - ay;
+            const t = Math.max(0, Math.min(1, ((px - ax) * dx + (py - ay) * dy) / (dx * dx + dy * dy || 1)));
+            return Math.hypot(px - (ax + t * dx), py - (ay + t * dy));
+        };
+
+        const door = layers.has("doors") && doors.find(item => inRect(item.bbox, 0.012));
+        if (door) return selectDoor(door.id);
+        const windowItem = layers.has("windows") && windows.find(item => inRect(item.bbox, 0.012));
+        if (windowItem) return selectWindow(windowItem.id);
+        const wall = layers.has("walls") && walls.find(item => distanceToSegmentPx(item) <= 12);
+        if (wall) return selectWall(wall.id);
+        const room = layers.has("rooms") && rooms.find(item => {
+            const polygon = item.wallPolygon ?? item.polygon;
+            return polygon && polygon.length >= 3 ? inPolygon(polygon) : (() => {
+                const bbox = roomBBox(item);
+                return bbox ? inRect(bbox) : false;
+            })();
+        });
+        if (room) return selectRoom(room.id);
+        clearSelection();
     };
 
     // ─────────────────────────────────────────────────────────
@@ -637,7 +913,7 @@ const WallReview = ({
                         )}
                         <button
                             onClick={undoLastManualWall}
-                            disabled={!onWallDelete || !walls.some((wall) => wall.id.startsWith("manual-wall-"))}
+                            disabled={!onWallDelete || manualWallHistoryRef.current.length === 0}
                             title="Undo last manual wall"
                             className="p-1 rounded text-muted-foreground/70 hover:bg-slate-100 hover:text-foreground disabled:opacity-30 disabled:hover:bg-transparent"
                         >
@@ -682,15 +958,33 @@ const WallReview = ({
             <div className="flex-1 flex min-h-0">
 
                 {/* LEFT: IMAGE */}
-                <div className="flex-1 relative bg-background flex items-center justify-center overflow-hidden">
+                <div
+                    ref={workspaceRef}
+                    onWheel={onWorkspaceWheel}
+                    onPointerDown={onPanPointerDown}
+                    onPointerMove={onPanPointerMove}
+                    onPointerUp={onPanPointerUp}
+                    onPointerCancel={onPanPointerUp}
+                    className="flex-1 relative bg-background overflow-hidden"
+                    style={{ cursor: viewZoom > 1 && !inPointerMode ? (isPanning ? "grabbing" : "grab") : undefined }}
+                >
                     {(backgroundImageUrl ?? imageUrl) ? (
-                        <div className="relative w-full h-full flex items-center justify-center p-4">
-                            <div className="relative inline-block" style={{ lineHeight: 0 }}>
+                        <div className="relative w-full h-full">
+                            <div
+                                className="absolute left-1/2 top-1/2"
+                                style={{
+                                    width: imgSize.w,
+                                    height: imgSize.h,
+                                    lineHeight: 0,
+                                    transform: `translate(-50%, -50%) translate(${viewPan.x}px, ${viewPan.y}px) scale(${viewZoom})`,
+                                    transformOrigin: "center center",
+                                }}
+                            >
 
                                 <img ref={imgRef} src={backgroundImageUrl ?? imageUrl ?? ""} alt="Floor plan" draggable={false}
-                                    className="block max-w-full max-h-[calc(100vh-160px)] rounded-lg shadow-2xl select-none transition-opacity duration-300"
+                                    className="block w-full h-full rounded-lg shadow-2xl select-none transition-opacity duration-300"
                                     style={{ filter: "brightness(0.92) contrast(1.05)", opacity: layers.has("image") ? 1 : 0, pointerEvents: "none" }}
-                                    onLoad={() => { if (imgRef.current) setImgSize({ w: imgRef.current.clientWidth, h: imgRef.current.clientHeight }); }}
+                                    onLoad={(e) => setSourceSize({ w: e.currentTarget.naturalWidth, h: e.currentTarget.naturalHeight })}
                                 />
 
                                 {/* Pointer capture overlay — only active in calib mode */}
@@ -715,7 +1009,8 @@ const WallReview = ({
                                 {/* SVG overlays */}
                                 <svg className="absolute inset-0 z-10" width="100%" height="100%"
                                     viewBox="0 0 100 100" preserveAspectRatio="none"
-                                    style={{ pointerEvents: inPointerMode ? "none" : "all" }}>
+                                    style={{ pointerEvents: inPointerMode ? "none" : "all" }}
+                                    onClickCapture={onPlanClick}>
 
                                     <g transform="scale(100)">
 
@@ -739,8 +1034,7 @@ const WallReview = ({
                                         const ey2 = isVert  ? wall.y2 + half : wall.y2;
 
                                         return (
-                                            <g key={wall.id} style={{ cursor: "pointer", pointerEvents: "all" }}
-                                                onClick={e => { e.stopPropagation(); if (!inPointerMode) selectWall(wall.id); }}>
+                                            <g key={wall.id} style={{ cursor: "pointer", pointerEvents: "all" }}>
                                                 <line x1={wall.x1} y1={wall.y1} x2={wall.x2} y2={wall.y2} stroke="transparent" strokeWidth={sw + 0.025} pointerEvents="stroke" />
                                                 {isSel && <line x1={ex1} y1={ey1} x2={ex2} y2={ey2} stroke="#fbbf24" strokeWidth={sw + 0.008} strokeLinecap="butt" opacity={0.45} />}
                                                 <line x1={ex1} y1={ey1} x2={ex2} y2={ey2} stroke={col} strokeWidth={isSel ? sw + 0.002 : sw} strokeLinecap="butt" opacity={isSel ? 1 : 0.85} />
@@ -796,9 +1090,7 @@ const WallReview = ({
                                         const wL = dimLabel(rw, "w");
                                         const hL = dimLabel(rh, "h");
                                         return (
-                                            <g key={room.id} style={{ cursor: "pointer", pointerEvents: "all" }}
-                                                onClick={e => { e.stopPropagation(); if (!inPointerMode) selectRoom(room.id); }}>
-                                                <polygon points={points} fill={isSel ? pal.fill : `${cs.stroke}18`} />
+                                            <g key={room.id} style={{ cursor: "pointer", pointerEvents: "all" }}>                                               <polygon points={points} fill={isSel ? pal.fill : `${cs.stroke}18`} />
                                                 <polygon points={points} fill="none" stroke={isSel ? pal.stroke : cs.stroke}
                                                     strokeWidth={isSel ? 0.004 : 0.002} strokeDasharray={isSel ? "none" : "0.01 0.005"} opacity={isSel ? 1 : 0.6} />
                                                 {isSel && <circle cx={cx} cy={cy} r={0.008} fill={pal.stroke} opacity={0.85} />}
@@ -821,8 +1113,10 @@ const WallReview = ({
                                         const visualRadius = dw;
                                         const doorPath = polygonPath(door.polygon) ?? `M ${cx} ${cy} L ${cx + visualRadius} ${cy} A ${visualRadius} ${visualRadius} 0 0 0 ${cx} ${cy - visualRadius} Z`;
 
+                                        const isSel = selectionType === "door" && selectedDoorId === door.id;
                                         return (
-                                            <g key={door.id}>
+                                            <g key={door.id} style={{ cursor: "pointer", pointerEvents: "all" }}>                                               <rect x={dx - 0.012} y={dy - 0.012} width={dw + 0.024} height={dh + 0.024} fill="transparent" />
+                                                {isSel && <rect x={dx - 0.008} y={dy - 0.008} width={dw + 0.016} height={dh + 0.016} fill="none" stroke="#fef3c7" strokeWidth={0.004} rx={0.003} />}
                                                 <path 
                                                     d={doorPath} 
                                                     fill="rgba(245,158,11,0.25)" // เพิ่มความเข้ม
@@ -839,10 +1133,11 @@ const WallReview = ({
                                     {layers.has("windows") && windows.map(win => {
                                         const { x: wx, y: wy, w: ww, h: wh0 } = win.bbox;
                                         const wh = Math.max(wh0, 0.008);
+                                        const isSel = selectionType === "window" && selectedWindowId === win.id;
                                         // FIX: ใช้ windowWidthM helper ที่ block ก่อน calibrate
                                         const wM = windowWidthM(win);
                                         return (
-                                            <g key={win.id}>
+                                            <g key={win.id} style={{ cursor: "pointer", pointerEvents: "all" }}>                                                {isSel && <rect x={wx - 0.008} y={wy - 0.008} width={ww + 0.016} height={wh + 0.016} fill="none" stroke="#cffafe" strokeWidth={0.004} rx={0.003} />}
                                                 <rect x={wx} y={wy} width={ww} height={wh} fill="rgba(6,182,212,0.12)" stroke="#06b6d4" strokeWidth={0.003} rx={0.002} opacity={0.85} />
                                                 <line x1={wx + ww * 0.33} y1={wy} x2={wx + ww * 0.33} y2={wy + wh} stroke="#06b6d4" strokeWidth={0.002} opacity={0.6} />
                                                 <line x1={wx + ww * 0.67} y1={wy} x2={wx + ww * 0.67} y2={wy + wh} stroke="#06b6d4" strokeWidth={0.002} opacity={0.6} />
@@ -944,6 +1239,40 @@ const WallReview = ({
                                     </div>
                                 )} */}
                             </div>
+
+                            <div className="absolute bottom-4 right-4 z-30 flex items-center gap-1 rounded-lg border border-border bg-card/90 p-1 shadow-lg backdrop-blur-sm">
+                                <button type="button" onClick={() => stepZoom(-1)} className="rounded p-1.5 text-muted-foreground hover:bg-accent hover:text-foreground" title="Zoom out" aria-label="Zoom out">
+                                    <ZoomOut className="h-4 w-4" />
+                                </button>
+                                {isEditingZoom ? (
+                                    <input
+                                        autoFocus
+                                        value={zoomInput}
+                                        onChange={e => setZoomInput(e.target.value)}
+                                        onBlur={commitZoomInput}
+                                        onKeyDown={e => {
+                                            if (e.key === "Enter") commitZoomInput();
+                                            if (e.key === "Escape") {
+                                                setZoomInput(String(Math.round(viewZoom * 100)));
+                                                setIsEditingZoom(false);
+                                            }
+                                        }}
+                                        className="h-6 w-11 rounded bg-transparent text-center text-[10px] font-mono text-foreground outline-none ring-1 ring-primary/50"
+                                        aria-label="Zoom percentage"
+                                    />
+                                ) : (
+                                    <button type="button" onClick={() => { setZoomInput(String(Math.round(viewZoom * 100))); setIsEditingZoom(true); }} className="min-w-10 rounded px-1 text-center text-[10px] font-mono text-muted-foreground hover:bg-accent hover:text-foreground" title="Set zoom percentage">
+                                        {Math.round(viewZoom * 100)}%
+                                    </button>
+                                )}
+                                <button type="button" onClick={() => stepZoom(1)} className="rounded p-1.5 text-muted-foreground hover:bg-accent hover:text-foreground" title="Zoom in" aria-label="Zoom in">
+                                    <ZoomIn className="h-4 w-4" />
+                                </button>
+                                <span className="mx-0.5 h-4 w-px bg-border" />
+                                <button type="button" onClick={fitToScreen} className="rounded p-1.5 text-muted-foreground hover:bg-accent hover:text-foreground" title="Fit to screen" aria-label="Fit to screen">
+                                    <Maximize className="h-4 w-4" />
+                                </button>
+                            </div>
                         </div>
                     ) : (
                         <span className="text-xs text-muted-foreground">No image</span>
@@ -952,7 +1281,7 @@ const WallReview = ({
 
                 {/* RIGHT PANEL */}
                 <div className="w-[280px] shrink-0 border-l border-border flex flex-col bg-card/30 overflow-hidden">
-                    <div className="flex-1 overflow-y-auto p-3 space-y-1.5">
+                    <div ref={sidebarScrollRef} className="flex-1 overflow-y-auto p-3 space-y-1.5">
                         <p className="text-[10px] uppercase tracking-widest text-muted-foreground px-1 mb-2 flex items-center gap-1.5">
                             <Layers className="w-3 h-3" /> Rooms
                         </p>
@@ -975,7 +1304,7 @@ const WallReview = ({
                             const realW = bbox ? bboxToM(bbox.w, "w") : null;
                             const realH = bbox ? bboxToM(bbox.h, "h") : null;
                             return (
-                                <button key={room.id} onClick={() => selectRoom(room.id)}
+                                <button key={room.id} data-plan-selection={`room:${room.id}`} onClick={() => selectRoom(room.id)}
                                     className={`w-full text-left rounded-lg px-3 py-2.5 border transition-all duration-200 ${isSel ? "shadow-sm" : "border-border/70 hover:border-border hover:bg-accent/60"}`}
                                     style={isSel ? { borderColor: `${pal.stroke}60`, background: pal.fill } : {}}>
                                     <div className="flex items-center justify-between">
@@ -1004,7 +1333,7 @@ const WallReview = ({
                                     const isSel = selectedWallId === wall.id && selectionType === "wall";
                                     const isExt = wall.type === "exterior";
                                     return (
-                                        <button key={wall.id} onClick={() => selectWall(wall.id)}
+                                        <button key={wall.id} data-plan-selection={`wall:${wall.id}`} onClick={() => selectWall(wall.id)}
                                             className={`w-full text-left rounded-lg px-3 py-2 border transition-all duration-200 mb-1 ${isSel ? "border-amber-500/40 bg-amber-500/10 shadow-sm" : "border-border/70 hover:border-border hover:bg-accent/60"}`}>
                                             <div className="flex items-center gap-2">
                                                 <span className={`w-2 h-0.5 rounded shrink-0 ${isExt ? "bg-muted-foreground/70" : "bg-primary/70"}`} />
@@ -1030,10 +1359,12 @@ const WallReview = ({
                                 </p>
                                 {doors.map(d => {
                                     const wM = doorWidthM(d);
+                                    const isSel = selectionType === "door" && selectedDoorId === d.id;
                                     return (
-                                        <div key={d.id} className="text-[10px] font-mono text-amber-400/70 px-1">
+                                        <button key={d.id} data-plan-selection={`door:${d.id}`} onClick={() => selectDoor(d.id)}
+                                            className={`w-full rounded px-2 py-1 text-left text-[10px] font-mono transition-colors ${isSel ? "bg-amber-500/15 text-amber-300 ring-1 ring-amber-500/40" : "text-amber-400/70 hover:bg-accent"}`}>
                                             {wM !== null ? `${wM.toFixed(2)}m wide` : "— wide"}
-                                        </div>
+                                        </button>
                                     );
                                 })}
                             </div>
@@ -1046,10 +1377,12 @@ const WallReview = ({
                                 </p>
                                 {windows.map(w => {
                                     const wM = windowWidthM(w);
+                                    const isSel = selectionType === "window" && selectedWindowId === w.id;
                                     return (
-                                        <div key={w.id} className="text-[10px] font-mono text-cyan-400/70 px-1">
+                                        <button key={w.id} data-plan-selection={`window:${w.id}`} onClick={() => selectWindow(w.id)}
+                                            className={`w-full rounded px-2 py-1 text-left text-[10px] font-mono transition-colors ${isSel ? "bg-cyan-500/15 text-cyan-200 ring-1 ring-cyan-500/40" : "text-cyan-400/70 hover:bg-accent"}`}>
                                             {wM !== null ? `${wM.toFixed(2)}m wide` : "— wide"}
-                                        </div>
+                                        </button>
                                     );
                                 })}
                             </div>
@@ -1088,31 +1421,23 @@ const WallReview = ({
                                 <EditableCell room={selectedRoom} field="height"     label="D (m)" suffix="m" />
                                 <EditableCell room={selectedRoom} field="wallHeight" label="H (m)" suffix="m" />
                             </div>
-                            {/* FIX: Area แสดงเฉพาะเมื่อ calibrate แล้ว */}
-                            {calibrated && (() => {
-                                const bbox = roomBBox(selectedRoom);
-                                if (!bbox) return null;
-                                const rw = bboxToM(bbox.w, "w"), rh = bboxToM(bbox.h, "h");
-                                if (!rw || !rh) return null;
-                                return (
-                                    <>
-                                        <div className="text-[10px] text-muted-foreground font-mono flex justify-between">
+                            {(() => {
+                                const area = getRoomAreaM2(selectedRoom);
+                                if (area == null) {
+                                    return (
+                                        <div className="text-[10px] text-muted-foreground/40 font-mono flex justify-between">
                                             <span>Area</span>
-                                            <span className="text-foreground font-medium">{(rw * rh).toFixed(2)} m²</span>
+                                            <span>— m²</span>
                                         </div>
-                                        <div className="text-[10px] font-mono text-emerald-400/80 flex justify-between border-t border-border pt-2">
-                                            <span>Calibrated area</span>
-                                            <span className="font-semibold">{(rw * rh).toFixed(2)} m²</span>
-                                        </div>
-                                    </>
+                                    );
+                                }
+                                return (
+                                    <div className="text-[10px] text-muted-foreground font-mono flex justify-between">
+                                        <span>Area</span>
+                                        <span className="text-foreground font-medium">{area.toFixed(2)} m²</span>
+                                    </div>
                                 );
                             })()}
-                            {!calibrated && (
-                                <div className="text-[10px] text-muted-foreground/40 font-mono flex justify-between">
-                                    <span>Area</span>
-                                    <span>— m²</span>
-                                </div>
-                            )}
                         </div>
                     )}
 
@@ -1146,6 +1471,14 @@ const WallReview = ({
                                         {calibrated ? `${getWallLength(sw).toFixed(2)} m` : "N/A"}
                                     </span>
                                 </div>
+                                <button
+                                    type="button"
+                                    onClick={deleteSelectedWall}
+                                    disabled={!onWallDelete}
+                                    className="w-full rounded-md border border-red-500/35 bg-red-500/10 px-3 py-2 text-xs font-medium text-red-400 transition-colors hover:bg-red-500/20 disabled:cursor-not-allowed disabled:opacity-40"
+                                >
+                                    Delete Wall
+                                </button>
                                 {(["thickness", "wallHeight"] as const).map((field) => {
                                     const label = field === "thickness" ? "Thickness (cm)" : "Height (m)";
                                     const numericValue = field === "thickness"
