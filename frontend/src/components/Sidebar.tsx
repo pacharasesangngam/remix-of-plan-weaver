@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import {
@@ -25,6 +25,8 @@ interface SidebarProps {
   unit: DimensionUnit;
   imageUrl: string | null;
   fileType?: string | null;
+  fileName?: string | null;
+  fileSize?: number | null;
   rooms: Room[];
   detected: boolean;
   detecting?: boolean;
@@ -48,6 +50,8 @@ const Sidebar = ({
   unit,
   imageUrl,
   fileType,
+  fileName,
+  fileSize,
   rooms,
   detected,
   detecting = false,
@@ -67,10 +71,19 @@ const Sidebar = ({
   const [jsonOpen, setJsonOpen] = useState(false);
   const [copied, setCopied] = useState(false);
   const [debugOpen, setDebugOpen] = useState(false);
+  const [developerToolsOpen, setDeveloperToolsOpen] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
   const importInputRef = useRef<HTMLInputElement>(null);
 
   const safeData = floorPlanData ?? { meta: { unit, scale }, rooms: [] };
+
+  useEffect(() => {
+    setDeveloperToolsOpen(false);
+  }, [imageUrl]);
+
+  useEffect(() => {
+    if (detected) setCollapsed(true);
+  }, [detected]);
 
   const handleDrop = useCallback((e: React.DragEvent) => {
     e.preventDefault();
@@ -111,9 +124,13 @@ const Sidebar = ({
     }
   };
 
-  const stepOneLabel = imageUrl ? "Loaded" : "Missing";
-  const stepTwoLabel = detected ? "Ready" : detecting ? "Running" : "Idle";
   const isPdf = fileType === "application/pdf";
+  // Retained for the non-rendered upload flow markup below.
+  const stepTwoLabel = detected ? "Ready" : detecting ? "Running" : "Idle";
+  const fileFormat = isPdf ? "PDF" : (fileType?.split("/")[1]?.toUpperCase() ?? "IMAGE");
+  const fileSizeLabel = fileSize
+    ? `${fileSize >= 1024 * 1024 ? (fileSize / (1024 * 1024)).toFixed(1) : Math.max(1, Math.round(fileSize / 1024))} ${fileSize >= 1024 * 1024 ? "MB" : "KB"}`
+    : null;
 
   return (
     <div className="relative flex shrink-0">
@@ -128,18 +145,82 @@ const Sidebar = ({
               <div className="flex items-center justify-between">
                 <div>
                   <div className="text-[10px] font-semibold uppercase tracking-[0.22em] text-primary">Workspace</div>
-                  <h2 className="mt-1 text-lg font-semibold text-foreground">Plan Pipeline</h2>
-                </div>
-                <div className="rounded-2xl border border-border/70 bg-primary/10 px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.16em] text-primary">
-                  2 Steps
+                  <h2 className="mt-1 text-lg font-semibold text-foreground">2D Floor Plan to 3D Converter</h2>
                 </div>
               </div>
             </div>
           </div>
 
-          <div className="space-y-4 p-4">
+          {imageUrl && (
+            <div className="space-y-4 p-4">
+              <section className="overflow-hidden rounded-[28px] border border-border/55 bg-card p-4 shadow-[0_14px_36px_hsl(var(--foreground)/0.04)]">
+                <div className="relative overflow-hidden rounded-[24px] border border-border/55 bg-background shadow-inner">
+                  {isPdf ? (
+                    <iframe src={imageUrl} title="Floor plan PDF preview" className="h-72 w-full bg-background" />
+                  ) : (
+                    <img src={imageUrl} alt="Floor plan" className="h-72 w-full object-contain p-5" />
+                  )}
+                  <button type="button" onClick={onClear} aria-label="Remove floor plan" className="absolute right-3 top-3 rounded-full border border-border/55 bg-card/90 p-2 text-muted-foreground transition-colors hover:text-foreground">
+                    <X className="h-4 w-4" />
+                  </button>
+                </div>
+                <div className="pt-3 text-center">
+                  <div className="text-sm font-semibold text-foreground">{fileName ?? "Floor plan"}</div>
+                  <div className="mt-1 text-xs text-muted-foreground">{fileFormat}{fileSizeLabel ? ` · ${fileSizeLabel}` : ""}</div>
+                </div>
+              </section>
+
+              {!detected && (
+                <Button onClick={onDetect} disabled={detecting} className="h-12 w-full rounded-[22px] text-sm shadow-sm">
+                  {detecting ? <><Loader2 className="h-4 w-4 animate-spin" />Detecting</> : <><ScanLine className="h-4 w-4" />Run Detection</>}
+                </Button>
+              )}
+
+              <Collapsible open={developerToolsOpen} onOpenChange={setDeveloperToolsOpen} className="overflow-hidden rounded-[28px] border border-border/55 bg-card shadow-[0_14px_36px_hsl(var(--foreground)/0.04)]">
+                <CollapsibleTrigger className="flex w-full items-center gap-3 px-4 py-4 text-left transition-colors hover:bg-accent/40">
+                  <div className="rounded-xl border border-border/55 bg-primary/10 p-2 text-primary"><Code className="h-5 w-5" /></div>
+                  <div className="flex-1"><div className="text-sm font-semibold text-foreground">Developer Tools</div><div className="mt-0.5 text-xs text-muted-foreground">Debug & inspection tools</div></div>
+                  <ChevronDown className={`h-5 w-5 text-foreground transition-transform ${developerToolsOpen ? "" : "-rotate-90"}`} />
+                </CollapsibleTrigger>
+                <CollapsibleContent className="border-t border-border/55 px-4 pb-4 pt-2">
+                  {!detected && (
+                    <button
+                      type="button"
+                      onClick={onDebugToggle}
+                      className={`flex w-full items-center gap-3 border-b border-border/55 px-1 py-3 text-left transition-colors ${
+                        debugMode ? "text-amber-600 dark:text-amber-400" : "text-muted-foreground hover:text-foreground"
+                      }`}
+                    >
+                      <div className={`rounded-xl p-2 ${debugMode ? "bg-amber-400/10" : "bg-muted"}`}><Bug className="h-4 w-4" /></div>
+                      <div className="flex-1"><div className="text-sm font-medium text-foreground">Debug Mode</div><div className="mt-0.5 text-xs text-muted-foreground">Generate inspection images</div></div>
+                      <span className={`h-5 w-9 rounded-full p-0.5 transition-colors ${debugMode ? "bg-amber-400" : "bg-muted"}`}><span className={`block h-4 w-4 rounded-full bg-white shadow-sm transition-transform ${debugMode ? "translate-x-4" : "translate-x-0"}`} /></span>
+                    </button>
+                  )}
+                  {debugImages && (
+                    <button type="button" onClick={() => setDebugOpen(true)} className="flex w-full items-center gap-3 border-b border-border/55 px-1 py-3 text-left transition-colors hover:text-primary">
+                      <div className="rounded-xl bg-amber-400/10 p-2 text-amber-600 dark:text-amber-400"><Bug className="h-4 w-4" /></div>
+                      <div className="flex-1"><div className="text-sm font-medium text-foreground">Debug Images</div><div className="mt-0.5 text-xs text-muted-foreground">{Object.keys(debugImages).length} images available</div></div>
+                      <ChevronRight className="h-4 w-4 text-muted-foreground" />
+                    </button>
+                  )}
+                  <div className="pt-3">
+                    <div className="mb-2 flex items-center gap-3 px-1">
+                      <div className="rounded-xl bg-primary/10 p-2 text-primary"><Code className="h-4 w-4" /></div>
+                      <div><div className="text-sm font-medium text-foreground">JSON Output</div><div className="mt-0.5 text-xs text-muted-foreground">View or copy the current payload</div></div>
+                    </div>
+                    <div className="relative overflow-hidden rounded-[22px] border border-border/55 bg-background shadow-inner">
+                      <button type="button" onClick={handleCopyJSON} className="absolute right-3 top-3 z-10 inline-flex h-9 items-center gap-1.5 rounded-full border border-border/55 bg-card/95 px-3 text-[11px] font-medium text-foreground shadow-sm transition-colors hover:bg-accent"><Copy className="h-3.5 w-3.5" />{copied ? "Copied" : "Copy"}</button>
+                      <pre className="scrollbar-none max-h-[250px] overflow-auto p-4 pt-14 text-xs text-muted-foreground">{JSON.stringify(safeData, null, 2)}</pre>
+                    </div>
+                  </div>
+                </CollapsibleContent>
+              </Collapsible>
+            </div>
+          )}
+
+          <div className={imageUrl ? "hidden" : "space-y-4 p-4"}>
             <section className="overflow-hidden rounded-[28px] border border-border/55 bg-card shadow-[0_14px_36px_hsl(var(--foreground)/0.04)]">
-              <div className="flex items-center justify-between border-b border-border/55 px-4 py-4">
+              {imageUrl && <div className="flex items-center justify-between border-b border-border/55 px-4 py-4">
                 <div className="flex items-center gap-3">
                   <div className={`flex h-9 w-9 items-center justify-center rounded-2xl border text-xs font-semibold ${
                     imageUrl ? "border-border/55 bg-success/10 text-success" : "border-border/55 bg-primary/10 text-primary"
@@ -154,9 +235,9 @@ const Sidebar = ({
                 <div className={`rounded-full px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] ${
                   imageUrl ? "bg-success/10 text-success" : "bg-muted text-muted-foreground"
                 }`}>
-                  {stepOneLabel}
+                  Loaded
                 </div>
-              </div>
+              </div>}
 
               <div className="p-4">
                 {!imageUrl ? (
@@ -249,21 +330,6 @@ const Sidebar = ({
                           </>
                         )}
                       </Button>
-                      <button
-                        type="button"
-                        onClick={onDebugToggle}
-                        className={`flex w-full items-center gap-2.5 rounded-[18px] border px-4 py-2.5 text-xs font-medium transition-colors ${
-                          debugMode
-                            ? "border-amber-400/60 bg-amber-400/10 text-amber-600 dark:text-amber-400"
-                            : "border-border/55 bg-background text-muted-foreground hover:text-foreground"
-                        }`}
-                      >
-                        <Bug className="h-3.5 w-3.5 shrink-0" />
-                        <span className="flex-1 text-left">Debug Mode</span>
-                        <span className={`h-4 w-7 rounded-full transition-colors ${debugMode ? "bg-amber-400" : "bg-muted"}`}>
-                          <span className={`block h-4 w-4 rounded-full border-2 bg-white transition-transform ${debugMode ? "translate-x-3 border-amber-400" : "translate-x-0 border-muted"}`} />
-                        </span>
-                      </button>
                     </>
                   ) : (
                     <>

@@ -3,7 +3,7 @@ import {
     CheckCircle2, AlertCircle, Pencil, Check, X,
     ArrowRight, Zap, ChevronLeft, ChevronRight,
     DoorOpen, AppWindow, Layers, Eye, EyeOff, Ruler,
-    Crosshair, RotateCcw, Building2, ZoomIn, ZoomOut, Maximize,
+    Crosshair, RotateCcw, Building2, ZoomIn, ZoomOut, Maximize, Plus, ChevronDown,
 } from "lucide-react";
 import type { Room, DimensionUnit } from "@/types/floorplan";
 import type { DetectedWallSegment, DetectedDoor, DetectedWindow } from "@/types/detection";
@@ -27,9 +27,17 @@ interface WallReviewProps {
     onPlanSizeChange?: (pw: number, ph: number) => void;
     onPpmChange?: (ppm: number) => void;  
     onRoomUpdate: (id: string, field: keyof Room, value: number | string) => void;
+    onRoomDelete?: (id: string) => void;
     onWallUpdate?: (id: string, field: keyof DetectedWallSegment, value: number | string) => void;
     onWallAdd?: (wall: DetectedWallSegment) => void;
     onWallDelete?: (id: string) => void;
+    onWallGeometryCommit?: (wall: DetectedWallSegment) => void;
+    onDoorDelete?: (id: string) => void;
+    onWindowDelete?: (id: string) => void;
+    canUndo?: boolean;
+    canRedo?: boolean;
+    onUndo?: () => void;
+    onRedo?: () => void;
     onGenerate: () => void;
     wallHeightMeter?: number;
     onWallHeightChange?: (h: number) => void;
@@ -83,13 +91,13 @@ const WallReview = ({
     backgroundImageUrl,
     walls = [], doors = [], windows = [],
     scale, onScaleChange, onPlanSizeChange,
-    onPpmChange, onRoomUpdate, onWallUpdate, onWallAdd, onWallDelete, onGenerate,
+    onPpmChange, onRoomUpdate, onRoomDelete, onWallUpdate, onWallAdd, onWallDelete, onWallGeometryCommit, onDoorDelete, onWindowDelete, canUndo = false, canRedo = false, onUndo, onRedo, onGenerate,
     wallHeightMeter = 2.8, onWallHeightChange,
 }: WallReviewProps) => {
 
     const [editState,      setEditState]      = useState<EditState | null>(null);
     const [wallEditState,  setWallEditState]  = useState<WallEditState | null>(null);
-    const [selectedId,     setSelectedId]     = useState<string | null>(rooms[0]?.id ?? null);
+    const [selectedId,     setSelectedId]     = useState<string | null>(null);
     const [selectionType,  setSelectionType]  = useState<SelectionType>("room");
     const [selectedWallId, setSelectedWallId] = useState<string | null>(null);
     const [selectedDoorId, setSelectedDoorId] = useState<string | null>(null);
@@ -106,15 +114,23 @@ const WallReview = ({
 
     // Global wall height
     const [localWallH, setLocalWallH] = useState(() => wallHeightMeter);
+    const [localWallThickness, setLocalWallThickness] = useState(0.15);
+    const [wallDefaultsEditing, setWallDefaultsEditing] = useState(false);
+    const [endpointDrag, setEndpointDrag] = useState<{ wall: DetectedWallSegment; endpoint: "start" | "end"; preview: DetectedWallSegment; snapTarget: { x: number; y: number } | null } | null>(null);
 
     // Calibration — restore "applied" state when returning from 3D view
     const [calibPhase,  setCalibPhase]  = useState<CalibPhase>(() => scale > 0 ? "applied" : "idle");
     const [calibPts,    setCalibPts]    = useState<CalibPoint[]>([]);
     const [calibLength, setCalibLength] = useState("");
+    const [calibUnit, setCalibUnit] = useState<DimensionUnit>(unit);
     const [mousePos,    setMousePos]    = useState<CalibPoint | null>(null);
     const [wallDrawMode, setWallDrawMode] = useState(false);
     const [wallDraftStart, setWallDraftStart] = useState<CalibPoint | null>(null);
     const [wallDraftMouse, setWallDraftMouse] = useState<CalibPoint | null>(null);
+    const [addMenuOpen, setAddMenuOpen] = useState(false);
+    const [otherElementsOpen, setOtherElementsOpen] = useState(false);
+    const [elementCategory, setElementCategory] = useState<"walls" | "doors" | "windows" | null>(null);
+    const [advancedOpen, setAdvancedOpen] = useState(false);
 
     // Drag state
     // useRef สำหรับ logic ที่ต้องการ sync ทันที (ไม่ผ่าน re-render)
@@ -128,30 +144,19 @@ const WallReview = ({
     const sidebarScrollRef = useRef<HTMLDivElement>(null);
     const panStartRef = useRef<{ x: number; y: number; panX: number; panY: number; captured: boolean } | null>(null);
     const manualWallHistoryRef = useRef<string[]>([]);
+    const addMenuRef = useRef<HTMLDivElement>(null);
     const fittedImageRef = useRef<string | null>(null);
     const isAtFitRef = useRef(true);
-    const selectionInitializedRef = useRef(false);
     const [isPanning, setIsPanning] = useState(false);
     const currentUnit = UNITS.find((u) => u.value === unit) ?? UNITS[0];
 
     useEffect(() => {
-        const selectedObjectId = selectionType === "room" ? selectedId
-            : selectionType === "wall" ? selectedWallId
-            : selectionType === "door" ? selectedDoorId
-            : selectedWindowId;
-        const sidebar = sidebarScrollRef.current;
-        if (!sidebar || !selectedObjectId) return;
-        const item = sidebar.querySelector<HTMLElement>(`[data-plan-selection="${selectionType}:${selectedObjectId}"]`);
-        if (!item) return;
-        const sidebarRect = sidebar.getBoundingClientRect();
-        const itemRect = item.getBoundingClientRect();
-        const delta = itemRect.top < sidebarRect.top
-            ? itemRect.top - sidebarRect.top
-            : itemRect.bottom > sidebarRect.bottom
-                ? itemRect.bottom - sidebarRect.bottom
-                : 0;
-        if (delta) sidebar.scrollBy({ top: delta, behavior: "smooth" });
-    }, [selectedDoorId, selectedId, selectedWallId, selectedWindowId, selectionType]);
+        const closeAddMenuOnOutsideClick = (event: PointerEvent) => {
+            if (addMenuRef.current && !addMenuRef.current.contains(event.target as Node)) setAddMenuOpen(false);
+        };
+        document.addEventListener("pointerdown", closeAddMenuOnOutsideClick);
+        return () => document.removeEventListener("pointerdown", closeAddMenuOnOutsideClick);
+    }, []);
 
     // ── scale ใช้งานได้จริงเมื่อ calibrate แล้วเท่านั้น ──────
     const calibrated = calibPhase === "applied" && scale > 0;
@@ -191,13 +196,6 @@ const WallReview = ({
     useEffect(() => {
         setLocalWallH(wallHeightMeter);
     }, [wallHeightMeter]);
-
-    useEffect(() => {
-        if (!selectionInitializedRef.current && rooms.length > 0) {
-            setSelectedId(rooms[0].id);
-            selectionInitializedRef.current = true;
-        }
-    }, [rooms]);
 
     // ── Coord helpers ────────────────────────────────────────
     const evToNorm = (e: React.PointerEvent | React.MouseEvent): CalibPoint | null => {
@@ -283,7 +281,7 @@ const WallReview = ({
             x2: end.x,
             y2: end.y,
             type: "interior",
-            thickness: 0.15,
+            thickness: localWallThickness,
             wallHeight: wallHeightMeter,
         });
         manualWallHistoryRef.current.push(id);
@@ -295,18 +293,16 @@ const WallReview = ({
         e.preventDefault();
         const pt = evToNorm(e);
         if (!pt) return;
-
         if (!wallDraftStart) {
             setWallDraftStart(pt);
             setWallDraftMouse(pt);
             return;
         }
-
         const created = createManualWall(wallDraftStart, pt);
         setWallDraftStart(null);
         setWallDraftMouse(null);
         if (created) stopWallDraw();
-    }, [wallDraftStart, onWallAdd, imgSize]);
+    }, [wallDraftStart, walls, imgSize, onWallAdd]);
 
     const onWallDrawPointerMove = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
         const pt = evToNorm(e);
@@ -493,8 +489,9 @@ const WallReview = ({
         const px   = pixelDist(calibPts[0], calibPts[1])  // pixel บนหน้าจอ
         if (!real || real <= 0 || px === 0) return
 
-        const screenScale = real / px
-        const screenPpm = px / real  
+        const realMetres = real * (UNITS.find(candidate => candidate.value === calibUnit)?.toMeter ?? 1);
+        const screenScale = realMetres / px
+        const screenPpm = px / realMetres
 
         onScaleChange(screenScale)
         onPlanSizeChange?.(imgSize.w * screenScale, imgSize.h * screenScale)
@@ -541,6 +538,15 @@ const WallReview = ({
         setLocalWallH(h);
         onWallHeightChange?.(h);
     };
+    const applyWallDefaults = () => {
+        const height = Math.max(0.5, Math.min(20, localWallH || 2.8));
+        const thickness = Math.max(0.01, localWallThickness || 0.15);
+        setLocalWallH(height);
+        setLocalWallThickness(thickness);
+        onWallHeightChange?.(height);
+        walls.forEach(wall => onWallUpdate?.(wall.id, "thickness", thickness));
+        setWallDefaultsEditing(false);
+    };
 
     // ── Layer toggle ─────────────────────────────────────────
     const toggleLayer = (layer: OverlayLayer) =>
@@ -584,17 +590,23 @@ const WallReview = ({
         // ก่อน calibrate — คืน pixel distance หารด้วย 40 เป็น approximation
         return px / 40;
     };
+    const setWallLength = (wall: DetectedWallSegment, metres: number) => {
+        if (!onWallUpdate || !calibrated || metres <= 0) return;
+        const dx = (wall.x2 - wall.x1) * imgSize.w;
+        const dy = (wall.y2 - wall.y1) * imgSize.h;
+        const currentPx = Math.hypot(dx, dy);
+        if (!currentPx) return;
+        const ratio = (metres / scale) / currentPx;
+        onWallUpdate(wall.id, "x2", wall.x1 + (wall.x2 - wall.x1) * ratio);
+        onWallUpdate(wall.id, "y2", wall.y1 + (wall.y2 - wall.y1) * ratio);
+    };
 
     const getWallThickness = (w: DetectedWallSegment): number | null =>
         typeof w.thickness === "number" ? w.thickness : null;
     const getWallHeight = (w: DetectedWallSegment): number | null =>
         typeof w.wallHeight === "number" ? w.wallHeight : wallHeightMeter;
     const getWallThicknessLabel = (w: DetectedWallSegment) =>
-        getWallThickness(w) !== null
-            ? `${(getWallThickness(w)! * 100).toFixed(0)}cm`
-            : w.thicknessRatio != null
-                ? `r ${(w.thicknessRatio).toFixed(3)}`
-                : "N/A";
+        `${((getWallThickness(w) ?? 0.15) * 100).toFixed(0)}cm`;
 
     const startWallEdit = (wallId: string, field: WallEditState["field"], val?: number | null) =>
         setWallEditState({ wallId, field, value: val == null ? "" : String(val) });
@@ -612,18 +624,27 @@ const WallReview = ({
         setSelectedWallId(null);
         setSelectedDoorId(null);
         setSelectedWindowId(null);
+        setAdvancedOpen(false);
+        setOtherElementsOpen(false);
+    };
+    const dismissInspector = () => {
+        setSelectedId(null);
+        setSelectedWallId(null);
+        setSelectedDoorId(null);
+        setSelectedWindowId(null);
+        setAdvancedOpen(false);
     };
     const selectRoom = (id: string) => {
-        setSelectedId(id); setSelectionType("room"); setSelectedWallId(null); setSelectedDoorId(null); setSelectedWindowId(null);
+        setSelectedId(id); setSelectionType("room"); setSelectedWallId(null); setSelectedDoorId(null); setSelectedWindowId(null); setAdvancedOpen(false);
     };
     const selectWall = (id: string) => {
-        setSelectedWallId(id); setSelectionType("wall"); setSelectedId(null); setSelectedDoorId(null); setSelectedWindowId(null);
+        setSelectedWallId(id); setSelectionType("wall"); setSelectedId(null); setSelectedDoorId(null); setSelectedWindowId(null); setAdvancedOpen(false);
     };
     const selectDoor = (id: string) => {
-        setSelectedDoorId(id); setSelectionType("door"); setSelectedId(null); setSelectedWallId(null); setSelectedWindowId(null);
+        setSelectedDoorId(id); setSelectionType("door"); setSelectedId(null); setSelectedWallId(null); setSelectedWindowId(null); setAdvancedOpen(false);
     };
     const selectWindow = (id: string) => {
-        setSelectedWindowId(id); setSelectionType("window"); setSelectedId(null); setSelectedWallId(null); setSelectedDoorId(null);
+        setSelectedWindowId(id); setSelectionType("window"); setSelectedId(null); setSelectedWallId(null); setSelectedDoorId(null); setAdvancedOpen(false);
     };
     const deleteSelectedWall = () => {
         if (!selectedWallId || !onWallDelete) return;
@@ -641,6 +662,19 @@ const WallReview = ({
         window.addEventListener("keydown", onKeyDown);
         return () => window.removeEventListener("keydown", onKeyDown);
     }, [selectedWallId, onWallDelete]);
+    useEffect(() => {
+        const onKeyDown = (event: KeyboardEvent) => {
+            if (!(event.ctrlKey || event.metaKey) || event.key.toLowerCase() !== "z") return;
+            const target = event.target as HTMLElement | null;
+            if (target && ["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName)) return;
+            const action = event.shiftKey ? onRedo : onUndo;
+            if (!action) return;
+            event.preventDefault();
+            action();
+        };
+        window.addEventListener("keydown", onKeyDown);
+        return () => window.removeEventListener("keydown", onKeyDown);
+    }, [onRedo, onUndo]);
     const selectedRoom = rooms.find(r => r.id === selectedId);
     const selectedIdx  = rooms.findIndex(r => r.id === selectedId);
     const palette      = selectedIdx >= 0 ? ROOM_PALETTE[selectedIdx % ROOM_PALETTE.length] : ROOM_PALETTE[0];
@@ -700,10 +734,50 @@ const WallReview = ({
         return points.map((p, idx) => `${idx === 0 ? "M" : "L"} ${p.x} ${p.y}`).join(" ") + " Z";
     };
 
+    const getSnappedEndpoint = (point: { x: number; y: number }, wallId: string, rect: DOMRect) => {
+        const threshold = 12;
+        let closest: { x: number; y: number } | null = null;
+        let closestDistance = threshold;
+        walls.forEach(wall => {
+            if (wall.id === wallId) return;
+            ([{ x: wall.x1, y: wall.y1 }, { x: wall.x2, y: wall.y2 }] as const).forEach(candidate => {
+                const distance = Math.hypot((candidate.x - point.x) * rect.width, (candidate.y - point.y) * rect.height);
+                if (distance < closestDistance) { closest = candidate; closestDistance = distance; }
+            });
+        });
+        return closest;
+    };
+    const startEndpointDrag = (event: React.PointerEvent<SVGCircleElement>, wall: DetectedWallSegment, endpoint: "start" | "end") => {
+        event.preventDefault();
+        event.stopPropagation();
+        // Capture on the SVG surface, not the small handle. This keeps receiving
+        // pointer events even after the cursor leaves the endpoint hit area.
+        event.currentTarget.ownerSVGElement?.setPointerCapture(event.pointerId);
+        setEndpointDrag({ wall, endpoint, preview: wall, snapTarget: null });
+    };
+    const moveEndpointDrag = (event: React.PointerEvent<SVGSVGElement>) => {
+        if (!endpointDrag) return;
+        event.preventDefault();
+        event.stopPropagation();
+        const rect = event.currentTarget.getBoundingClientRect();
+        const raw = { x: Math.max(0, Math.min(1, (event.clientX - rect.left) / rect.width)), y: Math.max(0, Math.min(1, (event.clientY - rect.top) / rect.height)) };
+        const snapTarget = getSnappedEndpoint(raw, endpointDrag.wall.id, rect);
+        const point = snapTarget ?? raw;
+        setEndpointDrag(current => current ? { ...current, preview: { ...current.preview, ...(current.endpoint === "start" ? { x1: point.x, y1: point.y } : { x2: point.x, y2: point.y }) }, snapTarget } : null);
+    };
+    const finishEndpointDrag = (event: React.PointerEvent<SVGSVGElement>) => {
+        if (!endpointDrag) return;
+        event.preventDefault();
+        event.stopPropagation();
+        if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
+        onWallGeometryCommit?.(endpointDrag.preview);
+        setEndpointDrag(null);
+    };
+
     // Resolve selection from plan-space coordinates so direct selection remains
     // reliable for thin detected lines and at every viewport zoom/pan level.
     const onPlanClick = (e: React.MouseEvent<SVGSVGElement>) => {
-        if (inPointerMode) return;
+        if (inPointerMode || endpointDrag) return;
         const rect = e.currentTarget.getBoundingClientRect();
         if (!rect.width || !rect.height) return;
         const point = { x: (e.clientX - rect.left) / rect.width, y: (e.clientY - rect.top) / rect.height };
@@ -786,18 +860,18 @@ const WallReview = ({
         <div className="flex-1 flex flex-col overflow-hidden">
 
             {/* TOP BAR */}
-            <div className="shrink-0 px-5 py-3 border-b border-border flex items-center justify-between gap-3 bg-card/30 flex-wrap">
-                <div className="flex items-center gap-2">
+            <div className="shrink-0 grid grid-cols-[minmax(0,1fr)_auto] items-start gap-x-3 gap-y-1 border-b border-border bg-card/30 px-5 py-3">
+                <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
                     <CheckCircle2 className="w-4 h-4 text-primary shrink-0" />
-                    <div>
-                        <span className="text-sm font-semibold text-foreground">Wall &amp; Room Review</span>
-                        <span className="ml-2 text-[11px] text-muted-foreground">
+                    <div className="contents">
+                        <span className="text-sm font-semibold text-foreground">Review &amp; Edit</span>
+                        <span className="basis-full text-[11px] text-muted-foreground 2xl:basis-auto">
                             {rooms.length} rooms · {walls.length} walls · {doors.length} doors · {windows.length} windows
                         </span>
                     </div>
                 </div>
 
-                <div className="flex items-center gap-3 flex-wrap">
+                <div className="flex flex-nowrap items-center justify-self-end gap-3 whitespace-nowrap">
 
                     {/* CALIBRATION WIDGET */}
                     <div className={`flex items-center gap-2 rounded-lg px-3 py-1.5 border transition-all duration-200 ${
@@ -819,11 +893,11 @@ const WallReview = ({
                             <>
                                 <button onClick={recalibrate}
                                     className="flex items-center gap-1.5 text-[11px] font-medium text-emerald-400 hover:text-emerald-300 transition-colors">
-                                    <Crosshair className="w-3.5 h-3.5" />
+                                    <RotateCcw className="w-3.5 h-3.5" />
                                     {scale.toFixed(5)} m/px
                                 </button>
                                 <button onClick={resetCalibration} title="รีเซ็ต"
-                                    className="p-1 rounded hover:bg-slate-100 text-muted-foreground/70 hover:text-foreground transition-colors">
+                                    className="hidden">
                                     <RotateCcw className="w-3 h-3" />
                                 </button>
                             </>
@@ -857,7 +931,9 @@ const WallReview = ({
                                     className="h-7 w-20 text-xs font-mono border-amber-500/60 bg-background"
                                     autoFocus
                                 />
-                                <span className="text-[10px] text-muted-foreground shrink-0">m</span>
+                                <select value={calibUnit} onChange={e => setCalibUnit(e.target.value as DimensionUnit)} className="h-7 rounded border border-border bg-background px-1 text-[10px] text-foreground">
+                                    {UNITS.map(candidate => <option key={candidate.value} value={candidate.value}>{candidate.value}</option>)}
+                                </select>
                                 <Button onClick={applyCalibration}
                                     disabled={!calibLength || isNaN(parseFloat(calibLength))}
                                     size="sm"
@@ -872,7 +948,7 @@ const WallReview = ({
                     </div>
 
                     {/* WALL HEIGHT GLOBAL */}
-                    <div className="flex items-center gap-1.5 rounded-lg px-3 py-1.5 border border-border bg-card/80"
+                    <div className="hidden"
                          title="ความสูงผนังรวม (พื้น-ฝ้า) ทั้งบ้าน — ใช้สำหรับ Extrude 3D">
                         <Building2 className="w-3.5 h-3.5 text-muted-foreground shrink-0" />
                         <span className="text-[10px] text-muted-foreground whitespace-nowrap">H ผนัง</span>
@@ -891,15 +967,22 @@ const WallReview = ({
                     </div>
 
                     {/* WALL DRAW TOOL */}
-                    <div className={`flex items-center gap-2 rounded-lg px-3 py-1.5 border transition-all duration-200 ${
+                    <div ref={addMenuRef} className={`flex items-center gap-2 rounded-lg px-3 py-1.5 border transition-all duration-200 ${
                         wallDrawMode ? "border-blue-500/60 bg-blue-500/10" : "border-border bg-card/80"
                     }`}>
                         {!wallDrawMode ? (
-                            <button onClick={startWallDraw}
-                                className="flex items-center gap-1.5 text-[11px] font-medium text-blue-300 hover:text-blue-200 transition-colors">
-                                <Pencil className="w-3.5 h-3.5" />
-                                Draw Wall
+                            <>
+                            <button onClick={() => setAddMenuOpen(open => !open)}
+                                className="flex items-center gap-1.5 text-[11px] font-medium text-blue-500 hover:text-blue-400 transition-colors">
+                                <Plus className="w-3.5 h-3.5" />
+                                Add Element <ChevronDown className="w-3 h-3" />
                             </button>
+                            {addMenuOpen && <div className="absolute z-50 mt-2 w-36 rounded-lg border border-border bg-card p-1 shadow-xl">
+                                <button onClick={() => { startWallDraw(); setAddMenuOpen(false); }} className="flex w-full items-center gap-2 rounded px-2 py-2 text-left text-xs hover:bg-accent"><Pencil className="w-3.5 h-3.5" />Wall</button>
+                                <button onClick={() => setAddMenuOpen(false)} className="flex w-full items-center gap-2 rounded px-2 py-2 text-left text-xs hover:bg-accent"><DoorOpen className="w-3.5 h-3.5" />Door</button>
+                                <button onClick={() => setAddMenuOpen(false)} className="flex w-full items-center gap-2 rounded px-2 py-2 text-left text-xs hover:bg-accent"><AppWindow className="w-3.5 h-3.5" />Window</button>
+                            </div>}
+                            </>
                         ) : (
                             <>
                                 <Pencil className="w-3.5 h-3.5 text-blue-400 animate-pulse shrink-0" />
@@ -911,14 +994,6 @@ const WallReview = ({
                                 </button>
                             </>
                         )}
-                        <button
-                            onClick={undoLastManualWall}
-                            disabled={!onWallDelete || manualWallHistoryRef.current.length === 0}
-                            title="Undo last manual wall"
-                            className="p-1 rounded text-muted-foreground/70 hover:bg-slate-100 hover:text-foreground disabled:opacity-30 disabled:hover:bg-transparent"
-                        >
-                            <RotateCcw className="w-3 h-3" />
-                        </button>
                     </div>
 
                     {/* LAYER TOGGLES */}
@@ -945,6 +1020,11 @@ const WallReview = ({
                                 <span className="hidden sm:inline">{label}</span>
                             </button>
                         ))}
+                    </div>
+
+                    <div className="flex overflow-hidden rounded-lg border border-border bg-card/80">
+                        <button onClick={onUndo} disabled={!canUndo} title="Undo (Ctrl/Cmd + Z)" className="p-2 text-muted-foreground hover:bg-accent hover:text-foreground disabled:cursor-not-allowed disabled:opacity-35"><RotateCcw className="w-4 h-4" /></button>
+                        <button onClick={onRedo} disabled={!canRedo} title="Redo (Ctrl/Cmd + Shift + Z)" className="border-l border-border p-2 text-muted-foreground hover:bg-accent hover:text-foreground disabled:cursor-not-allowed disabled:opacity-35"><RotateCcw className="w-4 h-4 -scale-x-100" /></button>
                     </div>
 
                     <Button onClick={onGenerate}
@@ -1010,6 +1090,9 @@ const WallReview = ({
                                 <svg className="absolute inset-0 z-10" width="100%" height="100%"
                                     viewBox="0 0 100 100" preserveAspectRatio="none"
                                     style={{ pointerEvents: inPointerMode ? "none" : "all" }}
+                                    onPointerMove={moveEndpointDrag}
+                                    onPointerUp={finishEndpointDrag}
+                                    onPointerCancel={finishEndpointDrag}
                                     onClickCapture={onPlanClick}>
 
                                     <g transform="scale(100)">
@@ -1017,37 +1100,51 @@ const WallReview = ({
                                     {/* WALLS */}
                                     {layers.has("walls") && walls.map(wall => {
                                         const isSel = selectedWallId === wall.id;
+                                        const displayWall = endpointDrag?.wall.id === wall.id ? endpointDrag.preview : wall;
                                         const sw = wall.thicknessRatio != null
                                             ? Math.max(0.002, Math.min(wall.thicknessRatio * 0.35, 0.012))
                                             : wall.type === "exterior" ? 0.006 : 0.003;                                        const isManual = wall.id.startsWith("manual-wall-");
                                         const col = isSel ? "#fbbf24" : isManual ? "#38bdf8" : wall.type === "exterior" ? "#1a1a1a" : "#2563eb";
-                                        const mx = (wall.x1 + wall.x2) / 2, my = (wall.y1 + wall.y2) / 2;
+                                        const mx = (displayWall.x1 + displayWall.x2) / 2, my = (displayWall.y1 + displayWall.y2) / 2;
 
                                         // ขยาย endpoint ออก sw/2 ในแกนที่เป็นแนวของเส้น
                                         // เพื่อให้มุมผนังเชื่อมกันแม้ preserveAspectRatio="none" ทำให้ linecap ไม่สมมาตร
                                         const isHoriz = Math.abs(wall.y2 - wall.y1) < 0.005;
                                         const isVert  = Math.abs(wall.x2 - wall.x1) < 0.005;
                                         const half = sw / 2;
-                                        const ex1 = isHoriz ? wall.x1 - half : wall.x1;
-                                        const ex2 = isHoriz ? wall.x2 + half : wall.x2;
-                                        const ey1 = isVert  ? wall.y1 - half : wall.y1;
-                                        const ey2 = isVert  ? wall.y2 + half : wall.y2;
+                                        const ex1 = isHoriz ? displayWall.x1 - half : displayWall.x1;
+                                        const ex2 = isHoriz ? displayWall.x2 + half : displayWall.x2;
+                                        const ey1 = isVert  ? displayWall.y1 - half : displayWall.y1;
+                                        const ey2 = isVert  ? displayWall.y2 + half : displayWall.y2;
 
                                         return (
                                             <g key={wall.id} style={{ cursor: "pointer", pointerEvents: "all" }}>
-                                                <line x1={wall.x1} y1={wall.y1} x2={wall.x2} y2={wall.y2} stroke="transparent" strokeWidth={sw + 0.025} pointerEvents="stroke" />
+                                                <line x1={displayWall.x1} y1={displayWall.y1} x2={displayWall.x2} y2={displayWall.y2} stroke="transparent" strokeWidth={sw + 0.025} pointerEvents="stroke" />
                                                 {isSel && <line x1={ex1} y1={ey1} x2={ex2} y2={ey2} stroke="#fbbf24" strokeWidth={sw + 0.008} strokeLinecap="butt" opacity={0.45} />}
                                                 <line x1={ex1} y1={ey1} x2={ex2} y2={ey2} stroke={col} strokeWidth={isSel ? sw + 0.002 : sw} strokeLinecap="butt" opacity={isSel ? 1 : 0.85} />
                                                 {isSel && (
                                                     <g style={{ pointerEvents: "none" }}>
                                                         <rect x={mx - 0.075} y={my - 0.045} width={0.15} height={0.032} rx={0.005} fill="rgba(251,191,36,0.95)" />
-                                                        <text x={mx} y={my - 0.018} textAnchor="middle" fontSize={0.02} fontWeight="700" fill="#000" fontFamily="monospace">
+                                                        <text x={mx} y={my - 0.018} textAnchor="middle" fontSize={0.02} fontWeight="700" fill="transparent" fontFamily="monospace">
                                                             {calibrated
                                                                 ? `${getWallLength(wall).toFixed(2)}m · ${getWallThicknessLabel(wall)}`
                                                                 : `— · ${getWallThicknessLabel(wall)}`}
                                                         </text>
+                                                        <text x={mx} y={my - 0.018} textAnchor="middle" fontSize={0.02} fontWeight="700" fill="#000" fontFamily="monospace">
+                                                            {calibrated ? `${getWallLength(wall).toFixed(2)}m` : "—"}
+                                                        </text>
                                                     </g>
                                                 )}
+                                                {isSel && <g>
+                                                    {(["start", "end"] as const).map(endpoint => {
+                                                        const point = endpoint === "start" ? { x: displayWall.x1, y: displayWall.y1 } : { x: displayWall.x2, y: displayWall.y2 };
+                                                        return <g key={endpoint} style={{ pointerEvents: "all" }}>
+                                                            <circle cx={point.x} cy={point.y} r={0.03} fill="rgba(0,0,0,0.001)" style={{ cursor: "grab", pointerEvents: "all", touchAction: "none" }} onPointerDown={event => startEndpointDrag(event, wall, endpoint)} />
+                                                            <circle cx={point.x} cy={point.y} r={0.011} fill="#fff" stroke="#f59e0b" strokeWidth={0.004} style={{ pointerEvents: "none" }} />
+                                                        </g>;
+                                                    })}
+                                                    {endpointDrag?.snapTarget && <circle cx={endpointDrag.snapTarget.x} cy={endpointDrag.snapTarget.y} r={0.014} fill="none" stroke="#22c55e" strokeWidth={0.003} strokeDasharray="0.005 0.004" style={{ pointerEvents: "none" }} />}
+                                                </g>}
                                             </g>
                                         );
                                     })}
@@ -1087,8 +1184,17 @@ const WallReview = ({
                                         const { x: rx0, y: ry0, w: rw, h: rh } = bbox;
                                         const badgeW = Math.max(0, Math.min(rw - 0.008, (room.name ?? "").length * 0.009 + 0.015));
                                         // FIX: ใช้ dimLabel ที่ block ก่อน calibrate
-                                        const wL = dimLabel(rw, "w");
-                                        const hL = dimLabel(rh, "h");
+                                        const areaLabel = getRoomAreaM2(room);
+                                        const sideLabels = isSel && polygon && polygon.length >= 3 && calibrated
+                                            ? polygon.map((point, sideIndex) => {
+                                                const next = polygon[(sideIndex + 1) % polygon.length];
+                                                const dx = next.x - point.x;
+                                                const dy = next.y - point.y;
+                                                const length = Math.hypot(dx * imgSize.w, dy * imgSize.h) * scale;
+                                                const magnitude = Math.hypot(dx, dy) || 1;
+                                                return length >= 0.15 ? { x: (point.x + next.x) / 2 - (dy / magnitude) * 0.012, y: (point.y + next.y) / 2 + (dx / magnitude) * 0.012, label: `${length.toFixed(2)}m` } : null;
+                                            }).filter((side): side is { x: number; y: number; label: string } => side !== null)
+                                            : [] as { x: number; y: number; label: string }[];
                                         return (
                                             <g key={room.id} style={{ cursor: "pointer", pointerEvents: "all" }}>                                               <polygon points={points} fill={isSel ? pal.fill : `${cs.stroke}18`} />
                                                 <polygon points={points} fill="none" stroke={isSel ? pal.stroke : cs.stroke}
@@ -1098,8 +1204,8 @@ const WallReview = ({
                                                     <rect x={cx - badgeW / 2} y={cy - 0.02} width={badgeW} height={0.025} rx={0.005} fill={isSel ? pal.stroke : cs.labelBg} opacity={0.92} />
                                                     <text x={cx - badgeW / 2 + 0.006} y={cy - 0.003} fontSize={0.016} fontWeight="600" fill="#000" fontFamily="sans-serif">{room.name}</text>
                                                 </>}
-                                                <text x={cx} y={cy + 0.032} textAnchor="middle" fontSize={0.014} fill={isSel ? pal.text : cs.stroke} fontFamily="monospace" opacity={isSel ? 1 : 0.7}>{wL}</text>
-                                                <text x={cx + (bbox.w / 2 + 0.008)} y={cy + 0.007} textAnchor="start" fontSize={0.014} fill={isSel ? pal.text : cs.stroke} fontFamily="monospace" opacity={isSel ? 1 : 0.7}>{hL}</text>
+                                                <text x={cx} y={cy + 0.024} textAnchor="middle" fontSize={0.014} fill={isSel ? pal.text : cs.stroke} fontFamily="monospace" opacity={isSel ? 1 : 0.8}>{areaLabel == null ? "— m²" : `${areaLabel.toFixed(2)} m²`}</text>
+                                                {sideLabels.map((side, sideIndex) => <text key={sideIndex} x={side.x} y={side.y} textAnchor="middle" fontSize={0.011} fill={pal.text} fontFamily="monospace">{side.label}</text>)}
                                             </g>
                                         );
                                     })}
@@ -1280,10 +1386,28 @@ const WallReview = ({
                 </div>
 
                 {/* RIGHT PANEL */}
-                <div className="w-[280px] shrink-0 border-l border-border flex flex-col bg-card/30 overflow-hidden">
-                    <div ref={sidebarScrollRef} className="flex-1 overflow-y-auto p-3 space-y-1.5">
-                        <p className="text-[10px] uppercase tracking-widest text-muted-foreground px-1 mb-2 flex items-center gap-1.5">
-                            <Layers className="w-3 h-3" /> Rooms
+                <div className="relative w-[280px] shrink-0 border-l border-border flex flex-col bg-card/30 overflow-hidden">
+                    <div className="flex-1 overflow-y-auto p-3 space-y-3">
+                        {(selectedWallId || selectedDoorId || selectedWindowId) && (
+                            <section className="absolute bottom-3 left-3 right-3 z-20 rounded-xl border border-border bg-card p-3 space-y-3 shadow-lg">
+                                {selectionType === "room" && selectedRoom && <>
+                                    <div className="flex items-center justify-between"><Input value={selectedRoom.name} onChange={e => onRoomUpdate(selectedRoom.id, "name", e.target.value)} className="h-8 border-0 bg-transparent px-0 text-sm font-semibold shadow-none focus-visible:ring-0" /><button onClick={dismissInspector} className="p-1 text-muted-foreground hover:text-foreground"><X className="w-4 h-4" /></button></div>
+                                    <div className="flex justify-between text-xs text-muted-foreground"><span>Area</span><span className="font-mono text-foreground">{getRoomAreaM2(selectedRoom)?.toFixed(2) ?? "—"} m²</span></div>
+                                    <button onClick={() => { onRoomDelete?.(selectedRoom.id); clearSelection(); }} className="w-full rounded-md border border-red-500/30 bg-red-500/10 py-2 text-xs font-medium text-red-500">Delete Room</button>
+                                </>}
+                                {selectionType === "wall" && selectedWallId && (() => { const persistedWall = walls.find(w => w.id === selectedWallId); const wall = endpointDrag?.wall.id === selectedWallId ? endpointDrag.preview : persistedWall; const index = walls.findIndex(w => w.id === selectedWallId); if (!wall) return null; return <>
+                                    <div className="flex items-center justify-between"><span className="text-sm font-semibold text-foreground">Wall {index + 1}</span><button onClick={dismissInspector} className="p-1 text-muted-foreground hover:text-foreground"><X className="w-4 h-4" /></button></div>
+                                    <label className="block text-xs text-muted-foreground">Length <div className="mt-1 flex items-center rounded-md border border-input bg-background"><input type="number" defaultValue={calibrated ? getWallLength(wall).toFixed(2) : ""} disabled={!calibrated} onBlur={e => setWallLength(wall, parseFloat(e.target.value))} className="h-8 min-w-0 flex-1 bg-transparent px-2 text-sm font-mono outline-none disabled:opacity-50" /><span className="px-2 text-xs">m</span></div></label>
+                                    <button onClick={() => setAdvancedOpen(open => !open)} className="flex w-full items-center justify-between rounded-md bg-muted/50 px-2 py-2 text-xs font-medium">Advanced <ChevronDown className={`w-3.5 h-3.5 ${advancedOpen ? "rotate-180" : ""}`} /></button>
+                                    {advancedOpen && <div className="grid grid-cols-2 gap-2">{(["wallHeight", "thickness"] as const).map(field => <div key={field}><div className="mb-1 text-[10px] text-muted-foreground">{field === "wallHeight" ? "Wall Height" : "Wall Thickness"}</div><Input type="number" defaultValue={field === "wallHeight" ? getWallHeight(wall) ?? wallHeightMeter : (getWallThickness(wall) ?? 0.15)} onBlur={e => onWallUpdate?.(wall.id, field, parseFloat(e.target.value) || (field === "wallHeight" ? wallHeightMeter : 0.15))} className="h-8 text-xs" /></div>)}</div>}
+                                    <button onClick={deleteSelectedWall} className="w-full rounded-md border border-red-500/30 bg-red-500/10 py-2 text-xs font-medium text-red-500">Delete Wall</button>
+                                </>})()}
+                                {(selectionType === "door" || selectionType === "window") && <><div className="flex items-center justify-between"><span className="text-sm font-semibold text-foreground">{selectionType === "door" ? "Door" : "Window"}</span><button onClick={dismissInspector} className="p-1 text-muted-foreground hover:text-foreground"><X className="w-4 h-4" /></button></div><div className="flex justify-between text-xs text-muted-foreground"><span>Width</span><span className="font-mono text-foreground">{selectionType === "door" ? doorWidthM(doors.find(d => d.id === selectedDoorId)!)?.toFixed(2) : windowWidthM(windows.find(w => w.id === selectedWindowId)!)?.toFixed(2)} m</span></div><button onClick={() => setAdvancedOpen(open => !open)} className="flex w-full items-center justify-between rounded-md bg-muted/50 px-2 py-2 text-xs font-medium">Advanced <ChevronDown className={`w-3.5 h-3.5 ${advancedOpen ? "rotate-180" : ""}`} /></button>{advancedOpen && <div className="rounded-md border border-border/70 px-2 py-2 text-xs text-muted-foreground">{selectionType === "door" ? doors.find(d => d.id === selectedDoorId)?.doorName || "No additional door properties" : windows.find(w => w.id === selectedWindowId)?.windowName || "No additional window properties"}</div>}<button onClick={() => { if (selectionType === "door" && selectedDoorId) onDoorDelete?.(selectedDoorId); if (selectionType === "window" && selectedWindowId) onWindowDelete?.(selectedWindowId); clearSelection(); }} className="w-full rounded-md border border-red-500/30 bg-red-500/10 py-2 text-xs font-medium text-red-500">Delete {selectionType === "door" ? "Door" : "Window"}</button></>}
+                            </section>
+                        )}
+                        <section className="overflow-hidden rounded-xl border border-border/70 bg-card">
+                        <p className="border-b border-border/60 px-3 py-2.5 text-[10px] uppercase tracking-widest text-muted-foreground flex items-center gap-1.5">
+                            <Layers className="w-3 h-3" /> Room Areas ({rooms.length})
                         </p>
 
                         {/* FIX: Banner แจ้ง calibrate ก่อนถ้ายังไม่ทำ */}
@@ -1294,6 +1418,7 @@ const WallReview = ({
                             </div>
                         )}
 
+                        <div className="divide-y divide-border/55">
                         {rooms.map((room, idx) => {
                             const cs = CONF_STYLE[room.confidence] ?? CONF_STYLE.manual;
                             const pal = ROOM_PALETTE[idx % ROOM_PALETTE.length];
@@ -1305,16 +1430,16 @@ const WallReview = ({
                             const realH = bbox ? bboxToM(bbox.h, "h") : null;
                             return (
                                 <button key={room.id} data-plan-selection={`room:${room.id}`} onClick={() => selectRoom(room.id)}
-                                    className={`w-full text-left rounded-lg px-3 py-2.5 border transition-all duration-200 ${isSel ? "shadow-sm" : "border-border/70 hover:border-border hover:bg-accent/60"}`}
+                                    className={`w-full text-left px-3 py-2.5 transition-colors ${isSel ? "shadow-sm" : "hover:bg-accent/60"}`}
                                     style={isSel ? { borderColor: `${pal.stroke}60`, background: pal.fill } : {}}>
                                     <div className="flex items-center justify-between">
                                         <div className="flex items-center gap-2">
                                             <span className="w-2 h-2 rounded-sm shrink-0" style={{ background: pal.stroke }} />
                                             <span className="text-xs font-medium text-foreground truncate">{room.name}</span>
                                         </div>
-                                        <Icon className="w-3 h-3 shrink-0" style={{ color: cs.stroke }} />
+                                        <span className="text-[11px] font-mono text-muted-foreground">{getRoomAreaM2(room)?.toFixed(2) ?? "—"} m²</span>
                                     </div>
-                                    <div className="mt-1 text-[10px] font-mono text-muted-foreground">
+                                    <div className="hidden">
                                         {realW !== null
                                             ? <span className="text-emerald-400">{realW.toFixed(2)} × {realH?.toFixed(2)} m</span>
                                             : <span className="text-muted-foreground/40">— × — m</span>
@@ -1323,7 +1448,34 @@ const WallReview = ({
                                 </button>
                             );
                         })}
+                        </div>
 
+                        <div className="border-t border-border/60 bg-muted/30 px-3 py-2.5 text-xs font-semibold text-foreground flex justify-between"><span>Total Area</span><span className="font-mono">{rooms.reduce((total, room) => total + (getRoomAreaM2(room) ?? 0), 0).toFixed(2)} m²</span></div>
+                        </section>
+
+                        <button onClick={() => setOtherElementsOpen(open => !open)} className="flex w-full items-center justify-between rounded-lg border border-border/70 bg-card px-3 py-3 text-left text-xs font-semibold"><span className="flex items-center gap-2"><Building2 className="w-4 h-4 text-primary" />Other Elements</span><ChevronDown className={`w-4 h-4 transition-transform ${otherElementsOpen ? "rotate-180" : "-rotate-90"}`} /></button>
+                        {otherElementsOpen && <div className="space-y-1 rounded-lg border border-border/70 bg-card/50 p-1.5">
+                            {(["walls", "doors", "windows"] as const).map(category => {
+                                const items = category === "walls" ? walls : category === "doors" ? doors : windows;
+                                const Icon = category === "walls" ? Ruler : category === "doors" ? DoorOpen : AppWindow;
+                                const label = category[0].toUpperCase() + category.slice(1);
+                                const color = category === "doors" ? "text-amber-400" : category === "windows" ? "text-cyan-400" : "text-primary";
+                                const open = elementCategory === category;
+                                return <div key={category}>
+                                    <button onClick={() => setElementCategory(open ? null : category)} className="flex w-full items-center justify-between rounded-md px-2 py-2 text-xs hover:bg-accent"><span className={`flex items-center gap-2 ${color}`}><Icon className="w-3.5 h-3.5" /><span className="text-foreground">{label}</span></span><span className="flex items-center gap-2 text-muted-foreground">{items.length}<ChevronDown className={`w-3.5 h-3.5 transition-transform ${open ? "rotate-180" : "-rotate-90"}`} /></span></button>
+                                    {open && category === "walls" && <div className="mx-1 mb-2 rounded-md bg-muted/40 p-2 text-xs">
+                                        {!wallDefaultsEditing ? <div className="flex items-center justify-between gap-2"><span className="text-muted-foreground">Default&nbsp; H {localWallH.toFixed(2)} m &nbsp;·&nbsp; T {localWallThickness.toFixed(2)} m</span><button onClick={() => setWallDefaultsEditing(true)} className="rounded border border-primary/30 px-2 py-1 text-primary hover:bg-primary/10">Edit</button></div> : <div className="space-y-2"><div className="grid grid-cols-2 gap-2"><label>Height<Input type="number" min="0.5" step="0.1" value={localWallH} onChange={e => setLocalWallH(parseFloat(e.target.value) || 2.8)} className="mt-1 h-8 text-xs" /></label><label>Thickness<Input type="number" min="0.01" step="0.01" value={localWallThickness} onChange={e => setLocalWallThickness(parseFloat(e.target.value) || 0.15)} className="mt-1 h-8 text-xs" /></label></div><p className="text-[10px] text-muted-foreground">Applied to all current walls and new walls.</p><div className="grid grid-cols-2 gap-2"><button onClick={() => { setLocalWallH(wallHeightMeter); setLocalWallThickness(0.15); setWallDefaultsEditing(false); }} className="rounded border border-border bg-card py-1.5">Cancel</button><button onClick={applyWallDefaults} className="rounded bg-primary py-1.5 text-primary-foreground">Apply</button></div></div>}
+                                    </div>}
+                                    {open && <div className="space-y-0.5 px-2 pb-1">{items.length === 0 ? <div className="px-2 py-1 text-[11px] text-muted-foreground">No {label.toLowerCase()}</div> : items.map((item, index) => {
+                                        const selected = category === "walls" ? selectedWallId === item.id : category === "doors" ? selectedDoorId === item.id : selectedWindowId === item.id;
+                                        const length = category === "walls" ? getWallLength(item as DetectedWallSegment) : category === "doors" ? doorWidthM(item as DetectedDoor) : windowWidthM(item as DetectedWindow);
+                                        const select = category === "walls" ? selectWall : category === "doors" ? selectDoor : selectWindow;
+                                        return <button key={item.id} onClick={() => select(item.id)} className={`flex w-full items-center justify-between rounded px-2 py-1.5 text-left text-[11px] ${selected ? "bg-accent text-foreground" : "text-muted-foreground hover:bg-accent/60"}`}><span>{label.slice(0, -1)} {index + 1}</span><span className="font-mono">{length == null ? "—" : `${length.toFixed(2)} m`}</span></button>;
+                                    })}</div>}
+                                </div>;
+                            })}
+                        </div>}
+                        {false && otherElementsOpen && <div className="space-y-2">
                         {walls.length > 0 && (
                             <div className="pt-3">
                                 <p className="text-[10px] uppercase tracking-widest text-muted-foreground px-1 mb-2 flex items-center gap-1.5">
@@ -1338,7 +1490,6 @@ const WallReview = ({
                                             <div className="flex items-center gap-2">
                                                 <span className={`w-2 h-0.5 rounded shrink-0 ${isExt ? "bg-muted-foreground/70" : "bg-primary/70"}`} />
                                                 <span className="text-[11px] font-medium text-foreground">Wall {idx + 1}</span>
-                                                <span className={`text-[9px] px-1.5 py-0.5 rounded font-mono ${isExt ? "bg-muted text-muted-foreground" : "bg-primary/10 text-primary"}`}>{isExt ? "EXT" : "INT"}</span>
                                             </div>
                                             <div className="mt-1 text-[10px] font-mono text-muted-foreground flex gap-3">
                                                 {/* FIX: แสดง — ก่อน calibrate */}
@@ -1400,12 +1551,13 @@ const WallReview = ({
                                 </div>
                             </div>
                         )}
+                        </div>}
                     </div>
 
                     <div className="shrink-0 border-t border-border" />
 
                     {/* Room editor */}
-                    {selectionType === "room" && selectedRoom && (
+                    {false && selectionType === "room" && selectedRoom && (
                         <div className="shrink-0 p-4 space-y-3">
                             <div className="flex items-center justify-between">
                                 <span className="text-xs font-semibold" style={{ color: palette.stroke }}>{selectedRoom.name}</span>
@@ -1442,7 +1594,7 @@ const WallReview = ({
                     )}
 
                     {/* Wall editor */}
-                    {selectionType === "wall" && selectedWallId && (() => {
+                    {false && selectionType === "wall" && selectedWallId && (() => {
                         const sw = walls.find(w => w.id === selectedWallId);
                         if (!sw) return null;
                         const swIdx = walls.findIndex(w => w.id === selectedWallId);
@@ -1517,25 +1669,7 @@ const WallReview = ({
                         );
                     })()}
 
-                    {/* BOTTOM HINT */}
-                    <div className="shrink-0 px-5 py-1.5 border-t border-border bg-card/20 flex items-center justify-between text-[10px] text-muted-foreground/50">
-                        <div className="flex items-center gap-1.5">
-                            <Pencil className="w-3 h-3" />
-                            คลิกห้อง/กำแพงเพื่อเลือก · คลิกตัวเลขเพื่อแก้ไข · Enter บันทึก · Esc ยกเลิก
-                        </div>
-                        {calibrated && (
-                            <div className="flex items-center gap-1.5 text-emerald-500/60">
-                                <Crosshair className="w-3 h-3" />
-                                Scale: {scale.toFixed(5)} m/px
-                            </div>
-                        )}
-                        {inCalibMode && (
-                            <div className="flex items-center gap-1.5 text-amber-400/60 animate-pulse">
-                                <Crosshair className="w-3 h-3" />
-                                Calibration mode active — ลาก P1/P2 เพื่อปรับ
-                            </div>
-                        )}
-                    </div>
+                    
                 </div>
             </div>
         </div>

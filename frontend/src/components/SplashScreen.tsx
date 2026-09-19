@@ -146,7 +146,7 @@ const SplashScreen = ({ onComplete }: SplashScreenProps) => {
         {/* Text */}
         <div className="text-center space-y-1.5">
           <h1 className="text-2xl font-semibold text-foreground tracking-tight font-sans">
-            Floor Plan → 3D
+            Sketch to Spec
           </h1>
           <p className="text-sm text-muted-foreground font-mono">
             Upload · Detect · Generate
