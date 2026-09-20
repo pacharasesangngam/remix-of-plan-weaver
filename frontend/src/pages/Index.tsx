@@ -11,6 +11,13 @@ import { createFloorPlanProject } from "@/lib/projectIO";
 import type { DetectedWallSegment, DetectedDoor, DetectedWindow } from "@/types/detection";
 import type { Room, FloorPlanData, AppMode, DimensionUnit } from "@/types/floorplan";
 
+type EditorSnapshot = {
+  rooms: Room[];
+  walls: DetectedWallSegment[];
+  doors: DetectedDoor[];
+  windows: DetectedWindow[];
+};
+
 const Index = () => {
   const { theme, setTheme } = useTheme();
   const [mounted, setMounted]           = useState(false);
@@ -35,12 +42,36 @@ const Index = () => {
   const [scale, setScale]             = useState(0);
   const [wallHeightMeter, setWallHeightMeter] = useState(2.8);
   const [unit, setUnit]               = useState<DimensionUnit>("m");
-  const [debugMode, setDebugMode]     = useState(false);
+  const [debugMode, setDebugMode]     = useState(true);
   const [debugImages, setDebugImages] = useState<Record<string, string> | null>(null);
   const [cleanImageUrl, setCleanImageUrl] = useState<string | null>(null);
   const [planW, setPlanW]             = useState(0);
   const [planH, setPlanH] = useState(0);
   const [screenPpm, setScreenPpm] = useState(0)
+  const [editorHistory, setEditorHistory] = useState<{ past: EditorSnapshot[]; future: EditorSnapshot[] }>({ past: [], future: [] });
+
+  const currentEditorSnapshot = useCallback((): EditorSnapshot => ({ rooms, walls, doors, windows }), [doors, rooms, walls, windows]);
+  const recordEditorAction = useCallback(() => {
+    setEditorHistory(history => ({ past: [...history.past.slice(-49), currentEditorSnapshot()], future: [] }));
+  }, [currentEditorSnapshot]);
+  const undoEditorAction = useCallback(() => {
+    setEditorHistory(history => {
+      const previous = history.past.at(-1);
+      if (!previous) return history;
+      const current = currentEditorSnapshot();
+      setRooms(previous.rooms); setWalls(previous.walls); setDoors(previous.doors); setWindows(previous.windows);
+      return { past: history.past.slice(0, -1), future: [current, ...history.future] };
+    });
+  }, [currentEditorSnapshot]);
+  const redoEditorAction = useCallback(() => {
+    setEditorHistory(history => {
+      const next = history.future[0];
+      if (!next) return history;
+      const current = currentEditorSnapshot();
+      setRooms(next.rooms); setWalls(next.walls); setDoors(next.doors); setWindows(next.windows);
+      return { past: [...history.past, current], future: history.future.slice(1) };
+    });
+  }, [currentEditorSnapshot]);
 
   useEffect(() => {
     setMounted(true);
@@ -71,6 +102,7 @@ const Index = () => {
     setScale(0);
     setPlanW(0);
     setPlanH(0);
+    setEditorHistory({ past: [], future: [] });
   }, []);
 
   const handleClear = useCallback(() => {
@@ -93,6 +125,7 @@ const Index = () => {
     setScale(0);
     setPlanW(0);
     setPlanH(0);
+    setEditorHistory({ past: [], future: [] });
   }, []);
 
   const handleWallHeightChange = useCallback((height: number) => {
@@ -117,6 +150,7 @@ const Index = () => {
       setDebugImages(result.debugImages ?? null);
       setDetected(true);
       setGenerated(false);
+      setEditorHistory({ past: [], future: [] });
     } catch (err: unknown) {
       setDetectError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -125,6 +159,7 @@ const Index = () => {
   }, [imageFile, debugMode, wallHeightMeter]);
 
   const handleRoomUpdate = useCallback((id: string, field: keyof Room, value: number | string) => {
+    recordEditorAction();
     setRooms(prev =>
       prev.map(r => r.id === id
         ? {
@@ -136,51 +171,67 @@ const Index = () => {
         : r
       )
     );
-  }, []);
+  }, [recordEditorAction]);
 
   const handleRoomPatch = useCallback((id: string, patch: Partial<Room>) => {
+    recordEditorAction();
     setRooms(prev => prev.map(r => r.id === id ? { ...r, ...patch } : r));
-  }, []);
+  }, [recordEditorAction]);
 
   const handleRoomDelete = useCallback((id: string) => {
+    recordEditorAction();
     setRooms(prev => prev.filter(r => r.id !== id));
-  }, []);
+  }, [recordEditorAction]);
 
   const handleWallUpdate = useCallback((id: string, field: keyof DetectedWallSegment, value: number | string) => {
+    recordEditorAction();
     setWalls(prev => prev.map(w => w.id === id ? { ...w, [field]: value } : w));
-  }, []);
+  }, [recordEditorAction]);
+
+  const handleWallGeometryCommit = useCallback((updatedWall: DetectedWallSegment) => {
+    recordEditorAction();
+    setWalls(previous => previous.map(wall => wall.id === updatedWall.id ? updatedWall : wall));
+  }, [recordEditorAction]);
 
   const handleWallAdd = useCallback((wall: DetectedWallSegment) => {
+    recordEditorAction();
     setWalls(prev => [...prev, wall]);
-  }, []);
+  }, [recordEditorAction]);
 
   const handleWallDelete = useCallback((id: string) => {
+    recordEditorAction();
     setWalls(prev => prev.filter(w => w.id !== id));
-  }, []);
+  }, [recordEditorAction]);
 
   const handleDoorAdd = useCallback((door: DetectedDoor) => {
+    recordEditorAction();
     setDoors(prev => [...prev, door]);
-  }, []);
+  }, [recordEditorAction]);
 
   const handleDoorUpdate = useCallback((id: string, field: keyof DetectedDoor, value: number | string) => {
+    recordEditorAction();
     setDoors(prev => prev.map(d => d.id === id ? { ...d, [field]: value } : d));
-  }, []);
+  }, [recordEditorAction]);
 
   const handleDoorDelete = useCallback((id: string) => {
+    recordEditorAction();
     setDoors(prev => prev.filter(d => d.id !== id));
-  }, []);
+  }, [recordEditorAction]);
 
   const handleWindowAdd = useCallback((windowItem: DetectedWindow) => {
+    recordEditorAction();
     setWindows(prev => [...prev, windowItem]);
-  }, []);
+  }, [recordEditorAction]);
 
   const handleWindowUpdate = useCallback((id: string, field: keyof DetectedWindow, value: number | string) => {
+    recordEditorAction();
     setWindows(prev => prev.map(w => w.id === id ? { ...w, [field]: value } : w));
-  }, []);
+  }, [recordEditorAction]);
 
   const handleWindowDelete = useCallback((id: string) => {
+    recordEditorAction();
     setWindows(prev => prev.filter(w => w.id !== id));
-  }, []);
+  }, [recordEditorAction]);
 
   const handleGenerate = useCallback(() => setGenerated(true), []);
 
@@ -206,6 +257,7 @@ const Index = () => {
     setDebugImages(null);
     setCleanImageUrl(project.image?.cleanDataUrl ?? null);
     setGenerated(true);
+    setEditorHistory({ past: [], future: [] });
   }, []);
 
   const floorPlanData: FloorPlanData = { meta: { unit, scale }, rooms };
@@ -246,7 +298,7 @@ const Index = () => {
                   Back to Review
                 </button>
               )}
-              <h1 className="text-sm font-semibold text-foreground tracking-tight font-sans">Floor Plan → 3D</h1>
+              <h1 className="text-sm font-semibold text-foreground tracking-tight font-sans">Sketch to Spec</h1>
             </div>
             <button
               onClick={() => setTheme(theme === "dark" ? "light" : "dark")}
@@ -265,6 +317,8 @@ const Index = () => {
             unit={unit}
             imageUrl={imageUrl}
             fileType={fileType}
+            fileName={imageName}
+            fileSize={imageFile?.size ?? null}
             rooms={rooms}
             detected={detected}
             detecting={detecting}
@@ -278,7 +332,7 @@ const Index = () => {
             onScaleChange={setScale}
             onUnitChange={setUnit}
             onGenerate={handleGenerate}
-            onDebugToggle={() => setDebugMode((v) => !v)}
+            onDebugToggle={() => setDebugMode((value) => !value)}
             floorPlanData={floorPlanData}
             projectData={projectData}
             onProjectImport={handleProjectImport}
@@ -313,9 +367,17 @@ const Index = () => {
               wallHeightMeter={wallHeightMeter}
               onWallHeightChange={handleWallHeightChange}
               onRoomUpdate={handleRoomUpdate}
+              onRoomDelete={handleRoomDelete}
               onWallUpdate={handleWallUpdate}
+              onWallGeometryCommit={handleWallGeometryCommit}
               onWallAdd={handleWallAdd}
               onWallDelete={handleWallDelete}
+              onDoorDelete={handleDoorDelete}
+              onWindowDelete={handleWindowDelete}
+              canUndo={editorHistory.past.length > 0}
+              canRedo={editorHistory.future.length > 0}
+              onUndo={undoEditorAction}
+              onRedo={redoEditorAction}
               onGenerate={handleGenerate}            />
           ) : imageUrl && !generated ? (
             <div className="flex-1 flex flex-col items-center justify-center bg-background relative overflow-hidden p-6 gap-4">
