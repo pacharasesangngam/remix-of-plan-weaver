@@ -396,6 +396,9 @@ const Index = () => {
               windows={windows}
               planWidth={planW}
               planHeight={planH}
+              originalPlanUrl={originalImageUrl}
+              originalPlanName={imageName}
+              originalPlanIsPdf={fileType === "application/pdf"}
               onRoomUpdate={handleRoomUpdate}
               onRoomPatch={handleRoomPatch}
               onRoomDelete={handleRoomDelete}

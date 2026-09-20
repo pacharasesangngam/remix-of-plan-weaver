@@ -1,8 +1,8 @@
-import { Component, Suspense, createContext, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { Component, Suspense, createContext, useContext, useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
 import { Canvas, useFrame, useThree } from "@react-three/fiber";
 import { OrbitControls, Grid, PointerLockControls, Text, useGLTF } from "@react-three/drei";
 import * as THREE from "three";
-import { Box, ChevronLeft, Download, Info, Move3D, Palette, Plus, Trash2 } from "lucide-react";
+import { Box, ChevronDown, ChevronLeft, Download, Image as ImageIcon, Info, Layers3, Maximize2, Move3D, Palette, Plus, RotateCcw, Trash2, X, ZoomIn, ZoomOut } from "lucide-react";
 import type { BBox, NormalizedPoint, Room } from "@/types/floorplan";
 import type { DetectedWallSegment, DetectedDoor, DetectedWindow } from "@/types/detection";
 import { exportFloorPlanGlb } from "@/lib/blenderExport";
@@ -29,6 +29,9 @@ interface RightPanelProps {
   windows?: DetectedWindow[];
   planWidth?: number;
   planHeight?: number;
+  originalPlanUrl?: string | null;
+  originalPlanName?: string | null;
+  originalPlanIsPdf?: boolean;
   onRoomUpdate?: (id: string, field: keyof Room, value: number | string) => void;
   onRoomPatch?: (id: string, patch: Partial<Room>) => void;
   onRoomDelete?: (id: string) => void;
@@ -225,6 +228,50 @@ const estimateTileCount = (areaM2: number, tile: ScgTileOption, wasteRate = 0.1)
 
   return Math.ceil((areaM2 / tileArea) * (1 + wasteRate));
 };
+
+function OriginalPlanWallOverlay({
+  wall,
+  imageAspect,
+}: {
+  wall: DetectedWallSegment | null;
+  imageAspect: number | null;
+}) {
+  const overlayRef = useRef<SVGSVGElement>(null);
+  const [size, setSize] = useState({ width: 0, height: 0 });
+
+  useEffect(() => {
+    const element = overlayRef.current;
+    if (!element) return;
+    const updateSize = () => setSize({ width: element.clientWidth, height: element.clientHeight });
+    updateSize();
+    const observer = new ResizeObserver(updateSize);
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, []);
+
+  if (!wall || !imageAspect || size.width === 0 || size.height === 0) {
+    return <svg ref={overlayRef} className="pointer-events-none absolute inset-0 z-10 h-full w-full" aria-hidden="true" />;
+  }
+
+  const containerAspect = size.width / size.height;
+  const renderedWidth = containerAspect > imageAspect ? size.height * imageAspect : size.width;
+  const renderedHeight = containerAspect > imageAspect ? size.height : size.width / imageAspect;
+  const offsetX = (size.width - renderedWidth) / 2;
+  const offsetY = (size.height - renderedHeight) / 2;
+  const x1 = offsetX + wall.x1 * renderedWidth;
+  const y1 = offsetY + wall.y1 * renderedHeight;
+  const x2 = offsetX + wall.x2 * renderedWidth;
+  const y2 = offsetY + wall.y2 * renderedHeight;
+
+  return (
+    <svg ref={overlayRef} className="pointer-events-none absolute inset-0 z-10 h-full w-full" aria-label="Selected wall on original plan">
+      <line x1={x1} y1={y1} x2={x2} y2={y2} stroke="rgba(15, 23, 42, 0.9)" strokeWidth="7" strokeLinecap="round" />
+      <line x1={x1} y1={y1} x2={x2} y2={y2} stroke="#22d3ee" strokeWidth="3" strokeLinecap="round" />
+      <circle cx={x1} cy={y1} r="4" fill="#22d3ee" stroke="#0f172a" strokeWidth="2" />
+      <circle cx={x2} cy={y2} r="4" fill="#22d3ee" stroke="#0f172a" strokeWidth="2" />
+    </svg>
+  );
+}
 
 const polygonCentroid = (polygon?: NormalizedPoint[] | null): NormalizedPoint | null => {
   if (!polygon || polygon.length < 3) return null;
@@ -1166,7 +1213,12 @@ function WallSegmentMesh({
               }}
             >
               <boxGeometry args={[segLen, segH, thickness]} />
-              <meshStandardMaterial color={wallColor} map={wallTexture ?? undefined} roughness={0.72} metalness={0.03} />
+              <meshStandardMaterial
+                color={wallColor}
+                map={wallTexture ?? undefined}
+                roughness={0.72}
+                metalness={0.03}
+              />
             </mesh>
             {wall.wallTexture === "stone-block-panel" &&
               createStoneBlockSpecs(segLen, segH).map((block, blockIndex) => (
@@ -2033,8 +2085,8 @@ function Scene({
         infiniteGrid
         cellSize={1}
         sectionSize={5}
-        cellColor="#cbd5e1"
-        sectionColor="#94a3b8"
+        cellColor="#26313d"
+        sectionColor="#3b4654"
         fadeDistance={40}
       />
 
@@ -2180,6 +2232,9 @@ const RightPanel = ({
   windows = [],
   planWidth = 0,
   planHeight = 0,
+  originalPlanUrl = null,
+  originalPlanName = null,
+  originalPlanIsPdf = false,
   onRoomUpdate,
   onRoomPatch,
   onRoomDelete,
@@ -2205,6 +2260,25 @@ const RightPanel = ({
   const [selection, setSelection] = useState<Selection>(null);
   const [hoverTarget, setHoverTarget] = useState<Selection>(null);
   const [placementPreview, setPlacementPreview] = useState<PlacementPreview>(null);
+  const [showPlanReference, setShowPlanReference] = useState(true);
+  const [isDecorateOpen, setIsDecorateOpen] = useState(true);
+  const [isPlanViewerOpen, setIsPlanViewerOpen] = useState(false);
+  const [planZoom, setPlanZoom] = useState(1);
+  const [originalPlanAspect, setOriginalPlanAspect] = useState<number | null>(null);
+  const [planWidgetPosition, setPlanWidgetPosition] = useState<{ left: number; top: number } | null>(null);
+  const [planWidgetSize, setPlanWidgetSize] = useState<{ width: number; height: number } | null>(null);
+  const planWidgetRef = useRef<HTMLDivElement>(null);
+  const planWidgetDragRef = useRef<{ offsetX: number; offsetY: number; parent: DOMRect } | null>(null);
+  const planWidgetResizeRef = useRef<{
+    corner: "nw" | "ne" | "sw" | "se";
+    startX: number;
+    startY: number;
+    startLeft: number;
+    startTop: number;
+    startWidth: number;
+    startHeight: number;
+    parent: DOMRect;
+  } | null>(null);
   const hoveredRoom = rooms.find((r) => r.id === hoveredId) ?? null;
   const selectedRoom = selection?.type === "room" ? rooms.find((r) => r.id === selection.id) : null;
   const selectedWall = selection?.type === "wall" ? walls.find((w) => w.id === selection.id) : null;
@@ -2222,7 +2296,7 @@ const RightPanel = ({
     return Math.max(max, bounds.w * pw, bounds.h * ph);
   }, Math.max(pw, ph));
 
-  const camDist = Math.max(planSpan * 1.4, 15);
+  const camDist = Math.max(planSpan * 1.15, 12);
 
   const totalArea = rooms.reduce(
     (s, room) => s + polygonArea(getRoomFloorPolygon(room), pw, ph),
@@ -2250,6 +2324,27 @@ const RightPanel = ({
   const selectedWindowOption = findScgWindow(selectedWindow?.scgWindowCode);
   const selectedRoomFloorArea = selectedRoom ? polygonArea(getRoomFloorPolygon(selectedRoom), pw, ph) : 0;
   const selectedRoomTileCount = selectedRoom ? estimateTileCount(selectedRoomFloorArea, selectedRoomTile) : null;
+  const materialSummary = useMemo(() => {
+    const unique = (items: string[]) => [...new Set(items.filter(Boolean))];
+    return {
+      walls: unique(walls.map((wall) => {
+        const paint = findScgPaint(wall.scgPaintCode);
+        return wall.scgPaintCode ? `${paint.name} · ${paint.finish}` : "No finish assigned";
+      })),
+      floors: unique(rooms.map((room) => {
+        const tile = findScgTile(room.tileCode);
+        return room.tileCode ? `${tile.name} · ${tile.sizeCm} cm` : "No floor finish assigned";
+      })),
+      openings: unique([
+        ...doors.map((door) => door.scgDoorCode ? `${findScgDoor(door.scgDoorCode).name} · ${findScgDoor(door.scgDoorCode).material}` : "Door product not assigned"),
+        ...windows.map((windowItem) => windowItem.scgWindowCode ? `${findScgWindow(windowItem.scgWindowCode).name} · ${findScgWindow(windowItem.scgWindowCode).material}` : "Window product not assigned"),
+      ]),
+    };
+  }, [doors, rooms, walls, windows]);
+  const hasAssignedMaterials = walls.some((wall) => Boolean(wall.scgPaintCode))
+    || rooms.some((room) => Boolean(room.tileCode))
+    || doors.some((door) => Boolean(door.scgDoorCode))
+    || windows.some((windowItem) => Boolean(windowItem.scgWindowCode));
 
   const applyPaintToWall = (wallId: string, code: string) => {
     const paint = findScgPaint(code);
@@ -2516,6 +2611,81 @@ const RightPanel = ({
     });
   };
 
+  const startPlanWidgetDrag = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if ((event.target as HTMLElement).closest("button")) return;
+    const widget = planWidgetRef.current;
+    const parent = widget?.parentElement;
+    if (!widget || !parent) return;
+    const widgetRect = widget.getBoundingClientRect();
+    const parentRect = parent.getBoundingClientRect();
+    planWidgetDragRef.current = {
+      offsetX: event.clientX - widgetRect.left,
+      offsetY: event.clientY - widgetRect.top,
+      parent: parentRect,
+    };
+    event.currentTarget.setPointerCapture(event.pointerId);
+  };
+
+  const movePlanWidget = (event: ReactPointerEvent<HTMLDivElement>) => {
+    const drag = planWidgetDragRef.current;
+    const widget = planWidgetRef.current;
+    if (!drag || !widget) return;
+    const maxLeft = Math.max(0, drag.parent.width - widget.offsetWidth);
+    const maxTop = Math.max(0, drag.parent.height - widget.offsetHeight);
+    setPlanWidgetPosition({
+      left: Math.max(0, Math.min(maxLeft, event.clientX - drag.parent.left - drag.offsetX)),
+      top: Math.max(0, Math.min(maxTop, event.clientY - drag.parent.top - drag.offsetY)),
+    });
+  };
+
+  const stopPlanWidgetDrag = (event: ReactPointerEvent<HTMLDivElement>) => {
+    planWidgetDragRef.current = null;
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
+  };
+
+  const startPlanWidgetResize = (event: ReactPointerEvent<HTMLDivElement>, corner: "nw" | "ne" | "sw" | "se") => {
+    event.preventDefault();
+    event.stopPropagation();
+    const widget = planWidgetRef.current;
+    const parent = widget?.parentElement;
+    if (!widget || !parent) return;
+    const rect = widget.getBoundingClientRect();
+    const parentRect = parent.getBoundingClientRect();
+    planWidgetResizeRef.current = {
+      corner,
+      startX: event.clientX,
+      startY: event.clientY,
+      startLeft: rect.left - parentRect.left,
+      startTop: rect.top - parentRect.top,
+      startWidth: rect.width,
+      startHeight: rect.height,
+      parent: parentRect,
+    };
+    event.currentTarget.setPointerCapture(event.pointerId);
+  };
+
+  const resizePlanWidget = (event: ReactPointerEvent<HTMLDivElement>) => {
+    const resize = planWidgetResizeRef.current;
+    if (!resize) return;
+    const dx = event.clientX - resize.startX;
+    const dy = event.clientY - resize.startY;
+    const movesLeft = resize.corner === "nw" || resize.corner === "sw";
+    const movesTop = resize.corner === "nw" || resize.corner === "ne";
+    const width = Math.max(220, movesLeft ? resize.startWidth - dx : resize.startWidth + dx);
+    const height = Math.max(140, movesTop ? resize.startHeight - dy : resize.startHeight + dy);
+    const left = movesLeft ? resize.startLeft + resize.startWidth - width : resize.startLeft;
+    const top = movesTop ? resize.startTop + resize.startHeight - height : resize.startTop;
+    const boundedWidth = Math.min(width, resize.parent.width - Math.max(0, left));
+    const boundedHeight = Math.min(height, resize.parent.height - Math.max(0, top));
+    setPlanWidgetPosition({ left: Math.max(0, left), top: Math.max(0, top) });
+    setPlanWidgetSize({ width: boundedWidth, height: boundedHeight });
+  };
+
+  const stopPlanWidgetResize = (event: ReactPointerEvent<HTMLDivElement>) => {
+    planWidgetResizeRef.current = null;
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
+  };
+
   return (
     <div className="flex-1 flex items-center justify-center bg-background relative overflow-hidden">
       {!generated ? (
@@ -2563,7 +2733,123 @@ const RightPanel = ({
             />
           </Canvas>
 
-          {onBack && (
+          {originalPlanUrl && (
+            <div
+              ref={planWidgetRef}
+              className={`absolute z-20 min-h-[48px] min-w-[220px] max-w-[calc(100%-2rem)] overflow-hidden rounded-2xl border border-border bg-card/95 shadow-2xl backdrop-blur-md ${planWidgetPosition ? "" : "right-4 top-4"} ${showPlanReference ? "h-64 w-72" : "w-64"}`}
+              style={{
+                ...(planWidgetPosition ?? {}),
+                ...(showPlanReference && planWidgetSize ? planWidgetSize : {}),
+              }}
+            >
+              <div
+                onPointerDown={startPlanWidgetDrag}
+                onPointerMove={movePlanWidget}
+                onPointerUp={stopPlanWidgetDrag}
+                onPointerCancel={stopPlanWidgetDrag}
+                className="flex cursor-grab touch-none items-center justify-between border-b border-border px-3 py-2 active:cursor-grabbing"
+                title="Drag to move this widget"
+              >
+                <div className="flex min-w-0 items-center gap-2">
+                  <ImageIcon className="h-3.5 w-3.5 shrink-0 text-primary" />
+                  <div className="min-w-0">
+                    <p className="text-[11px] font-semibold text-foreground">Original plan</p>
+                    <p className="truncate text-[9px] text-muted-foreground">{originalPlanName ?? "Source drawing"}</p>
+                  </div>
+                </div>
+                <button
+                  onClick={() => setShowPlanReference((value) => !value)}
+                  className="rounded-md px-1.5 py-1 text-[10px] font-medium text-muted-foreground hover:bg-accent hover:text-foreground"
+                >
+                  {showPlanReference ? "Hide" : "Show"}
+                </button>
+              </div>
+              {showPlanReference && (
+                <button
+                  type="button"
+                  onClick={() => { setPlanZoom(1); setIsPlanViewerOpen(true); }}
+                  className="group relative block h-[calc(100%-43px)] w-full overflow-hidden bg-muted/40 text-left"
+                  title="Open original plan"
+                >
+                  {originalPlanIsPdf ? (
+                    <iframe src={originalPlanUrl} title="Original floor plan" className="h-full w-full border-0" />
+                  ) : (
+                    <img
+                      src={originalPlanUrl}
+                      alt="Original floor plan"
+                      className="h-full w-full object-contain"
+                      onLoad={(event) => setOriginalPlanAspect(event.currentTarget.naturalWidth / event.currentTarget.naturalHeight)}
+                    />
+                  )}
+                  {!originalPlanIsPdf && <OriginalPlanWallOverlay wall={selectedWall ?? null} imageAspect={originalPlanAspect} />}
+                  <div className="absolute inset-0 flex items-center justify-center bg-foreground/0 transition-colors group-hover:bg-foreground/15">
+                    <span className="flex items-center gap-1.5 rounded-lg bg-background/90 px-2.5 py-1.5 text-[10px] font-semibold text-foreground opacity-0 shadow-sm transition-opacity group-hover:opacity-100">
+                      <Maximize2 className="h-3 w-3" /> Open & zoom
+                    </span>
+                  </div>
+                  <span className="absolute bottom-2 left-2 z-20 rounded-md bg-background/90 px-2 py-1 text-[9px] font-medium text-foreground shadow-sm">
+                    {selectedWall ? "Selected wall highlighted" : "Reference only · Click to inspect"}
+                  </span>
+                </button>
+              )}
+              {showPlanReference && ([
+                ["nw", "left-0 top-0 cursor-nwse-resize"],
+                ["ne", "right-0 top-0 cursor-nesw-resize"],
+                ["sw", "bottom-0 left-0 cursor-nesw-resize"],
+                ["se", "bottom-0 right-0 cursor-nwse-resize"],
+              ] as const).map(([corner, position]) => (
+                <div
+                  key={corner}
+                  onPointerDown={(event) => startPlanWidgetResize(event, corner)}
+                  onPointerMove={resizePlanWidget}
+                  onPointerUp={stopPlanWidgetResize}
+                  onPointerCancel={stopPlanWidgetResize}
+                  className={`absolute z-30 h-4 w-4 ${position}`}
+                  aria-label={`Resize original plan widget from ${corner}`}
+                />
+              ))}
+            </div>
+          )}
+
+          {isPlanViewerOpen && originalPlanUrl && (
+            <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/70 p-6 backdrop-blur-sm">
+              <div className="flex h-full w-full max-w-6xl flex-col overflow-hidden rounded-2xl border border-border bg-card shadow-2xl">
+                <div className="flex shrink-0 items-center justify-between border-b border-border px-4 py-3">
+                  <div className="flex min-w-0 items-center gap-2">
+                    <ImageIcon className="h-4 w-4 shrink-0 text-primary" />
+                    <div className="min-w-0">
+                      <p className="text-sm font-semibold text-foreground">Original floor plan</p>
+                      <p className="truncate text-[11px] text-muted-foreground">{originalPlanName ?? "Source drawing"}</p>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-1">
+                    {!originalPlanIsPdf && (
+                      <>
+                        <button onClick={() => setPlanZoom((zoom) => Math.max(0.5, Number((zoom - 0.25).toFixed(2))))} className="rounded-lg p-2 text-muted-foreground hover:bg-accent hover:text-foreground" title="Zoom out"><ZoomOut className="h-4 w-4" /></button>
+                        <button onClick={() => setPlanZoom(1)} className="rounded-lg px-2 py-1.5 text-[11px] font-medium text-muted-foreground hover:bg-accent hover:text-foreground" title="Reset zoom"><RotateCcw className="mr-1 inline h-3.5 w-3.5" />{Math.round(planZoom * 100)}%</button>
+                        <button onClick={() => setPlanZoom((zoom) => Math.min(3, Number((zoom + 0.25).toFixed(2))))} className="rounded-lg p-2 text-muted-foreground hover:bg-accent hover:text-foreground" title="Zoom in"><ZoomIn className="h-4 w-4" /></button>
+                      </>
+                    )}
+                    <button onClick={() => setIsPlanViewerOpen(false)} className="ml-1 rounded-lg p-2 text-muted-foreground hover:bg-accent hover:text-foreground" title="Close"><X className="h-4 w-4" /></button>
+                  </div>
+                </div>
+                <div className="flex min-h-0 flex-1 items-center justify-center overflow-auto bg-muted/40 p-5">
+                  {originalPlanIsPdf ? (
+                    <iframe src={originalPlanUrl} title="Original floor plan large preview" className="h-full w-full rounded-lg bg-white" />
+                  ) : (
+                    <img
+                      src={originalPlanUrl}
+                      alt="Original floor plan enlarged"
+                      className="max-h-full max-w-full origin-center object-contain transition-transform duration-200"
+                      style={{ transform: `scale(${planZoom})` }}
+                    />
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
+
+          {onBack && !generated && (
             <div className="absolute top-4 left-4 flex items-center gap-2 z-10">
               <button
                 onClick={onBack}
@@ -2658,7 +2944,7 @@ const RightPanel = ({
           </div>
 
           <div className="absolute bottom-20 right-4 z-20 w-[280px] rounded-3xl border border-border bg-card/92 p-4 shadow-2xl backdrop-blur-md">
-            <div className="mb-3 flex items-center justify-between">
+            <div className={isDecorateOpen ? "mb-3 flex items-center justify-between" : "flex items-center justify-between"}>
               <div className="flex items-center gap-2">
                 <Palette className="h-4 w-4 text-primary" />
                 <div>
@@ -2668,13 +2954,24 @@ const RightPanel = ({
                   </div>
                 </div>
               </div>
-              {selection && (
-                <button onClick={() => setSelection(null)} className="rounded-lg p-1 text-muted-foreground hover:bg-accent hover:text-foreground">
-                  x
+              <div className="flex items-center gap-1">
+                {selection && (
+                  <button onClick={() => setSelection(null)} className="rounded-lg p-1 text-muted-foreground hover:bg-accent hover:text-foreground" title="Clear selection">
+                    x
+                  </button>
+                )}
+                <button
+                  onClick={() => setIsDecorateOpen((open) => !open)}
+                  className="rounded-lg p-1.5 text-muted-foreground hover:bg-accent hover:text-foreground"
+                  title={isDecorateOpen ? "Minimize Decorate" : "Expand Decorate"}
+                  aria-label={isDecorateOpen ? "Minimize Decorate" : "Expand Decorate"}
+                >
+                  <ChevronDown className={`h-4 w-4 transition-transform ${isDecorateOpen ? "" : "-rotate-90"}`} />
                 </button>
-              )}
+              </div>
             </div>
 
+            {isDecorateOpen && <>
             {!selection && (
               <div className="space-y-3">
                 <div className="rounded-2xl border border-dashed border-border p-3 text-[11px] leading-5 text-muted-foreground">
@@ -2993,6 +3290,34 @@ const RightPanel = ({
                 Delete selected
               </button>
             )}
+            </>}
+          </div>
+
+          <div className="absolute bottom-4 left-4 z-20 w-[276px] rounded-2xl border border-border bg-card/92 p-3 shadow-xl backdrop-blur-md">
+            <div className="mb-2 flex items-center gap-2">
+              <Layers3 className="h-3.5 w-3.5 text-primary" />
+              <div>
+                <p className="text-[11px] font-semibold text-foreground">Material schedule</p>
+                <p className="text-[9px] text-muted-foreground">Assigned finishes in this 3D model</p>
+              </div>
+            </div>
+            {!hasAssignedMaterials && (
+              <p className="rounded-xl border border-dashed border-border px-2.5 py-2 text-[10px] leading-4 text-muted-foreground">
+                No materials assigned yet. Select an object to start decorating.
+              </p>
+            )}
+            <div className={hasAssignedMaterials ? "space-y-2 text-[10px]" : "hidden"}>
+              {[
+                ["Walls", materialSummary.walls],
+                ["Floors", materialSummary.floors],
+                ["Openings", materialSummary.openings],
+              ].map(([label, items]) => (
+                <div key={label as string} className="grid grid-cols-[56px_1fr] gap-2">
+                  <span className="font-medium text-muted-foreground">{label}</span>
+                  <span className="line-clamp-2 leading-4 text-foreground">{(items as string[]).join(" · ") || "Not assigned"}</span>
+                </div>
+              ))}
+            </div>
           </div>
 
           {hoveredRoom && <RoomInfoCard room={hoveredRoom} />}
