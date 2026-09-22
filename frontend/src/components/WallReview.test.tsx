@@ -26,7 +26,7 @@ function setup(initialWalls = [wall, neighbor]) {
         return <WallReview rooms={[]} walls={walls} unit="m" imageUrl="plan.png"
             scale={1} onScaleChange={vi.fn()} onRoomUpdate={vi.fn()} onGenerate={vi.fn()} onWallGeometryCommit={updated => {
                 commit(updated);
-                setWalls(current => current.map(item => item.id === updated.id ? updated : item));
+                setWalls(updated);
             }} />;
     }
     const { container } = render(<Editor />);
@@ -39,9 +39,9 @@ function setup(initialWalls = [wall, neighbor]) {
     const at = (x: number, y: number) => ({ clientX: -100 + x * 1000, clientY: 80 + y * 500, pointerId: 1, button: 0 });
     fireEvent.click(svg, at(0.4, 0.3));
     const handles = () => svg.querySelectorAll('[data-wall-endpoint]');
-    const begin = (index: number) => {
+    const begin = (index: number, altKey = false) => {
         const handle = handles()[index];
-        fireEvent.pointerDown(handle, at(Number(handle.getAttribute("cx")), Number(handle.getAttribute("cy"))));
+        fireEvent.pointerDown(handle, { ...at(Number(handle.getAttribute("cx")), Number(handle.getAttribute("cy"))), altKey });
     };
     const move = (x: number, y: number) => fireEvent.pointerMove(svg, at(x, y));
     const end = (x: number, y: number) => fireEvent.pointerUp(svg, at(x, y));
@@ -49,6 +49,73 @@ function setup(initialWalls = [wall, neighbor]) {
 }
 
 describe("wall endpoint dragging", () => {
+    it("freely leaves an existing T-junction without a modifier or host movement", () => {
+        const host = { ...wall, id: "host", x1: 0.6, y1: 0.1, x2: 0.6, y2: 0.8 };
+        const { begin, move, end, handles, commit } = setup([wall, host]);
+        begin(1);
+        move(0.604, 0.308);
+        expect(handles()[1]).toHaveAttribute("cx", "0.604");
+        expect(handles()[1]).toHaveAttribute("cy", "0.308");
+        move(0.7, 0.5);
+        end(0.7, 0.5);
+        expect(commit).toHaveBeenCalledOnce();
+        expect(commit).toHaveBeenCalledWith([{ ...wall, x2: 0.7, y2: 0.5 }, host]);
+    });
+    it("previews and commits only the selected wall at a shared junction exactly once", () => {
+        const { begin, move, end, commit, svg } = setup();
+        begin(1);
+        move(0.65, 0.4);
+        move(0.7, 0.5);
+        expect(commit).not.toHaveBeenCalled();
+        const neighborLine = svg.querySelectorAll('line[stroke="transparent"]')[1];
+        expect(neighborLine).toHaveAttribute("x1", "0.6");
+        expect(neighborLine).toHaveAttribute("y1", "0.3");
+        end(0.7, 0.5);
+        expect(commit).toHaveBeenCalledOnce();
+        expect(commit).toHaveBeenCalledWith([{ ...wall, x2: 0.7, y2: 0.5 }, neighbor]);
+    });
+
+    it("translates a selected wall body without changing adjacent walls", () => {
+        const { svg, at, move, end, commit } = setup();
+        fireEvent.pointerDown(svg, at(0.4, 0.3));
+        move(0.5, 0.4);
+        expect(commit).not.toHaveBeenCalled();
+        end(0.5, 0.4);
+        expect(commit).toHaveBeenCalledOnce();
+        const updated = commit.mock.calls[0][0] as DetectedWallSegment[];
+        expect(updated[0].x1).toBeCloseTo(0.3);
+        expect(updated[0].x2).toBeCloseTo(0.7);
+        expect(updated[0].y1).toBeCloseTo(0.4);
+        expect(updated[1]).toBe(neighbor);
+    });
+
+    it("snaps to a segment without coupling future host edits", () => {
+        const host = { ...wall, id: "host", x1: 0.2, y1: 0.7, x2: 0.8, y2: 0.7 };
+        const { begin, move, end, commit, svg, at, handles } = setup([wall, host]);
+        begin(1);
+        move(0.5, 0.69);
+        expect(handles()[1]).toHaveAttribute("cy", "0.7");
+        expect(svg.querySelector('circle[stroke="#22c55e"]')).toHaveAttribute("cy", "0.7");
+        end(0.5, 0.69);
+        expect(commit.mock.calls[0][0][1]).toBe(host);
+        fireEvent.click(svg, at(0.5, 0.69)); // Suppress the drag's synthesized click.
+        fireEvent.click(svg, at(0.7, 0.7));
+        begin(1);
+        move(0.8, 0.9);
+        end(0.8, 0.9);
+        const updated = commit.mock.calls[1][0] as DetectedWallSegment[];
+        expect(updated[0].x2).toBeCloseTo(0.5);
+        expect(updated[0].y2).toBeCloseTo(0.7);
+    });
+
+    it("cancels an endpoint drag without committing geometry or history", () => {
+        const { svg, at, begin, move, commit, handles } = setup();
+        begin(1);
+        move(0.7, 0.5);
+        fireEvent.pointerCancel(svg, at(0.7, 0.5));
+        expect(commit).not.toHaveBeenCalled();
+        expect(handles()[1]).toHaveAttribute("cx", "0.6");
+    });
     it("detaches from a shared endpoint, previews both axes and length, and retains selection", () => {
         const { svg, commit, at, handles, begin, move, end } = setup();
         const initialLabel = svg.textContent;
@@ -62,7 +129,7 @@ describe("wall endpoint dragging", () => {
         expect(handles()[0]).toHaveAttribute("cy", "0.3");
         expect(svg.textContent).not.toBe(initialLabel);
         end(0.7, 0.5);
-        expect(commit).toHaveBeenCalledWith({ ...wall, x2: 0.7, y2: 0.5 });
+        expect(commit).toHaveBeenCalledWith([{ ...wall, x2: 0.7, y2: 0.5 }, neighbor]);
         fireEvent.click(svg, at(0.7, 0.5));
         expect(handles()).toHaveLength(2);
     });
@@ -76,7 +143,7 @@ describe("wall endpoint dragging", () => {
         expect(handles()[1]).toHaveAttribute("cy", "0.7");
         move(0.603, 0.305);
         end(0.603, 0.305);
-        expect(commit).toHaveBeenCalledWith(wall);
+        expect(commit).not.toHaveBeenCalled();
     });
 
     it("moves the start freely beyond the image without changing the end", () => {
@@ -84,7 +151,7 @@ describe("wall endpoint dragging", () => {
         begin(0);
         move(-0.1, 1.1);
         end(-0.1, 1.1);
-        expect(commit).toHaveBeenCalledWith({ ...wall, x1: -0.1, y1: 1.1 });
+        expect(commit).toHaveBeenCalledWith([{ ...wall, x1: -0.1, y1: 1.1 }, neighbor]);
     });
 
     it("preserves endpoint identity and the latest opposite endpoint across consecutive reversed edits", () => {
@@ -97,11 +164,11 @@ describe("wall endpoint dragging", () => {
         expect(handles()[0]).toHaveAttribute("cx", "0.9");
         expect(handles()[0]).toHaveAttribute("cy", "0.8");
         end(0.1, 0.1);
-        expect(commit).toHaveBeenLastCalledWith({ ...wall, x1: 0.9, y1: 0.8, x2: 0.1, y2: 0.1 });
+        expect(commit).toHaveBeenLastCalledWith([{ ...wall, x1: 0.9, y1: 0.8, x2: 0.1, y2: 0.1 }]);
         begin(0);
         move(0.5, 0.6);
         end(0.5, 0.6);
-        expect(commit).toHaveBeenLastCalledWith({ ...wall, x1: 0.5, y1: 0.6, x2: 0.1, y2: 0.1 });
+        expect(commit).toHaveBeenLastCalledWith([{ ...wall, x1: 0.5, y1: 0.6, x2: 0.1, y2: 0.1 }]);
     });
 
     it("chooses the nearest physical endpoint when endpoint hit areas overlap", () => {
@@ -111,13 +178,13 @@ describe("wall endpoint dragging", () => {
         fireEvent.pointerDown(handles()[1], at(shortWall.x1, shortWall.y1));
         move(0.2, 0.6);
         end(0.2, 0.6);
-        expect(commit).toHaveBeenCalledWith({ ...shortWall, x1: 0.2, y1: 0.6 });
+        expect(commit).toHaveBeenCalledWith([{ ...shortWall, x1: 0.2, y1: 0.6 }]);
         expect(svg.setPointerCapture).toHaveBeenCalledOnce();
     });
 
     it("does not give endpoints priority beyond their screen-space radius", () => {
         const { svg, at, move, end, commit } = setup();
-        fireEvent.pointerDown(svg, at(0.58, 0.3)); // 20px from the end, inside the old normalized hit area.
+        fireEvent.pointerDown(svg, at(0.58, 0.34)); // Outside both the handle and wall body hit areas.
         move(0.7, 0.5);
         end(0.7, 0.5);
         expect(svg.setPointerCapture).not.toHaveBeenCalled();

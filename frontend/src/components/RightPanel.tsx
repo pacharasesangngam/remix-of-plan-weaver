@@ -1,3 +1,4 @@
+import { useProjectActions } from "@/components/ProjectActionContext";
 import { Component, Suspense, createContext, useContext, useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
 import { Canvas, useFrame, useThree } from "@react-three/fiber";
 import { OrbitControls, Grid, PointerLockControls, Text, useGLTF } from "@react-three/drei";
@@ -5,6 +6,7 @@ import * as THREE from "three";
 import { Box, ChevronDown, ChevronLeft, Download, Image as ImageIcon, Info, Layers3, Maximize2, Move3D, Palette, Plus, RotateCcw, Trash2, X, ZoomIn, ZoomOut } from "lucide-react";
 import type { BBox, NormalizedPoint, Room } from "@/types/floorplan";
 import type { DetectedWallSegment, DetectedDoor, DetectedWindow } from "@/types/detection";
+import { buildWallSolidGeometries } from "@/lib/wallSolidGeometry";
 import { exportFloorPlanGlb } from "@/lib/blenderExport";
 import {
   SCG_DOOR_CATALOG,
@@ -20,6 +22,7 @@ import {
 } from "@/types/materialCatalog";
 import { createWallTexture } from "@/lib/wallTextures";
 import { createStoneBlockSpecs } from "@/lib/stoneWallPanels";
+import { DEFAULT_WALL_THICKNESS_M, getWallThicknessM, resolvePlanDimensions } from "@/lib/wallMetrics";
 
 interface RightPanelProps {
   rooms: Room[];
@@ -48,7 +51,7 @@ interface RightPanelProps {
 }
 
 type ViewPreset = "perspective" | "top" | "front" | "side";
-type BuildMode = "select" | "wall" | "door" | "window" | "delete";
+type BuildMode = "select" | "wall" | "door" | "window";
 type Selection =
   | { type: "room"; id: string }
   | { type: "wall"; id: string; point?: NormalizedPoint }
@@ -314,14 +317,6 @@ const getRoomCenter = (room: Room): NormalizedPoint | null =>
 
 // ── Wall thickness helper ─────────────────────────────────────────────────────
 
-const getWallThicknessM = (wall: DetectedWallSegment, pw = PLAN_SIZE): number => {
-  if (typeof wall.thickness === "number" && wall.thickness > 0) return wall.thickness;
-  if (typeof wall.thicknessRatio === "number" && wall.thicknessRatio > 0) {
-    return wall.thicknessRatio * pw;
-  }
-  return wall.type === "exterior" ? 0.3 : 0.18;
-};
-
 // ── Opening width helper ──────────────────────────────────────────────────────
 
 const getWidthM = (bboxW?: number, real?: number, pw = PLAN_SIZE): number => {
@@ -427,80 +422,6 @@ const snapPointToWalls = (
 
 const isHorizontalSegment = (wall: DetectedWallSegment): boolean =>
   Math.abs(wall.x2 - wall.x1) >= Math.abs(wall.y2 - wall.y1);
-
-const normalizeRenderWall = (wall: DetectedWallSegment): DetectedWallSegment => {
-  if (isHorizontalSegment(wall)) {
-    const x1 = Math.min(wall.x1, wall.x2);
-    const x2 = Math.max(wall.x1, wall.x2);
-    const y = (wall.y1 + wall.y2) / 2;
-    return { ...wall, x1, x2, y1: y, y2: y };
-  }
-  const y1 = Math.min(wall.y1, wall.y2);
-  const y2 = Math.max(wall.y1, wall.y2);
-  const x = (wall.x1 + wall.x2) / 2;
-  return { ...wall, x1: x, x2: x, y1, y2 };
-};
-
-const snapAxisGroup = (
-  walls: DetectedWallSegment[],
-  axisKey: "x1" | "y1",
-  threshold = 0.003,
-) => {
-  if (walls.length === 0) return;
-  walls.sort((a, b) => a[axisKey] - b[axisKey]);
-  let cluster = [walls[0]];
-
-  const flush = () => {
-    const snapped =
-      cluster.reduce((sum, wall) => sum + wall[axisKey], 0) / cluster.length;
-    for (const wall of cluster) {
-      wall[axisKey] = snapped;
-      if (axisKey === "x1") wall.x2 = snapped;
-      else wall.y2 = snapped;
-    }
-  };
-
-  for (const wall of walls.slice(1)) {
-    if (Math.abs(wall[axisKey] - cluster[cluster.length - 1][axisKey]) <= threshold) {
-      cluster.push(wall);
-      continue;
-    }
-    flush();
-    cluster = [wall];
-  }
-  flush();
-};
-
-const snapRenderedWallJunctions = (
-  walls: DetectedWallSegment[],
-  threshold = 0.012,
-): DetectedWallSegment[] => {
-  const normalized = walls.map(normalizeRenderWall);
-  const horizontals = normalized.filter(isHorizontalSegment);
-  const verticals = normalized.filter((wall) => !isHorizontalSegment(wall));
-
-  snapAxisGroup(horizontals, "y1");
-  snapAxisGroup(verticals, "x1");
-
-  for (const horizontal of horizontals) {
-    for (const vertical of verticals) {
-      const x = vertical.x1;
-      const y = horizontal.y1;
-      const withinHorizontal =
-        x >= horizontal.x1 - threshold && x <= horizontal.x2 + threshold;
-      const withinVertical =
-        y >= vertical.y1 - threshold && y <= vertical.y2 + threshold;
-      if (!withinHorizontal || !withinVertical) continue;
-
-      if (Math.abs(horizontal.x1 - x) <= threshold) horizontal.x1 = x;
-      if (Math.abs(horizontal.x2 - x) <= threshold) horizontal.x2 = x;
-      if (Math.abs(vertical.y1 - y) <= threshold) vertical.y1 = y;
-      if (Math.abs(vertical.y2 - y) <= threshold) vertical.y2 = y;
-    }
-  }
-
-  return normalized.map(normalizeRenderWall);
-};
 
 // ── Opening gap types & projection ───────────────────────────────────────────
 
@@ -627,7 +548,7 @@ const projectOpeningEdgesOntoWall = (
     maxT = Math.max(maxT, t);
   }
 
-  const thickness = getWallThicknessM(wall, pw);
+  const thickness = getWallThicknessM(wall, pw, ph);
   const tolerance = Math.max(thickness, 0.2);
   const cx = (bbox.x + bbox.w / 2) * pw;
   const cz = (bbox.y + bbox.h / 2) * ph;
@@ -715,6 +636,7 @@ const computeSolidSegments = (
   gaps: GapInterval[],
 ): SolidSegment[] => {
   const solids: SolidSegment[] = [];
+  if (gaps.length === 0 && wallLengthM > 1e-9) return [{ tStart: 0, tEnd: wallLengthM, yStart: 0, yEnd: wallHeightM }];
 
   let cursor = 0;
   for (const gap of gaps) {
@@ -782,7 +704,7 @@ function getOpeningTransform(
     Math.pow((wall.y2 - wall.y1) * ph, 2),
   );
 
-  if (wallLengthM < 0.001) return null;
+  if (wallLengthM <= 1e-9) return null;
 
   const angle = Math.atan2(dz, dx);
 
@@ -847,7 +769,7 @@ function findBestWall(
     const t = vx * ux + vz * uz;
     const perp = Math.abs(vx * (-uz) + vz * ux);
 
-    const thickness = getWallThicknessM(wall, pw);
+    const thickness = getWallThicknessM(wall, pw, ph);
     const tolerance = Math.max(thickness, 0.2);
 
     if (perp > tolerance) continue;
@@ -1120,8 +1042,7 @@ function WallSegmentMesh({
   wallHeight,
   doors,
   windows,
-  extStart = false,
-  extEnd = false,
+  geometry,
   onSelect,
   onPlacementHover,
   onPlacementLeave,
@@ -1131,8 +1052,7 @@ function WallSegmentMesh({
   wallHeight: number;
   doors: DetectedDoor[];
   windows: DetectedWindow[];
-  extStart?: boolean;
-  extEnd?: boolean;
+  geometry: THREE.BufferGeometry;
   onSelect: (id: string, point?: NormalizedPoint) => void;
   onPlacementHover?: (wallId: string, point: NormalizedPoint) => void;
   onPlacementLeave?: () => void;
@@ -1140,7 +1060,7 @@ function WallSegmentMesh({
 }) {
   const { pw, ph } = usePlanScale();
   const resolvedHeight = safeNum(wall.wallHeight, wallHeight);
-  const thickness = getWallThicknessM(wall, pw);
+  const thickness = getWallThicknessM(wall, pw, ph);
   const paint = findScgPaint(wall.scgPaintCode);
   const wallColor = wall.wallColor ?? paint.hex;
   const wallTexture = useMemo(() => createWallTexture(wall.wallTexture, wallColor), [wall.wallTexture, wallColor]);
@@ -1168,16 +1088,39 @@ function WallSegmentMesh({
   const gaps = computeGapIntervals(wall, wallLengthM, resolvedHeight, doors, windows, pw, ph);
   const solids = computeSolidSegments(wallLengthM, resolvedHeight, gaps);
 
-  const ext = thickness / 2;
-  const renderSolids = solids.map((seg) => ({
-    ...seg,
-    tStart: seg.tStart < 0.001 && extStart ? -ext : seg.tStart,
-    tEnd: seg.tEnd > wallLengthM - 0.001 && extEnd ? wallLengthM + ext : seg.tEnd,
-  }));
+  const getEventPoint = (point: THREE.Vector3): NormalizedPoint => ({
+    x: clamp01((point.x + pw / 2) / pw),
+    y: clamp01((point.z + ph / 2) / ph),
+  });
 
   return (
     <group position={[cx, 0, cz]} rotation={[0, -angle, 0]}>
-      {renderSolids.map((seg, i) => {
+      <mesh geometry={geometry}
+        onPointerMove={(e) => {
+          if (!onPlacementHover && !onTargetHover) return;
+          e.stopPropagation();
+          const point = getEventPoint(e.point);
+          onPlacementHover?.(wall.id, point);
+          onTargetHover?.({ type: "wall", id: wall.id, point });
+        }}
+        onPointerLeave={() => {
+          onPlacementLeave?.();
+          onTargetHover?.(null);
+        }}
+        onClick={(e) => {
+          e.stopPropagation();
+          onSelect(wall.id, getEventPoint(e.point));
+        }}
+      >
+        <meshStandardMaterial
+          color={wallColor}
+          map={wallTexture ?? undefined}
+          roughness={0.72}
+          metalness={0.03}
+        />
+      </mesh>
+
+      {solids.map((seg, i) => {
         const segLen = seg.tEnd - seg.tStart;
         const segH = seg.yEnd - seg.yStart;
         if (segLen < 0.001 || segH < 0.001) return null;
@@ -1185,41 +1128,12 @@ function WallSegmentMesh({
         const localX = seg.tStart + segLen / 2 - wallLengthM / 2;
         const localY = seg.yStart + segH / 2;
 
-        const getEventPoint = (point: THREE.Vector3): NormalizedPoint => ({
-          x: clamp01((point.x + pw / 2) / pw),
-          y: clamp01((point.z + ph / 2) / ph),
-        });
 
         return (
           <group
             key={i}
             position={[localX, localY, 0]}
           >
-            <mesh
-              onPointerMove={(e) => {
-                if (!onPlacementHover && !onTargetHover) return;
-                e.stopPropagation();
-                const point = getEventPoint(e.point);
-                onPlacementHover?.(wall.id, point);
-                onTargetHover?.({ type: "wall", id: wall.id, point });
-              }}
-              onPointerLeave={() => {
-                onPlacementLeave?.();
-                onTargetHover?.(null);
-              }}
-              onClick={(e) => {
-                e.stopPropagation();
-                onSelect(wall.id, getEventPoint(e.point));
-              }}
-            >
-              <boxGeometry args={[segLen, segH, thickness]} />
-              <meshStandardMaterial
-                color={wallColor}
-                map={wallTexture ?? undefined}
-                roughness={0.72}
-                metalness={0.03}
-              />
-            </mesh>
             {wall.wallTexture === "stone-block-panel" &&
               createStoneBlockSpecs(segLen, segH).map((block, blockIndex) => (
                 <mesh
@@ -1276,7 +1190,7 @@ function DoorMesh({
 
   const doorW = projectedWidth > 0.05 ? projectedWidth : Math.max(getWidthM(door.bbox.w, door.widthM, pw), 0.8);
   const doorH = Math.min(wallHeight * 0.9, 2.2);
-  const wallThickness = getWallThicknessM(wall, pw);
+  const wallThickness = getWallThicknessM(wall, pw, ph);
   const frameDepth = wallThickness + 0.08;
   const slabDepth = Math.min(wallThickness + 0.03, 0.24);
   const faceOffsets = [-(slabDepth / 2 + 0.004), slabDepth / 2 + 0.004];
@@ -1544,7 +1458,7 @@ function PlacementPreviewMesh({
       : Math.min(wallHeight * 0.45, 1.2);
   const bottomY = kind === "door" ? 0 : wallHeight * 0.35;
   const color = kind === "door" ? "#f59e0b" : "#06b6d4";
-  const wallThickness = getWallThicknessM(wall);
+  const wallThickness = getWallThicknessM(wall, pw, ph);
   const faceOffsets = [-(wallThickness / 2 + 0.04), wallThickness / 2 + 0.04];
 
   return (
@@ -1635,7 +1549,7 @@ function DeletePreviewMesh({
     const angle = Math.atan2(z2 - z1, x2 - x1);
     const cx = (x1 + x2) / 2;
     const cz = (z1 + z2) / 2;
-    const thickness = getWallThicknessM(wall, pw) + 0.08;
+    const thickness = getWallThicknessM(wall, pw, ph) + 0.08;
     const height = safeNum(wall.wallHeight, wallHeight);
 
     return (
@@ -1669,7 +1583,7 @@ function DeletePreviewMesh({
   const width = Math.max(projectedWidth, isDoor ? 0.75 : 0.9);
   const height = isDoor ? Math.min(wallHeight * 0.9, 2.2) : Math.min(wallHeight * 0.45, 1.2);
   const bottomY = isDoor ? 0 : wallHeight * 0.35;
-  const depth = getWallThicknessM(wall, pw) + 0.16;
+  const depth = getWallThicknessM(wall, pw, ph) + 0.16;
 
   return (
     <group position={[center[0], 0, center[1]]} rotation={[0, -angle, 0]}>
@@ -1702,7 +1616,7 @@ function WallDraftPreviewMesh({
     x2: draft.end.x,
     y2: draft.end.y,
     type: "interior",
-    thickness: 0.16,
+    thickness: DEFAULT_WALL_THICKNESS_M,
     wallHeight,
   };
 
@@ -1716,7 +1630,7 @@ function WallDraftPreviewMesh({
   const angle = Math.atan2(z2 - z1, x2 - x1);
   const cx = (x1 + x2) / 2;
   const cz = (z1 + z2) / 2;
-  const thickness = getWallThicknessM(wall, pw);
+  const thickness = getWallThicknessM(wall, pw, ph);
 
   return (
     <group position={[cx, 0, cz]} rotation={[0, -angle, 0]}>
@@ -1775,6 +1689,7 @@ function WallEditGizmo({
   onMoveDrag,
   onHeightDrag,
   onDragStateChange,
+  onDragCancel,
 }: {
   wall: DetectedWallSegment;
   wallHeight: number;
@@ -1782,6 +1697,7 @@ function WallEditGizmo({
   onMoveDrag: (id: string, center: NormalizedPoint) => void;
   onHeightDrag: (id: string, deltaM: number) => void;
   onDragStateChange: (dragging: boolean) => void;
+  onDragCancel: () => void;
 }) {
   const { pw, ph } = usePlanScale();
   const [dragMode, setDragMode] = useState<"start" | "end" | "move" | "height" | null>(null);
@@ -1795,7 +1711,7 @@ function WallEditGizmo({
   const length = getWallLengthM(wall, pw, ph);
   const height = safeNum(wall.wallHeight, wallHeight);
   const angle = Math.atan2(z2 - z1, x2 - x1);
-  const thickness = getWallThicknessM(wall, pw);
+  const thickness = getWallThicknessM(wall, pw, ph);
   const faceOffset = thickness / 2 + 0.18;
 
   const toNormalized = (point: THREE.Vector3): NormalizedPoint => ({
@@ -1838,6 +1754,11 @@ function WallEditGizmo({
             else onEndpointDrag(wall.id, dragMode, point);
           }}
           onPointerUp={(e) => {
+            finishDrag(e);
+          }}
+          onPointerCancel={(e) => {
+            e.stopPropagation();
+            onDragCancel();
             finishDrag(e);
           }}
         >
@@ -1971,6 +1892,9 @@ function Scene({
   onWallEndpointDrag,
   onWallMoveDrag,
   onWallHeightDrag,
+  onDragStart,
+  onDragEnd,
+  onDragCancel,
 }: {
   rooms: Room[];
   walls: DetectedWallSegment[];
@@ -1991,42 +1915,30 @@ function Scene({
   onWallEndpointDrag: (id: string, endpoint: "start" | "end", point: NormalizedPoint) => void;
   onWallMoveDrag: (id: string, center: NormalizedPoint) => void;
   onWallHeightDrag: (id: string, deltaM: number) => void;
+  onDragStart: () => void;
+  onDragEnd: () => void;
+  onDragCancel: () => void;
 }) {
   const [hoveredId, setHoveredId] = useState<string | null>(null);
   const [wallDragging, setWallDragging] = useState(false);
   const [wallDraft, setWallDraft] = useState<WallDraft>(null);
   const orbitControlsRef = useRef<any>(null);
 
-  const renderWalls = useMemo(() => snapRenderedWallJunctions(walls), [walls]);
-
-  // คำนวณว่า endpoint แต่ละด้านของแต่ละผนังเชื่อมกับผนังอื่นไหม
-  // เพื่อขยาย segment เฉพาะด้านที่ติดกัน (ไม่ขยาย free end)
-  const wallEndpointConnects = useMemo(() => {
-    const thr = 0.020;
-    const distSq = (ax: number, ay: number, bx: number, by: number) =>
-      (ax - bx) ** 2 + (ay - by) ** 2;
-    const ptOnSeg = (px: number, py: number, x1: number, y1: number, x2: number, y2: number) => {
-      const dx = x2 - x1, dy = y2 - y1;
-      const lenSq = dx * dx + dy * dy;
-      if (lenSq === 0) return Math.sqrt(distSq(px, py, x1, y1));
-      const t = Math.max(0, Math.min(1, ((px - x1) * dx + (py - y1) * dy) / lenSq));
-      return Math.sqrt(distSq(px, py, x1 + t * dx, y1 + t * dy));
-    };
-    return renderWalls.map((wall) => {
-      const connectsStart = renderWalls.some(
-        (other) => other.id !== wall.id && ptOnSeg(wall.x1, wall.y1, other.x1, other.y1, other.x2, other.y2) < thr,
-      );
-      const connectsEnd = renderWalls.some(
-        (other) => other.id !== wall.id && ptOnSeg(wall.x2, wall.y2, other.x1, other.y1, other.x2, other.y2) < thr,
-      );
-      return { id: wall.id, connectsStart, connectsEnd };
-    });
-  }, [renderWalls]);
+  const renderWalls = walls;
+  const { pw, ph } = usePlanScale();
 
   const defaultWallHeight =
     rooms.length > 0
       ? Math.max(...rooms.map((r) => safeNum(r.wallHeight, 2.8)), 2.8)
       : 2.8;
+
+  const wallGeometries = useMemo(() => buildWallSolidGeometries(renderWalls.map(wall => {
+    const length = getWallLengthM(wall, pw, ph);
+    const height = safeNum(wall.wallHeight, defaultWallHeight);
+    return { wall, thickness: getWallThicknessM(wall, pw, ph),
+      solids: computeSolidSegments(length, height, computeGapIntervals(wall, length, height, doors, windows, pw, ph)) };
+  }), pw, ph), [renderWalls, doors, windows, defaultWallHeight, pw, ph]);
+  useEffect(() => () => wallGeometries.forEach(geometry => geometry.dispose()), [wallGeometries]);
 
   const handleHover = (id: string | null) => {
     setHoveredId(id);
@@ -2034,11 +1946,11 @@ function Scene({
   };
 
   useEffect(() => {
-    if (buildMode !== "delete" && buildMode !== "select") onHoverTargetChange(null);
+    if (buildMode !== "select") onHoverTargetChange(null);
     if (buildMode !== "wall") setWallDraft(null);
   }, [buildMode, onHoverTargetChange]);
 
-  const canPreviewTarget = buildMode === "delete" || buildMode === "select";
+  const canPreviewTarget = buildMode === "select";
   const isPlacementMode = buildMode === "door" || buildMode === "window";
   const activeTargetPreview =
     buildMode === "select" ? hoverTarget ?? selectedTarget : hoverTarget;
@@ -2067,7 +1979,7 @@ function Scene({
       x2: snappedPoint.x,
       y2: snappedPoint.y,
       type: "interior",
-      thickness: 0.16,
+      thickness: DEFAULT_WALL_THICKNESS_M,
       wallHeight: defaultWallHeight,
     });
     onSelect({ type: "wall", id, point: snappedPoint });
@@ -2116,7 +2028,6 @@ function Scene({
 
       {/* ── Walls — split into sub-segments around door/window openings ── */}
       {renderWalls.map((wall) => {
-        const ec = wallEndpointConnects.find((e) => e.id === wall.id);
         return (
           <WallSegmentMesh
             key={wall.id}
@@ -2124,8 +2035,7 @@ function Scene({
             wallHeight={defaultWallHeight}
             doors={doors}
             windows={windows}
-            extStart={ec?.connectsStart}
-            extEnd={ec?.connectsEnd}
+            geometry={wallGeometries.get(wall.id)!}
             onSelect={(id, point) => {
               if (buildMode !== "wall") onSelect({ type: "wall", id, point });
             }}
@@ -2147,7 +2057,12 @@ function Scene({
           onEndpointDrag={onWallEndpointDrag}
           onMoveDrag={onWallMoveDrag}
           onHeightDrag={onWallHeightDrag}
-          onDragStateChange={setWallDragging}
+          onDragStateChange={(dragging) => {
+            setWallDragging(dragging);
+            if (dragging) onDragStart();
+            else onDragEnd();
+          }}
+          onDragCancel={onDragCancel}
         />
       )}
 
@@ -2192,7 +2107,7 @@ function Scene({
           doors={doors}
           windows={windows}
           wallHeight={defaultWallHeight}
-          color={buildMode === "delete" ? "#ef4444" : "#3b82f6"}
+            color="#3b82f6"
         />
       )}
 
@@ -2250,14 +2165,15 @@ const RightPanel = ({
   onBack,
 }: RightPanelProps) => {
   // Resolve real-world plan dimensions. Fall back to PLAN_SIZE when not calibrated.
-  const pw = planWidth  > 0 ? planWidth  : PLAN_SIZE;
-  const ph = planHeight > 0 ? planHeight : PLAN_SIZE;
+  const planDimensions = resolvePlanDimensions(planWidth, planHeight);
+  const { width: pw, height: ph } = planDimensions;
   const planScale = useMemo(() => ({ pw, ph }), [pw, ph]);
   const [hoveredId, setHoveredId] = useState<string | null>(null);
   const [walkMode, setWalkMode] = useState(false);
   const [viewPreset, setViewPreset] = useState<ViewPreset>("perspective");
   const [buildMode, setBuildMode] = useState<BuildMode>("select");
   const [selection, setSelection] = useState<Selection>(null);
+    const projectActions = useProjectActions();
   const [hoverTarget, setHoverTarget] = useState<Selection>(null);
   const [placementPreview, setPlacementPreview] = useState<PlacementPreview>(null);
   const [showPlanReference, setShowPlanReference] = useState(true);
@@ -2312,10 +2228,9 @@ const RightPanel = ({
 
   const buildOptions: { id: BuildMode; label: string; hint: string }[] = [
     { id: "select", label: "Select", hint: "Hover previews, click selects, click empty space clears" },
-    { id: "wall", label: "Wall", hint: "Click floor start point, move, then click end point" },
-    { id: "door", label: "Door", hint: "Click the exact spot on a wall to place a door" },
-    { id: "window", label: "Window", hint: "Click the exact spot on a wall to place a window" },
-    { id: "delete", label: "Delete", hint: "Click object to remove" },
+    { id: "wall", label: "+ Wall", hint: "Click floor start point, move, then click end point" },
+    { id: "door", label: "+ Door", hint: "Click the exact spot on a wall to place a door" },
+    { id: "window", label: "+ Window", hint: "Click the exact spot on a wall to place a window" },
   ];
 
   const selectedRoomTile = findScgTile(selectedRoom?.tileCode);
@@ -2348,38 +2263,46 @@ const RightPanel = ({
 
   const applyPaintToWall = (wallId: string, code: string) => {
     const paint = findScgPaint(code);
-    onWallUpdate?.(wallId, "scgPaintCode", paint.code);
-    onWallUpdate?.(wallId, "wallColor", paint.hex);
-    onWallUpdate?.(wallId, "wallFinish", paint.finish);
+    projectActions.run({ label: "wall color change", threeOnly: true }, () => {
+      onWallUpdate?.(wallId, "scgPaintCode", paint.code);
+      onWallUpdate?.(wallId, "wallColor", paint.hex);
+      onWallUpdate?.(wallId, "wallFinish", paint.finish);
+    });
   };
 
   const applyPaintToAllWalls = (code: string) => {
     const paint = findScgPaint(code);
-    walls.forEach((wall) => {
-      onWallUpdate?.(wall.id, "scgPaintCode", paint.code);
-      onWallUpdate?.(wall.id, "wallColor", paint.hex);
-      onWallUpdate?.(wall.id, "wallFinish", paint.finish);
+    projectActions.run({ label: "wall color change", threeOnly: true }, () => {
+      walls.forEach((wall) => {
+        onWallUpdate?.(wall.id, "scgPaintCode", paint.code);
+        onWallUpdate?.(wall.id, "wallColor", paint.hex);
+        onWallUpdate?.(wall.id, "wallFinish", paint.finish);
+      });
     });
   };
 
   const applyTileToRoom = (roomId: string, code: string) => {
     const tile = findScgTile(code);
-    onRoomPatch?.(roomId, {
-      tileCode: tile.code,
-      tileName: tile.name,
-      floorColor: tile.baseHex,
-      material: "tile",
+    projectActions.run({ label: "floor tile change", threeOnly: true }, () => {
+      onRoomPatch?.(roomId, {
+        tileCode: tile.code,
+        tileName: tile.name,
+        floorColor: tile.baseHex,
+        material: "tile",
+      });
     });
   };
 
   const applyTileToAllRooms = (code: string) => {
     const tile = findScgTile(code);
-    rooms.forEach((room) => {
-      onRoomPatch?.(room.id, {
-        tileCode: tile.code,
-        tileName: tile.name,
-        floorColor: tile.baseHex,
-        material: "tile",
+    projectActions.run({ label: "floor tile change", threeOnly: true }, () => {
+      rooms.forEach((room) => {
+        onRoomPatch?.(room.id, {
+          tileCode: tile.code,
+          tileName: tile.name,
+          floorColor: tile.baseHex,
+          material: "tile",
+        });
       });
     });
   };
@@ -2393,10 +2316,12 @@ const RightPanel = ({
       doorColor: product.doorHex,
       frameColor: product.frameHex,
     };
-    Object.entries(patch).forEach(([field, value]) => {
-      if (value !== undefined) {
-        onDoorUpdate?.(doorId, field as keyof DetectedDoor, value);
-      }
+    projectActions.run({ label: "door product change", threeOnly: true }, () => {
+      Object.entries(patch).forEach(([field, value]) => {
+        if (value !== undefined) {
+          onDoorUpdate?.(doorId, field as keyof DetectedDoor, value);
+        }
+      });
     });
   };
 
@@ -2409,10 +2334,12 @@ const RightPanel = ({
       frameColor: product.frameHex,
       glassColor: product.glassHex,
     };
-    Object.entries(patch).forEach(([field, value]) => {
-      if (value !== undefined) {
-        onWindowUpdate?.(windowId, field as keyof DetectedWindow, value);
-      }
+    projectActions.run({ label: "window product change", threeOnly: true }, () => {
+      Object.entries(patch).forEach(([field, value]) => {
+        if (value !== undefined) {
+          onWindowUpdate?.(windowId, field as keyof DetectedWindow, value);
+        }
+      });
     });
   };
 
@@ -2453,25 +2380,10 @@ const RightPanel = ({
     setSelection(null);
   };
 
-  const deleteBySelection = (target: Selection) => {
-    if (!target) return;
-    if (target.type === "room") onRoomDelete?.(target.id);
-    if (target.type === "wall") onWallDelete?.(target.id);
-    if (target.type === "door") onDoorDelete?.(target.id);
-    if (target.type === "window") onWindowDelete?.(target.id);
-    setSelection(null);
-  };
-
   const handleSceneSelect = (target: Selection) => {
     if (!target) return;
 
     if (buildMode === "wall") return;
-
-    if (buildMode === "delete") {
-      deleteBySelection(target);
-      setHoverTarget(null);
-      return;
-    }
 
     if ((buildMode === "door" || buildMode === "window") && target.type === "wall") {
       const wall = walls.find((item) => item.id === target.id);
@@ -2493,28 +2405,6 @@ const RightPanel = ({
     setHoverTarget(null);
   };
 
-  const resizeSelectedRoom = (factor: number) => {
-    if (!selectedRoom || !onRoomPatch) return;
-    const polygon = getRoomPolygon(selectedRoom);
-    const center = getRoomCenter(selectedRoom);
-    if (!polygon || !center) return;
-
-    const nextPolygon = polygon.map((point) => ({
-      x: clamp01(center.x + (point.x - center.x) * factor),
-      y: clamp01(center.y + (point.y - center.y) * factor),
-    }));
-    const bbox = boundsFromPolygon(nextPolygon);
-
-    onRoomPatch(selectedRoom.id, {
-      polygon: selectedRoom.wallPolygon ? selectedRoom.polygon : nextPolygon,
-      wallPolygon: selectedRoom.wallPolygon ? nextPolygon : selectedRoom.wallPolygon,
-      bbox,
-      width: bbox.w,
-      height: bbox.h,
-      confidence: "manual",
-    });
-  };
-
   const updateSelectedWallLength = (lengthM: number) => {
     if (!selectedWall || !onWallUpdate) return;
     const dx = selectedWall.x2 - selectedWall.x1;
@@ -2530,10 +2420,12 @@ const RightPanel = ({
     const cy = (selectedWall.y1 + selectedWall.y2) / 2;
     const half = Math.max(0.1, lengthM) / (2 * metricScale);
 
-    onWallUpdate(selectedWall.id, "x1", clamp01(cx - ux * half));
-    onWallUpdate(selectedWall.id, "y1", clamp01(cy - uy * half));
-    onWallUpdate(selectedWall.id, "x2", clamp01(cx + ux * half));
-    onWallUpdate(selectedWall.id, "y2", clamp01(cy + uy * half));
+    projectActions.run({ label: "wall length change" }, () => {
+      onWallUpdate(selectedWall.id, "x1", clamp01(cx - ux * half));
+      onWallUpdate(selectedWall.id, "y1", clamp01(cy - uy * half));
+      onWallUpdate(selectedWall.id, "x2", clamp01(cx + ux * half));
+      onWallUpdate(selectedWall.id, "y2", clamp01(cy + uy * half));
+    });
   };
 
   const dragSelectedWallEndpoint = (
@@ -2607,7 +2499,7 @@ const RightPanel = ({
       windows,
       planWidth: pw,
       planHeight: ph,
-      wallHeight: maxH,
+      wallHeight: rooms.length ? Math.max(...rooms.map(room => safeNum(room.wallHeight, 2.8)), 2.8) : 2.8,
     });
   };
 
@@ -2730,6 +2622,9 @@ const RightPanel = ({
               onWallEndpointDrag={dragSelectedWallEndpoint}
               onWallMoveDrag={moveSelectedWall}
               onWallHeightDrag={resizeSelectedWallHeight}
+              onDragStart={() => projectActions.begin({ label: "wall geometry change" })}
+              onDragEnd={() => projectActions.commit()}
+              onDragCancel={() => projectActions.cancel()}
             />
           </Canvas>
 
@@ -2890,9 +2785,7 @@ const RightPanel = ({
                 onClick={() => setBuildMode(option.id)}
                 className={`rounded-2xl px-3 py-2 text-[11px] font-semibold transition-all ${
                   buildMode === option.id
-                    ? option.id === "delete"
-                      ? "bg-red-500 text-white shadow-lg"
-                      : "bg-blue-600 text-white shadow-lg"
+                    ? "bg-blue-600 text-white shadow-lg"
                     : "text-muted-foreground hover:bg-accent hover:text-foreground"
                 }`}
                 title={option.hint}
@@ -2921,6 +2814,7 @@ const RightPanel = ({
               )}
               <span className="pl-3 text-muted-foreground">{totalArea.toFixed(1)} m²</span>
               <span className="pl-3 text-muted-foreground">H: {maxH.toFixed(1)}m</span>
+              <span className="pl-3 text-amber-400">{planDimensions.measured ? "Measured scale" : "Approximate scale"}</span>
             </div>
             <button
               onClick={() => setWalkMode((prev) => !prev)}
@@ -3069,14 +2963,6 @@ const RightPanel = ({
                     className="mt-1 h-9 w-full rounded-xl border border-border bg-background px-3 text-xs text-foreground"
                   />
                 </label>
-                <div className="grid grid-cols-2 gap-2">
-                  <button onClick={() => resizeSelectedRoom(0.94)} className="rounded-xl border border-border bg-background px-3 py-2 text-[11px] text-foreground hover:bg-accent">
-                    Shrink floor
-                  </button>
-                  <button onClick={() => resizeSelectedRoom(1.06)} className="rounded-xl border border-border bg-background px-3 py-2 text-[11px] text-foreground hover:bg-accent">
-                    Expand floor
-                  </button>
-                </div>
               </div>
             )}
 
@@ -3134,7 +3020,7 @@ const RightPanel = ({
                     type="number"
                     min={0.05}
                     step={0.01}
-                    value={getWallThicknessM(selectedWall).toFixed(2)}
+                    value={getWallThicknessM(selectedWall, pw, ph).toFixed(2)}
                     onChange={(e) => onWallUpdate?.(selectedWall.id, "thickness", parseFloat(e.target.value) || 0.15)}
                     className="mt-1 h-9 w-full rounded-xl border border-border bg-background px-3 text-xs text-foreground"
                   />
@@ -3281,7 +3167,7 @@ const RightPanel = ({
               </div>
             )}
 
-            {selection && (
+            {selection && !selectedRoom && (
               <button
                 onClick={deleteSelection}
                 className="mt-4 inline-flex w-full items-center justify-center gap-2 rounded-2xl border border-red-500/30 bg-red-500/10 px-3 py-2 text-xs font-semibold text-red-400 hover:bg-red-500/15"

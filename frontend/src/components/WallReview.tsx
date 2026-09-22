@@ -9,7 +9,10 @@ import type { Room, DimensionUnit } from "@/types/floorplan";
 import type { DetectedWallSegment, DetectedDoor, DetectedWindow } from "@/types/detection";
 import { UNITS } from "@/types/floorplan";
 import { Button } from "@/components/ui/button";
+import { useProjectActions } from "@/components/ProjectActionContext";
 import { Input } from "@/components/ui/input";
+import { editWallGeometry, endpointPoint, findWallSnap, geometryChanged, projectToWall, screenDistance, SNAP_PX, wallSnapTargets } from "@/lib/wallGeometry";
+import { DEFAULT_WALL_THICKNESS_M, getWallThicknessM, resolvePlanDimensions, uniformWallThicknessM, wallStrokeWidthNormalized } from "@/lib/wallMetrics";
 
 // ─────────────────────────────────────────────────────────────
 // TYPES
@@ -23,6 +26,8 @@ interface WallReviewProps {
     doors?: DetectedDoor[];
     windows?: DetectedWindow[];
     scale: number; 
+    planWidth?: number;
+    planHeight?: number;
     onScaleChange: (s: number) => void;
     onPlanSizeChange?: (pw: number, ph: number) => void;
     onPpmChange?: (ppm: number) => void;  
@@ -31,7 +36,7 @@ interface WallReviewProps {
     onWallUpdate?: (id: string, field: keyof DetectedWallSegment, value: number | string) => void;
     onWallAdd?: (wall: DetectedWallSegment) => void;
     onWallDelete?: (id: string) => void;
-    onWallGeometryCommit?: (wall: DetectedWallSegment) => void;
+    onWallGeometryCommit?: (walls: DetectedWallSegment[]) => void;
     onDoorDelete?: (id: string) => void;
     onWindowDelete?: (id: string) => void;
     canUndo?: boolean;
@@ -59,7 +64,10 @@ interface CalibPoint { x: number; y: number; }
 
 interface EndpointDrag {
     wall: DetectedWallSegment;
-    endpoint: "start" | "end";
+    endpoint?: "start" | "end";
+    baseWalls: DetectedWallSegment[];
+    previewWalls: DetectedWallSegment[];
+    origin: CalibPoint;
     pointerId: number;
     preview: DetectedWallSegment;
     snapTarget: CalibPoint | null;
@@ -100,7 +108,7 @@ const WallReview = ({
     rooms, unit, imageUrl,
     backgroundImageUrl,
     walls = [], doors = [], windows = [],
-    scale, onScaleChange, onPlanSizeChange,
+    scale, planWidth = 0, planHeight = 0, onScaleChange, onPlanSizeChange,
     onPpmChange, onRoomUpdate, onRoomDelete, onWallUpdate, onWallAdd, onWallDelete, onWallGeometryCommit, onDoorDelete, onWindowDelete, canUndo = false, canRedo = false, onUndo, onRedo, onGenerate,
     wallHeightMeter = 2.8, onWallHeightChange,
 }: WallReviewProps) => {
@@ -124,11 +132,17 @@ const WallReview = ({
 
     // Global wall height
     const [localWallH, setLocalWallH] = useState(() => wallHeightMeter);
-    const [localWallThickness, setLocalWallThickness] = useState(0.15);
+    const [localWallThickness, setLocalWallThickness] = useState(DEFAULT_WALL_THICKNESS_M);
     const [wallDefaultsEditing, setWallDefaultsEditing] = useState(false);
     const [endpointDrag, setEndpointDrag] = useState<EndpointDrag | null>(null);
     const endpointDragRef = useRef<EndpointDrag | null>(null);
     const suppressEndpointClickRef = useRef(false);
+    useEffect(() => {
+        if (endpointDragRef.current && endpointDragRef.current.baseWalls !== walls) {
+            endpointDragRef.current = null;
+            setEndpointDrag(null);
+        }
+    }, [walls]);
 
     // Calibration — restore "applied" state when returning from 3D view
     const [calibPhase,  setCalibPhase]  = useState<CalibPhase>(() => scale > 0 ? "applied" : "idle");
@@ -160,6 +174,7 @@ const WallReview = ({
     const fittedImageRef = useRef<string | null>(null);
     const isAtFitRef = useRef(true);
     const [isPanning, setIsPanning] = useState(false);
+    const projectActions = useProjectActions();
     const currentUnit = UNITS.find((u) => u.value === unit) ?? UNITS[0];
 
     useEffect(() => {
@@ -171,7 +186,8 @@ const WallReview = ({
     }, []);
 
     // ── scale ใช้งานได้จริงเมื่อ calibrate แล้วเท่านั้น ──────
-    const calibrated = calibPhase === "applied" && scale > 0;
+    const planDimensions = resolvePlanDimensions(planWidth, planHeight);
+    const calibrated = scale > 0;
 
     // The base plane is fitted to the workspace. Zoom and pan are applied later as
     // a shared visual transform, so they never alter plan coordinates.
@@ -555,11 +571,13 @@ const WallReview = ({
     };
     const applyWallDefaults = () => {
         const height = Math.max(0.5, Math.min(20, localWallH || 2.8));
-        const thickness = Math.max(0.01, localWallThickness || 0.15);
+        const thickness = Math.max(0.01, localWallThickness || DEFAULT_WALL_THICKNESS_M);
         setLocalWallH(height);
         setLocalWallThickness(thickness);
-        onWallHeightChange?.(height);
-        walls.forEach(wall => onWallUpdate?.(wall.id, "thickness", thickness));
+        projectActions.run({ label: "all wall thickness change" }, () => {
+            onWallHeightChange?.(height);
+            walls.forEach(wall => onWallUpdate?.(wall.id, "thickness", thickness));
+        });
         setWallDefaultsEditing(false);
     };
 
@@ -573,10 +591,10 @@ const WallReview = ({
         if (field === "wallHeight") return +(room.wallHeight ?? wallHeightMeter).toFixed(2);
         const bbox = roomBBox(room);
         if (calibrated && bbox) {
-            const px = field === "width"
-                ? bbox.w * imgSize.w * scale
-                : bbox.h * imgSize.h * scale;
-            return +px.toFixed(2);
+            const metres = field === "width"
+                ? bbox.w * planDimensions.width
+                : bbox.h * planDimensions.height;
+            return +metres.toFixed(2);
         }
         // ก่อน calibrate — แสดง normalized เป็น unit ที่เลือก (fallback)
         return +((field === "width" ? room.width : room.height) / currentUnit.toMeter).toFixed(2);
@@ -601,27 +619,33 @@ const WallReview = ({
         const dx = (w.x2 - w.x1) * imgSize.w;
         const dy = (w.y2 - w.y1) * imgSize.h;
         const px = Math.sqrt(dx * dx + dy * dy);
-        if (calibrated) return px * scale;
+        if (calibrated) return Math.hypot((w.x2 - w.x1) * planDimensions.width, (w.y2 - w.y1) * planDimensions.height);
         // ก่อน calibrate — คืน pixel distance หารด้วย 40 เป็น approximation
         return px / 40;
     };
     const setWallLength = (wall: DetectedWallSegment, metres: number) => {
-        if (!onWallUpdate || !calibrated || metres <= 0) return;
+        if (!onWallGeometryCommit || !calibrated || !Number.isFinite(metres) || metres <= 0) return;
         const dx = (wall.x2 - wall.x1) * imgSize.w;
         const dy = (wall.y2 - wall.y1) * imgSize.h;
         const currentPx = Math.hypot(dx, dy);
         if (!currentPx) return;
-        const ratio = (metres / scale) / currentPx;
-        onWallUpdate(wall.id, "x2", wall.x1 + (wall.x2 - wall.x1) * ratio);
-        onWallUpdate(wall.id, "y2", wall.y1 + (wall.y2 - wall.y1) * ratio);
+        const currentLength = Math.hypot(
+            (wall.x2 - wall.x1) * planDimensions.width,
+            (wall.y2 - wall.y1) * planDimensions.height,
+        );
+        if (!currentLength) return;
+        const ratio = metres / currentLength;
+        const next = editWallGeometry(walls, { ...wall, x2: wall.x1 + (wall.x2 - wall.x1) * ratio, y2: wall.y1 + (wall.y2 - wall.y1) * ratio }, "end");
+        if (next && next.some((item, index) => geometryChanged(walls[index], item))) onWallGeometryCommit(next);
     };
 
-    const getWallThickness = (w: DetectedWallSegment): number | null =>
-        typeof w.thickness === "number" ? w.thickness : null;
+    const getWallThickness = (w: DetectedWallSegment): number =>
+        getWallThicknessM(w, planDimensions.width, planDimensions.height);
     const getWallHeight = (w: DetectedWallSegment): number | null =>
         typeof w.wallHeight === "number" ? w.wallHeight : wallHeightMeter;
     const getWallThicknessLabel = (w: DetectedWallSegment) =>
-        `${((getWallThickness(w) ?? 0.15) * 100).toFixed(0)}cm`;
+        `${(getWallThickness(w) * 100).toFixed(0)}cm`;
+    const allWallThickness = uniformWallThicknessM(walls, planDimensions.width, planDimensions.height);
 
     const startWallEdit = (wallId: string, field: WallEditState["field"], val?: number | null) =>
         setWallEditState({ wallId, field, value: val == null ? "" : String(val) });
@@ -677,19 +701,6 @@ const WallReview = ({
         window.addEventListener("keydown", onKeyDown);
         return () => window.removeEventListener("keydown", onKeyDown);
     }, [selectedWallId, onWallDelete]);
-    useEffect(() => {
-        const onKeyDown = (event: KeyboardEvent) => {
-            if (!(event.ctrlKey || event.metaKey) || event.key.toLowerCase() !== "z") return;
-            const target = event.target as HTMLElement | null;
-            if (target && ["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName)) return;
-            const action = event.shiftKey ? onRedo : onUndo;
-            if (!action) return;
-            event.preventDefault();
-            action();
-        };
-        window.addEventListener("keydown", onKeyDown);
-        return () => window.removeEventListener("keydown", onKeyDown);
-    }, [onRedo, onUndo]);
     const selectedRoom = rooms.find(r => r.id === selectedId);
     const selectedIdx  = rooms.findIndex(r => r.id === selectedId);
     const palette      = selectedIdx >= 0 ? ROOM_PALETTE[selectedIdx % ROOM_PALETTE.length] : ROOM_PALETTE[0];
@@ -726,12 +737,12 @@ const WallReview = ({
                 ? room.wallPolygon
                 : null;
         if (!calibrated || !polygon) return null;
-        return polygonArea(polygon, imgSize.w * scale, imgSize.h * scale);
+        return polygonArea(polygon, planDimensions.width, planDimensions.height);
     };
 
     // FIX: คืน null เมื่อยังไม่ calibrate เพื่อให้ panel ขวา block ตัวเลขเมตร
     const bboxToM = (normDim: number, axis: "w" | "h"): number | null =>
-        calibrated ? normDim * (axis === "w" ? imgSize.w : imgSize.h) * scale : null;
+        calibrated ? normDim * (axis === "w" ? planDimensions.width : planDimensions.height) : null;
 
     // ── ค่า label บน SVG overlay ────────────────────────────
     // ถ้ายังไม่ calibrate แสดง "N/A" แทนตัวเลขเมตร
@@ -749,31 +760,23 @@ const WallReview = ({
         return points.map((p, idx) => `${idx === 0 ? "M" : "L"} ${p.x} ${p.y}`).join(" ") + " Z";
     };
 
-    const endpointSnapTargets = (wallId: string) => walls
-        .filter(wall => wall.id !== wallId)
-        .flatMap(wall => [
-            { key: `${wall.id}:start`, x: wall.x1, y: wall.y1 },
-            { key: `${wall.id}:end`, x: wall.x2, y: wall.y2 },
-        ]);
-    const endpointDistancePx = (a: CalibPoint, b: CalibPoint, rect: DOMRect) =>
-        Math.hypot((a.x - b.x) * rect.width, (a.y - b.y) * rect.height);
-    const startEndpointDrag = (event: React.PointerEvent<SVGSVGElement>, wallId: string, endpoint: "start" | "end") => {
-        if (event.button !== 0 || endpointDragRef.current) return;
-        // Resolve the current persisted geometry for every new gesture. Endpoint
-        // identity is the coordinate pair, never its left/right or top/bottom order.
+    const endpointDistancePx = screenDistance;
+    const startEndpointDrag = (event: React.PointerEvent<SVGSVGElement>, wallId: string, endpoint?: "start" | "end") => {
+        if (event.button !== 0 || endpointDragRef.current || !onWallGeometryCommit) return;
         const persistedWall = walls.find(wall => wall.id === wallId);
         if (!persistedWall) return;
         const wall = { ...persistedWall };
-        event.preventDefault();
-        event.stopPropagation();
         const svg = event.currentTarget;
         const rect = svg.getBoundingClientRect();
-        const origin = endpoint === "start" ? { x: wall.x1, y: wall.y1 } : { x: wall.x2, y: wall.y2 };
-        // Existing connections must be left before they can become snap targets again.
-        const blockedTargets = new Set(endpointSnapTargets(wall.id)
-            .filter(target => endpointDistancePx(origin, target, rect) < 12)
-            .map(target => target.key));
-        const drag = { wall, endpoint, pointerId: event.pointerId, preview: wall, snapTarget: null, blockedTargets };
+        if (!rect.width || !rect.height) return;
+        event.preventDefault();
+        event.stopPropagation();
+        const origin = { x: (event.clientX - rect.left) / rect.width, y: (event.clientY - rect.top) / rect.height };
+        const point = endpoint ? endpointPoint(wall, endpoint) : origin;
+        const blockedTargets = new Set(wallSnapTargets(point, walls, new Set([wall.id]), rect)
+            .filter(target => screenDistance(point, target, rect) < SNAP_PX).map(target => target.key));
+        const drag: EndpointDrag = { wall, endpoint, baseWalls: walls, previewWalls: walls, origin,
+            pointerId: event.pointerId, preview: wall, snapTarget: null, blockedTargets };
         endpointDragRef.current = drag;
         setEndpointDrag(drag);
         suppressEndpointClickRef.current = true;
@@ -791,9 +794,18 @@ const WallReview = ({
         const point = { x: (event.clientX - rect.left) / rect.width, y: (event.clientY - rect.top) / rect.height };
         const startDistance = endpointDistancePx(point, { x: wall.x1, y: wall.y1 }, rect);
         const endDistance = endpointDistancePx(point, { x: wall.x2, y: wall.y2 }, rect);
-        if (Math.min(startDistance, endDistance) > ENDPOINT_HIT_RADIUS_PX) return;
-        // Resolve overlapping hit areas by proximity rather than SVG paint order.
-        startEndpointDrag(event, wall.id, startDistance <= endDistance ? "start" : "end");
+        if (Math.min(startDistance, endDistance) <= ENDPOINT_HIT_RADIUS_PX) {
+            startEndpointDrag(event, wall.id, startDistance <= endDistance ? "start" : "end");
+            return;
+        }
+        // A selected wall body can be translated; background gestures still pan.
+        // Respect existing door/window hit priority outside endpoint handles.
+        const inOpening = (bbox: { x: number; y: number; w: number; h: number }) =>
+            point.x >= bbox.x - 0.012 && point.x <= bbox.x + bbox.w + 0.012 && point.y >= bbox.y - 0.012 && point.y <= bbox.y + bbox.h + 0.012;
+        if ((layers.has("doors") && doors.some(item => inOpening(item.bbox))) || (layers.has("windows") && windows.some(item => inOpening(item.bbox)))) return;
+        const closest = walls.map(item => ({ wall: item, distance: screenDistance(point, projectToWall(point, item, rect), rect) }))
+            .filter(item => item.distance <= 12).sort((a, b) => a.distance - b.distance || a.wall.id.localeCompare(b.wall.id))[0];
+        if (closest?.wall.id === wall.id) startEndpointDrag(event, wall.id);
     };
     const moveEndpointDrag = (event: React.PointerEvent<SVGSVGElement>) => {
         const drag = endpointDragRef.current;
@@ -805,22 +817,23 @@ const WallReview = ({
         const rect = event.currentTarget.getBoundingClientRect();
         if (!rect.width || !rect.height) return;
         const raw = { x: (event.clientX - rect.left) / rect.width, y: (event.clientY - rect.top) / rect.height };
+        if (!drag.endpoint && screenDistance(raw, drag.origin, rect) < 4 && drag.previewWalls === drag.baseWalls) return;
+        let updated = drag.endpoint
+            ? { ...drag.wall, ...(drag.endpoint === "start" ? { x1: raw.x, y1: raw.y } : { x2: raw.x, y2: raw.y }) }
+            : { ...drag.wall, x1: drag.wall.x1 + raw.x - drag.origin.x, y1: drag.wall.y1 + raw.y - drag.origin.y,
+                x2: drag.wall.x2 + raw.x - drag.origin.x, y2: drag.wall.y2 + raw.y - drag.origin.y };
+        const unsnapped = editWallGeometry(drag.baseWalls, updated, drag.endpoint);
+        if (!unsnapped) return;
         let snapTarget: CalibPoint | null = null;
-        let closestDistance = 12;
-        for (const target of endpointSnapTargets(drag.wall.id)) {
-            const distance = endpointDistancePx(raw, target, rect);
-            if (drag.blockedTargets.has(target.key)) {
-                if (distance >= 12) drag.blockedTargets.delete(target.key);
-                continue;
-            }
-            if (distance < closestDistance) {
-                snapTarget = { x: target.x, y: target.y };
-                closestDistance = distance;
-            }
+        if (drag.endpoint) {
+            const excluded = new Set([drag.wall.id]);
+            snapTarget = findWallSnap(raw, wallSnapTargets(raw, drag.baseWalls, excluded, rect), rect, drag.blockedTargets);
+            if (snapTarget) updated = { ...drag.wall, ...(drag.endpoint === "start" ? { x1: snapTarget.x, y1: snapTarget.y } : { x2: snapTarget.x, y2: snapTarget.y }) };
         }
-        const point = snapTarget ?? raw;
-        const preview = { ...drag.wall, ...(drag.endpoint === "start" ? { x1: point.x, y1: point.y } : { x2: point.x, y2: point.y }) };
-        endpointDragRef.current = { ...drag, preview, snapTarget };
+        const previewWalls = snapTarget ? editWallGeometry(drag.baseWalls, updated, drag.endpoint) : unsnapped;
+        if (!previewWalls) return;
+        const preview = previewWalls.find(wall => wall.id === drag.wall.id)!;
+        endpointDragRef.current = { ...drag, preview, previewWalls, snapTarget };
         setEndpointDrag(endpointDragRef.current);
     };
     const finishEndpointDrag = (event: React.PointerEvent<SVGSVGElement>) => {
@@ -831,7 +844,7 @@ const WallReview = ({
         endpointDragRef.current = null;
         if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
         if (event.type !== "pointercancel" && event.type !== "lostpointercapture") {
-            onWallGeometryCommit?.(drag.preview);
+            if (drag.previewWalls.some((wall, index) => geometryChanged(drag.baseWalls[index], wall))) onWallGeometryCommit?.(drag.previewWalls);
         }
         setEndpointDrag(null);
         selectWall(drag.wall.id);
@@ -1168,7 +1181,7 @@ const WallReview = ({
                                 {/* SVG overlays */}
                                 <svg className="absolute inset-0 z-10" width="100%" height="100%"
                                     viewBox="0 0 100 100" preserveAspectRatio="none"
-                                    style={{ pointerEvents: inPointerMode ? "none" : "all" }}
+                                    style={{ pointerEvents: inPointerMode ? "none" : "all", touchAction: "none" }}
                                     onPointerDownCapture={onEndpointPointerDown}
                                     onPointerMove={moveEndpointDrag}
                                     onPointerUp={finishEndpointDrag}
@@ -1181,10 +1194,9 @@ const WallReview = ({
                                     {/* WALLS */}
                                     {layers.has("walls") && walls.map(wall => {
                                         const isSel = selectedWallId === wall.id;
-                                        const displayWall = endpointDrag?.wall.id === wall.id ? endpointDrag.preview : wall;
-                                        const sw = wall.thicknessRatio != null
-                                            ? Math.max(0.002, Math.min(wall.thicknessRatio * 0.35, 0.012))
-                                            : wall.type === "exterior" ? 0.006 : 0.003;                                        const isManual = wall.id.startsWith("manual-wall-");
+                                        const displayWall = endpointDrag?.previewWalls.find(item => item.id === wall.id) ?? wall;
+                                        const sw = Math.max(0.002, wallStrokeWidthNormalized(wall, planDimensions.width, planDimensions.height));
+                                        const isManual = wall.id.startsWith("manual-wall-");
                                         const col = isSel ? "#fbbf24" : isManual ? "#38bdf8" : wall.type === "exterior" ? "#1a1a1a" : "#2563eb";
                                         const mx = (displayWall.x1 + displayWall.x2) / 2, my = (displayWall.y1 + displayWall.y2) / 2;
 
@@ -1199,7 +1211,7 @@ const WallReview = ({
                                         const ey2 = isVert  ? displayWall.y2 + half : displayWall.y2;
 
                                         return (
-                                            <g key={wall.id} style={{ cursor: "pointer", pointerEvents: "all" }}>
+                                            <g key={wall.id} style={{ cursor: isSel ? "move" : "pointer", pointerEvents: "all" }}>
                                                 <line x1={displayWall.x1} y1={displayWall.y1} x2={displayWall.x2} y2={displayWall.y2} stroke="transparent" strokeWidth={sw + 0.025} pointerEvents="stroke" />
                                                 {isSel && <line x1={ex1} y1={ey1} x2={ex2} y2={ey2} stroke="#fbbf24" strokeWidth={sw + 0.008} strokeLinecap="butt" opacity={0.45} />}
                                                 <line x1={ex1} y1={ey1} x2={ex2} y2={ey2} stroke={col} strokeWidth={isSel ? sw + 0.002 : sw} strokeLinecap="butt" opacity={isSel ? 1 : 0.85} />
@@ -1268,7 +1280,7 @@ const WallReview = ({
                                             }).filter((side): side is { x: number; y: number; label: string } => side !== null)
                                             : [] as { x: number; y: number; label: string }[];
                                         return (
-                                            <g key={room.id} style={{ cursor: "pointer", pointerEvents: "all" }}>                                               <polygon points={points} fill={isSel ? pal.fill : `${cs.stroke}18`} />
+                                            <g key={room.id} style={{ cursor: isSel ? "move" : "pointer", pointerEvents: "all" }}>                                               <polygon points={points} fill={isSel ? pal.fill : `${cs.stroke}18`} />
                                                 <polygon points={points} fill="none" stroke={isSel ? pal.stroke : cs.stroke}
                                                     strokeWidth={isSel ? 0.004 : 0.002} strokeDasharray={isSel ? "none" : "0.01 0.005"} opacity={isSel ? 1 : 0.6} />
                                                 {isSel && <circle cx={cx} cy={cy} r={0.008} fill={pal.stroke} opacity={0.85} />}
@@ -1293,7 +1305,7 @@ const WallReview = ({
 
                                         const isSel = selectionType === "door" && selectedDoorId === door.id;
                                         return (
-                                            <g key={door.id} style={{ cursor: "pointer", pointerEvents: "all" }}>                                               <rect x={dx - 0.012} y={dy - 0.012} width={dw + 0.024} height={dh + 0.024} fill="transparent" />
+                                            <g key={door.id} style={{ cursor: isSel ? "move" : "pointer", pointerEvents: "all" }}>                                               <rect x={dx - 0.012} y={dy - 0.012} width={dw + 0.024} height={dh + 0.024} fill="transparent" />
                                                 {isSel && <rect x={dx - 0.008} y={dy - 0.008} width={dw + 0.016} height={dh + 0.016} fill="none" stroke="#fef3c7" strokeWidth={0.004} rx={0.003} />}
                                                 <path 
                                                     d={doorPath} 
@@ -1315,7 +1327,7 @@ const WallReview = ({
                                         // FIX: ใช้ windowWidthM helper ที่ block ก่อน calibrate
                                         const wM = windowWidthM(win);
                                         return (
-                                            <g key={win.id} style={{ cursor: "pointer", pointerEvents: "all" }}>                                                {isSel && <rect x={wx - 0.008} y={wy - 0.008} width={ww + 0.016} height={wh + 0.016} fill="none" stroke="#cffafe" strokeWidth={0.004} rx={0.003} />}
+                                            <g key={win.id} style={{ cursor: isSel ? "move" : "pointer", pointerEvents: "all" }}>                                                {isSel && <rect x={wx - 0.008} y={wy - 0.008} width={ww + 0.016} height={wh + 0.016} fill="none" stroke="#cffafe" strokeWidth={0.004} rx={0.003} />}
                                                 <rect x={wx} y={wy} width={ww} height={wh} fill="rgba(6,182,212,0.12)" stroke="#06b6d4" strokeWidth={0.003} rx={0.002} opacity={0.85} />
                                                 <line x1={wx + ww * 0.33} y1={wy} x2={wx + ww * 0.33} y2={wy + wh} stroke="#06b6d4" strokeWidth={0.002} opacity={0.6} />
                                                 <line x1={wx + ww * 0.67} y1={wy} x2={wx + ww * 0.67} y2={wy + wh} stroke="#06b6d4" strokeWidth={0.002} opacity={0.6} />
@@ -1400,12 +1412,12 @@ const WallReview = ({
                                     {layers.has("walls") && !inPointerMode && (() => {
                                         const wall = walls.find(item => item.id === selectedWallId);
                                         if (!wall) return null;
-                                        const displayWall = endpointDrag?.wall.id === wall.id ? endpointDrag.preview : wall;
+                                        const displayWall = endpointDrag?.previewWalls.find(item => item.id === wall.id) ?? wall;
                                         return <g>
                                             {(["start", "end"] as const).map(endpoint => {
                                                 const point = endpoint === "start" ? { x: displayWall.x1, y: displayWall.y1 } : { x: displayWall.x2, y: displayWall.y2 };
                                                 return <g key={endpoint} style={{ pointerEvents: "all" }}>
-                                                    <ellipse data-wall-endpoint={endpoint} cx={point.x} cy={point.y} rx={ENDPOINT_HIT_RADIUS_PX / (imgSize.w * viewZoom)} ry={ENDPOINT_HIT_RADIUS_PX / (imgSize.h * viewZoom)} fill="rgba(0,0,0,0.001)" style={{ cursor: "grab", pointerEvents: "all", touchAction: "none" }} />
+                                                    <ellipse aria-label={`${endpoint === "start" ? "Start" : "End"} endpoint; drag to edit wall`} data-wall-endpoint={endpoint} cx={point.x} cy={point.y} rx={ENDPOINT_HIT_RADIUS_PX / (imgSize.w * viewZoom)} ry={ENDPOINT_HIT_RADIUS_PX / (imgSize.h * viewZoom)} fill="rgba(0,0,0,0.001)" style={{ cursor: "grab", pointerEvents: "all", touchAction: "none" }} />
                                                     <circle cx={point.x} cy={point.y} r={0.011} fill="#fff" stroke="#f59e0b" strokeWidth={0.004} style={{ pointerEvents: "none" }} />
                                                 </g>;
                                             })}
@@ -1483,9 +1495,9 @@ const WallReview = ({
                                     <div className="flex justify-between text-xs text-muted-foreground"><span>Area</span><span className="font-mono text-foreground">{getRoomAreaM2(selectedRoom)?.toFixed(2) ?? "—"} m²</span></div>
                                     <button onClick={() => { onRoomDelete?.(selectedRoom.id); clearSelection(); }} className="w-full rounded-md border border-red-500/30 bg-red-500/10 py-2 text-xs font-medium text-red-500">Delete Room</button>
                                 </>}
-                                {selectionType === "wall" && selectedWallId && (() => { const persistedWall = walls.find(w => w.id === selectedWallId); const wall = endpointDrag?.wall.id === selectedWallId ? endpointDrag.preview : persistedWall; const index = walls.findIndex(w => w.id === selectedWallId); if (!wall) return null; return <>
+                                {selectionType === "wall" && selectedWallId && (() => { const persistedWall = walls.find(w => w.id === selectedWallId); const wall = endpointDrag?.previewWalls.find(item => item.id === selectedWallId) ?? persistedWall; const index = walls.findIndex(w => w.id === selectedWallId); if (!wall) return null; return <>
                                     <div className="flex items-center justify-between"><span className="text-sm font-semibold text-foreground">Wall {index + 1}</span><button onClick={dismissInspector} className="p-1 text-muted-foreground hover:text-foreground"><X className="w-4 h-4" /></button></div>
-                                    <label className="block text-xs text-muted-foreground">Length <div className="mt-1 flex items-center rounded-md border border-input bg-background"><input key={`${wall.id}:${getWallLength(wall)}`} type="number" defaultValue={calibrated ? getWallLength(wall).toFixed(2) : ""} disabled={!calibrated} onBlur={e => setWallLength(wall, parseFloat(e.target.value))} className="h-8 min-w-0 flex-1 bg-transparent px-2 text-sm font-mono outline-none disabled:opacity-50" /><span className="px-2 text-xs">m</span></div></label>
+                                    <label className="block text-xs text-muted-foreground">Length <div className="mt-1 flex items-center rounded-md border border-input bg-background"><input key={`${wall.id}:${getWallLength(wall)}`} type="number" defaultValue={calibrated ? getWallLength(wall).toFixed(2) : ""} disabled={!calibrated} onBlur={e => { if (e.target.value !== getWallLength(wall).toFixed(2)) setWallLength(wall, parseFloat(e.target.value)); }} className="h-8 min-w-0 flex-1 bg-transparent px-2 text-sm font-mono outline-none disabled:opacity-50" /><span className="px-2 text-xs">m</span></div></label>
                                     <button onClick={() => setAdvancedOpen(open => !open)} className="flex w-full items-center justify-between rounded-md bg-muted/50 px-2 py-2 text-xs font-medium">Advanced <ChevronDown className={`w-3.5 h-3.5 ${advancedOpen ? "rotate-180" : ""}`} /></button>
                                     {advancedOpen && <div className="grid grid-cols-2 gap-2">{(["wallHeight", "thickness"] as const).map(field => <div key={field}><div className="mb-1 text-[10px] text-muted-foreground">{field === "wallHeight" ? "Wall Height" : "Wall Thickness"}</div><Input type="number" defaultValue={field === "wallHeight" ? getWallHeight(wall) ?? wallHeightMeter : (getWallThickness(wall) ?? 0.15)} onBlur={e => onWallUpdate?.(wall.id, field, parseFloat(e.target.value) || (field === "wallHeight" ? wallHeightMeter : 0.15))} className="h-8 text-xs" /></div>)}</div>}
                                     <button onClick={deleteSelectedWall} className="w-full rounded-md border border-red-500/30 bg-red-500/10 py-2 text-xs font-medium text-red-500">Delete Wall</button>
@@ -1552,11 +1564,11 @@ const WallReview = ({
                                 return <div key={category}>
                                     <button onClick={() => setElementCategory(open ? null : category)} className="flex w-full items-center justify-between rounded-md px-2 py-2 text-xs hover:bg-accent"><span className={`flex items-center gap-2 ${color}`}><Icon className="w-3.5 h-3.5" /><span className="text-foreground">{label}</span></span><span className="flex items-center gap-2 text-muted-foreground">{items.length}<ChevronDown className={`w-3.5 h-3.5 transition-transform ${open ? "rotate-180" : "-rotate-90"}`} /></span></button>
                                     {open && category === "walls" && <div className="mx-1 mb-2 rounded-md bg-muted/40 p-2 text-xs">
-                                        {!wallDefaultsEditing ? <div className="flex items-center justify-between gap-2"><span className="text-muted-foreground">Default&nbsp; H {localWallH.toFixed(2)} m &nbsp;·&nbsp; T {localWallThickness.toFixed(2)} m</span><button onClick={() => setWallDefaultsEditing(true)} className="rounded border border-primary/30 px-2 py-1 text-primary hover:bg-primary/10">Edit</button></div> : <div className="space-y-2"><div className="grid grid-cols-2 gap-2"><label>Height<Input type="number" min="0.5" step="0.1" value={localWallH} onChange={e => setLocalWallH(parseFloat(e.target.value) || 2.8)} className="mt-1 h-8 text-xs" /></label><label>Thickness<Input type="number" min="0.01" step="0.01" value={localWallThickness} onChange={e => setLocalWallThickness(parseFloat(e.target.value) || 0.15)} className="mt-1 h-8 text-xs" /></label></div><p className="text-[10px] text-muted-foreground">Applied to all current walls and new walls.</p><div className="grid grid-cols-2 gap-2"><button onClick={() => { setLocalWallH(wallHeightMeter); setLocalWallThickness(0.15); setWallDefaultsEditing(false); }} className="rounded border border-border bg-card py-1.5">Cancel</button><button onClick={applyWallDefaults} className="rounded bg-primary py-1.5 text-primary-foreground">Apply</button></div></div>}
+                                        {!wallDefaultsEditing ? <div className="flex items-center justify-between gap-2"><span className="text-muted-foreground">Default&nbsp; H {localWallH.toFixed(2)} m &nbsp;·&nbsp; T {allWallThickness == null ? "—" : `${allWallThickness.toFixed(2)} m`}</span><button onClick={() => setWallDefaultsEditing(true)} className="rounded border border-primary/30 px-2 py-1 text-primary hover:bg-primary/10">Edit</button></div> : <div className="space-y-2"><div className="grid grid-cols-2 gap-2"><label>Height<Input type="number" min="0.5" step="0.1" value={localWallH} onChange={e => setLocalWallH(parseFloat(e.target.value) || 2.8)} className="mt-1 h-8 text-xs" /></label><label>Thickness<Input type="number" min="0.01" step="0.01" value={localWallThickness} onChange={e => setLocalWallThickness(parseFloat(e.target.value) || DEFAULT_WALL_THICKNESS_M)} className="mt-1 h-8 text-xs" /></label></div><p className="text-[10px] text-muted-foreground">Applied to all current walls and new walls.</p><div className="grid grid-cols-2 gap-2"><button onClick={() => { setLocalWallH(wallHeightMeter); setLocalWallThickness(allWallThickness ?? DEFAULT_WALL_THICKNESS_M); setWallDefaultsEditing(false); }} className="rounded border border-border bg-card py-1.5">Cancel</button><button onClick={applyWallDefaults} className="rounded bg-primary py-1.5 text-primary-foreground">Apply</button></div></div>}
                                     </div>}
                                     {open && <div className="space-y-0.5 px-2 pb-1">{items.length === 0 ? <div className="px-2 py-1 text-[11px] text-muted-foreground">No {label.toLowerCase()}</div> : items.map((item, index) => {
                                         const selected = category === "walls" ? selectedWallId === item.id : category === "doors" ? selectedDoorId === item.id : selectedWindowId === item.id;
-                                        const length = category === "walls" ? getWallLength(item as DetectedWallSegment) : category === "doors" ? doorWidthM(item as DetectedDoor) : windowWidthM(item as DetectedWindow);
+                                        const length = category === "walls" ? getWallLength(endpointDrag?.previewWalls.find(wall => wall.id === item.id) ?? item as DetectedWallSegment) : category === "doors" ? doorWidthM(item as DetectedDoor) : windowWidthM(item as DetectedWindow);
                                         const select = category === "walls" ? selectWall : category === "doors" ? selectDoor : selectWindow;
                                         return <button key={item.id} onClick={() => select(item.id)} className={`flex w-full items-center justify-between rounded px-2 py-1.5 text-left text-[11px] ${selected ? "bg-accent text-foreground" : "text-muted-foreground hover:bg-accent/60"}`}><span>{label.slice(0, -1)} {index + 1}</span><span className="font-mono">{length == null ? "—" : `${length.toFixed(2)} m`}</span></button>;
                                     })}</div>}
@@ -1581,7 +1593,7 @@ const WallReview = ({
                                             </div>
                                             <div className="mt-1 text-[10px] font-mono text-muted-foreground flex gap-3">
                                                 {/* FIX: แสดง — ก่อน calibrate */}
-                                                <span>L: {calibrated ? `${getWallLength(wall).toFixed(1)}m` : "N/A"}</span>
+                                                <span>L: {calibrated ? `${getWallLength(endpointDrag?.previewWalls.find(item => item.id === wall.id) ?? wall).toFixed(1)}m` : "N/A"}</span>
                                                 <span>T: {getWallThicknessLabel(wall)}</span>
                                                 <span>H: {getWallHeight(wall) != null ? `${getWallHeight(wall)!.toFixed(1)}m` : "N/A"}</span>
                                             </div>
