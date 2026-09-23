@@ -651,13 +651,12 @@ const WallReview = ({
     // ── Wall editing ─────────────────────────────────────────
     // FIX: คำนวณความยาวกำแพงจาก normalized coords × imgSize × scale (เมตรจริง)
     // เดิมใช้ PLAN_SIZE = 20 ซึ่งเป็นตัวเลขสุ่ม ไม่ใช่เมตร
-    const getWallLength = (w: DetectedWallSegment) => {
-        const dx = (w.x2 - w.x1) * imgSize.w;
-        const dy = (w.y2 - w.y1) * imgSize.h;
-        const px = Math.sqrt(dx * dx + dy * dy);
-        if (calibrated) return Math.hypot((w.x2 - w.x1) * planDimensions.width, (w.y2 - w.y1) * planDimensions.height);
-        // ก่อน calibrate — คืน pixel distance หารด้วย 40 เป็น approximation
-        return px / 40;
+    const getWallLength = (w: DetectedWallSegment): number | null => {
+        if (!calibrated) return null;
+        return Math.hypot(
+            (w.x2 - w.x1) * planDimensions.width,
+            (w.y2 - w.y1) * planDimensions.height,
+        );
     };
     const setWallLength = (wall: DetectedWallSegment, metres: number) => {
         if (!onWallGeometryCommit || !calibrated || !Number.isFinite(metres) || metres <= 0) return;
@@ -665,10 +664,7 @@ const WallReview = ({
         const dy = (wall.y2 - wall.y1) * imgSize.h;
         const currentPx = Math.hypot(dx, dy);
         if (!currentPx) return;
-        const currentLength = Math.hypot(
-            (wall.x2 - wall.x1) * planDimensions.width,
-            (wall.y2 - wall.y1) * planDimensions.height,
-        );
+        const currentLength = getWallLength(wall);
         if (!currentLength) return;
         const ratio = metres / currentLength;
         const next = editWallGeometry(walls, { ...wall, x2: wall.x1 + (wall.x2 - wall.x1) * ratio, y2: wall.y1 + (wall.y2 - wall.y1) * ratio }, "end");
@@ -786,21 +782,43 @@ const WallReview = ({
         return polygonArea(polygon, planDimensions.width, planDimensions.height);
     };
 
-    // FIX: คืน null เมื่อยังไม่ calibrate เพื่อให้ panel ขวา block ตัวเลขเมตร
+    // Preserve the room list's shared scale conversion. Before calibration it
+    // deliberately returns null, so no approximate metre values are rendered.
     const bboxToM = (normDim: number, axis: "w" | "h"): number | null =>
         calibrated ? normDim * (axis === "w" ? planDimensions.width : planDimensions.height) : null;
 
+    // FIX: คืน null เมื่อยังไม่ calibrate เพื่อให้ panel ขวา block ตัวเลขเมตร
     // ── ค่า label บน SVG overlay ────────────────────────────
     // ถ้ายังไม่ calibrate แสดง "N/A" แทนตัวเลขเมตร
-    const dimLabel = (normDim: number, axis: "w" | "h"): string => {
-        const m = bboxToM(normDim, axis);
-        return m !== null ? `${m.toFixed(2)}m` : "N/A";
-    };
+    // Opening dimensions are only meaningful when the plan is calibrated and
+    // the opening is explicitly attached to a wall. Project its persisted bbox
+    // onto that wall's physical axis so Review uses the same span as the 3D cutout.
+    const openingWidthM = (opening: DetectedDoor | DetectedWindow): number | null => {
+        if (!calibrated || !opening.wallId || !opening.bbox) return null;
+        const wall = walls.find(item => item.id === opening.wallId);
+        if (!wall) return null;
 
-    // ── ค่า door/window width เป็นเมตร ──────────────────────
-    // widthPx เป็น pixel จาก bbox ของ YOLO → ต้องคูณ scale เพื่อให้เป็นเมตร
-    const doorWidthM   = (d: DetectedDoor):   number | null => calibrated && d.widthPx ? d.widthPx * scale : null;
-    const windowWidthM = (w: DetectedWindow): number | null => calibrated && w.widthPx ? w.widthPx * scale : (w.widthM ?? null);
+        const start = { x: wall.x1 * planDimensions.width, y: wall.y1 * planDimensions.height };
+        const end = { x: wall.x2 * planDimensions.width, y: wall.y2 * planDimensions.height };
+        const axis = { x: end.x - start.x, y: end.y - start.y };
+        const length = Math.hypot(axis.x, axis.y);
+        if (length <= Number.EPSILON) return null;
+
+        const unit = { x: axis.x / length, y: axis.y / length };
+        const bbox = opening.bbox;
+        const corners = [
+            { x: bbox.x, y: bbox.y },
+            { x: bbox.x + bbox.w, y: bbox.y },
+            { x: bbox.x + bbox.w, y: bbox.y + bbox.h },
+            { x: bbox.x, y: bbox.y + bbox.h },
+        ];
+        const projections = corners.map(point =>
+            (point.x * planDimensions.width - start.x) * unit.x
+            + (point.y * planDimensions.height - start.y) * unit.y,
+        );
+        const width = Math.min(length, Math.max(...projections)) - Math.max(0, Math.min(...projections));
+        return width > Number.EPSILON ? width : null;
+    };
     const polygonPath = (points?: { x: number; y: number }[] | null): string | null => {
         if (!points || points.length < 3) return null;
         return points.map((p, idx) => `${idx === 0 ? "M" : "L"} ${p.x} ${p.y}`).join(" ") + " Z";
@@ -1001,8 +1019,11 @@ const WallReview = ({
         const wall = walls.find(item => item.id === openingDraft.wallId);
         if (!wall) return null;
         const bbox = createOpeningBboxFromWallPoints(wall, openingDraft.start, mousePos, planDimensions.width, planDimensions.height);
-        return bbox ? { bbox, kind: openingDraft.kind } : null;
+        return bbox ? { bbox, kind: openingDraft.kind, wallId: wall.id } : null;
     })();
+    const openingPreviewWidthM = openingPreview
+        ? openingWidthM({ id: "opening-preview", bbox: openingPreview.bbox, wallId: openingPreview.wallId })
+        : null;
 
     const updateOpeningPreview = (event: React.PointerEvent<SVGSVGElement>) => {
         moveEndpointDrag(event);
@@ -1327,11 +1348,11 @@ const WallReview = ({
                                                         <rect x={mx - 0.075} y={my - 0.045} width={0.15} height={0.032} rx={0.005} fill="rgba(251,191,36,0.95)" />
                                                         <text x={mx} y={my - 0.018} textAnchor="middle" fontSize={0.02} fontWeight="700" fill="transparent" fontFamily="monospace">
                                                             {calibrated
-                                                                ? `${getWallLength(displayWall).toFixed(2)}m · ${getWallThicknessLabel(wall)}`
+                                                                ? `${getWallLength(displayWall)?.toFixed(2) ?? "—"}m · ${getWallThicknessLabel(wall)}`
                                                                 : `— · ${getWallThicknessLabel(wall)}`}
                                                         </text>
                                                         <text x={mx} y={my - 0.018} textAnchor="middle" fontSize={0.02} fontWeight="700" fill="#000" fontFamily="monospace">
-                                                            {calibrated ? `${getWallLength(displayWall).toFixed(2)}m` : "—"}
+                                                            {calibrated ? `${getWallLength(displayWall)?.toFixed(2) ?? "—"}m` : "—"}
                                                         </text>
                                                     </g>
                                                 )}
@@ -1365,6 +1386,18 @@ const WallReview = ({
                                                 fill={openingPreview.kind === "door" ? "rgba(245,158,11,0.20)" : "rgba(6,182,212,0.18)"}
                                                 stroke={openingPreview.kind === "door" ? "#f59e0b" : "#06b6d4"}
                                                 strokeWidth={0.004} strokeDasharray={openingPreview.kind === "door" ? undefined : "0.010 0.006"} />
+                                            {openingPreviewWidthM !== null && <text
+                                                data-opening-preview-width
+                                                x={openingPreview.bbox.x + openingPreview.bbox.w / 2}
+                                                y={openingPreview.bbox.y - 0.012}
+                                                textAnchor="middle"
+                                                fontSize={0.013}
+                                                fontWeight="700"
+                                                fill={openingPreview.kind === "door" ? "#f59e0b" : "#06b6d4"}
+                                                fontFamily="monospace"
+                                            >
+                                                {`${openingPreviewWidthM.toFixed(2)}m`}
+                                            </text>}
                                         </g>
                                     )}
 
@@ -1383,7 +1416,6 @@ const WallReview = ({
                                         const cy = room.center?.y ?? (bbox.y + bbox.h / 2);
                                         const { x: rx0, y: ry0, w: rw, h: rh } = bbox;
                                         const badgeW = Math.max(0, Math.min(rw - 0.008, (room.name ?? "").length * 0.009 + 0.015));
-                                        // FIX: ใช้ dimLabel ที่ block ก่อน calibrate
                                         const areaLabel = getRoomAreaM2(room);
                                         const sideLabels = isSel && polygon && polygon.length >= 3 && calibrated
                                             ? polygon.map((point, sideIndex) => {
@@ -1414,8 +1446,6 @@ const WallReview = ({
                                     {layers.has("doors") && doors.map(door => {
                                         const { x: dx, y: dy, w: dw, h: dh0 } = door.bbox;
                                         const dh = Math.max(dh0, 0.012); 
-                                        const cx = dx + dw / 2, cy = dy + dh / 2;
-                                        const wM = doorWidthM(door);
                                         const doorPath = polygonPath(door.polygon);
 
                                         const isSel = selectionType === "door" && selectedDoorId === door.id;
@@ -1440,16 +1470,11 @@ const WallReview = ({
                                         const { x: wx, y: wy, w: ww, h: wh0 } = win.bbox;
                                         const wh = Math.max(wh0, 0.008);
                                         const isSel = selectionType === "window" && selectedWindowId === win.id;
-                                        // FIX: ใช้ windowWidthM helper ที่ block ก่อน calibrate
-                                        const wM = windowWidthM(win);
                                         return (
                                             <g key={win.id} style={{ cursor: isSel ? "move" : "pointer", pointerEvents: "all" }}>                                                {isSel && <rect x={wx - 0.008} y={wy - 0.008} width={ww + 0.016} height={wh + 0.016} fill="none" stroke="#cffafe" strokeWidth={0.004} rx={0.003} />}
                                                 <rect x={wx} y={wy} width={ww} height={wh} fill="rgba(6,182,212,0.12)" stroke="#06b6d4" strokeWidth={0.003} rx={0.002} opacity={0.85} />
                                                 <line x1={wx + ww * 0.33} y1={wy} x2={wx + ww * 0.33} y2={wy + wh} stroke="#06b6d4" strokeWidth={0.002} opacity={0.6} />
                                                 <line x1={wx + ww * 0.67} y1={wy} x2={wx + ww * 0.67} y2={wy + wh} stroke="#06b6d4" strokeWidth={0.002} opacity={0.6} />
-                                                <text x={wx + ww / 2} y={wy + wh + 0.018} textAnchor="middle" fontSize={0.013} fill="#06b6d4" fontFamily="monospace" opacity={0.9}>
-                                                    W {wM !== null ? `${wM.toFixed(2)}m` : "N/A"}
-                                                </text>
                                             </g>
                                         );
                                     })}
@@ -1618,9 +1643,15 @@ const WallReview = ({
                                     <div className="flex justify-between text-xs text-muted-foreground"><span>Area</span><span className="font-mono text-foreground">{getRoomAreaM2(selectedRoom)?.toFixed(2) ?? "—"} m²</span></div>
                                     <button onClick={() => { onRoomDelete?.(selectedRoom.id); clearSelection(); }} className="w-full rounded-md border border-red-500/30 bg-red-500/10 py-2 text-xs font-medium text-red-500">Delete Room</button>
                                 </>}
-                                {selectionType === "wall" && selectedWallId && (() => { const persistedWall = walls.find(w => w.id === selectedWallId); const wall = endpointDrag?.previewWalls.find(item => item.id === selectedWallId) ?? persistedWall; const index = walls.findIndex(w => w.id === selectedWallId); if (!wall) return null; return <>
+                                {selectionType === "wall" && selectedWallId && (() => { const persistedWall = walls.find(w => w.id === selectedWallId); const wall = endpointDrag?.previewWalls.find(item => item.id === selectedWallId) ?? persistedWall; const index = walls.findIndex(w => w.id === selectedWallId); if (!wall) return null; const wallLength = getWallLength(wall); return <>
                                     <div className="flex items-center justify-between"><span className="text-sm font-semibold text-foreground">Wall {index + 1}</span><button onClick={dismissInspector} className="p-1 text-muted-foreground hover:text-foreground"><X className="w-4 h-4" /></button></div>
-                                    <label className="block text-xs text-muted-foreground">Length <div className="mt-1 flex items-center rounded-md border border-input bg-background"><input key={`${wall.id}:${getWallLength(wall)}`} type="number" defaultValue={calibrated ? getWallLength(wall).toFixed(2) : ""} disabled={!calibrated} onBlur={e => { if (e.target.value !== getWallLength(wall).toFixed(2)) setWallLength(wall, parseFloat(e.target.value)); }} className="h-8 min-w-0 flex-1 bg-transparent px-2 text-sm font-mono outline-none disabled:opacity-50" /><span className="px-2 text-xs">m</span></div></label>
+                                    <label className="block text-xs text-muted-foreground">Length
+                                        {wallLength === null ? (
+                                            <div className="mt-1 rounded-md border border-input bg-muted/50 px-2 py-2 text-xs text-muted-foreground">Calibrate scale to view dimensions</div>
+                                        ) : (
+                                            <div className="mt-1 flex items-center rounded-md border border-input bg-background"><input key={`${wall.id}:${wallLength}`} type="number" defaultValue={wallLength.toFixed(2)} onBlur={e => { if (e.target.value !== wallLength.toFixed(2)) setWallLength(wall, parseFloat(e.target.value)); }} className="h-8 min-w-0 flex-1 bg-transparent px-2 text-sm font-mono outline-none" /><span className="px-2 text-xs">m</span></div>
+                                        )}
+                                    </label>
                                     <button onClick={() => setAdvancedOpen(open => !open)} className="flex w-full items-center justify-between rounded-md bg-muted/50 px-2 py-2 text-xs font-medium">Advanced <ChevronDown className={`w-3.5 h-3.5 ${advancedOpen ? "rotate-180" : ""}`} /></button>
                                     {advancedOpen && <div className="grid grid-cols-2 gap-2">{(["wallHeight", "thickness"] as const).map(field => <div key={field}><div className="mb-1 text-[10px] text-muted-foreground">{field === "wallHeight" ? "Wall Height" : "Wall Thickness"}</div><Input type="number" defaultValue={field === "wallHeight" ? getWallHeight(wall) ?? wallHeightMeter : (getWallThickness(wall) ?? 0.15)} onBlur={e => onWallUpdate?.(wall.id, field, parseFloat(e.target.value) || (field === "wallHeight" ? wallHeightMeter : 0.15))} className="h-8 text-xs" /></div>)}</div>}
                                     <button onClick={deleteSelectedWall} className="w-full rounded-md border border-red-500/30 bg-red-500/10 py-2 text-xs font-medium text-red-500">Delete Wall</button>
@@ -1628,6 +1659,7 @@ const WallReview = ({
                                 {(selectionType === "door" || selectionType === "window") && (() => {
                                     const opening = selectionType === "door" ? doors.find(item => item.id === selectedDoorId) : windows.find(item => item.id === selectedWindowId);
                                     if (!opening) return null;
+                                    const widthM = openingWidthM(opening);
                                     const updateBbox = (field: keyof typeof opening.bbox, value: string) => {
                                         const numeric = Number(value);
                                         if (!Number.isFinite(numeric) || ((field === "w" || field === "h") && numeric <= 0)) return;
@@ -1638,7 +1670,21 @@ const WallReview = ({
                                     return <>
                                         <div className="flex items-center justify-between"><span className="text-sm font-semibold text-foreground">{selectionType === "door" ? "Door" : "Window"}</span><button onClick={dismissInspector} className="p-1 text-muted-foreground hover:text-foreground"><X className="w-4 h-4" /></button></div>
                                         <p className="text-[11px] text-muted-foreground">Attached wall: {opening.wallId ?? "unresolved detection"}</p>
-                                        <div className="grid grid-cols-2 gap-2">{(["x", "y", "w", "h"] as const).map(field => <label key={field} className="text-[10px] text-muted-foreground">Plan {field.toUpperCase()}<Input type="number" min={field === "w" || field === "h" ? Number.EPSILON : undefined} step="any" defaultValue={opening.bbox[field]} onBlur={event => updateBbox(field, event.target.value)} className="mt-1 h-8 text-xs font-mono" /></label>)}</div>
+                                        <div className="rounded-md bg-muted/50 px-2 py-2 text-xs">
+                                            <span className="text-muted-foreground">Width</span>
+                                            <span className="ml-2 font-mono text-foreground">
+                                                {!calibrated
+                                                    ? "Calibrate scale to view dimensions"
+                                                    : widthM !== null
+                                                        ? `${widthM.toFixed(2)} m`
+                                                        : "Unavailable for unresolved detection"}
+                                            </span>
+                                        </div>
+                                        <button onClick={() => setAdvancedOpen(open => !open)} className="flex w-full items-center justify-between rounded-md bg-muted/50 px-2 py-2 text-xs font-medium">Advanced Geometry <ChevronDown className={`w-3.5 h-3.5 ${advancedOpen ? "rotate-180" : ""}`} /></button>
+                                        {advancedOpen && <div className="space-y-2 rounded-md border border-border/70 p-2">
+                                            <p className="text-[10px] leading-4 text-muted-foreground">Normalized plan coordinates (0–1). These values are not meters or physical element height.</p>
+                                            <div className="grid grid-cols-2 gap-2">{(["x", "y", "w", "h"] as const).map(field => <label key={field} className="text-[10px] text-muted-foreground">Normalized Plan {field === "w" ? "Width" : field === "h" ? "Height" : field.toUpperCase()}<Input type="number" min={field === "w" || field === "h" ? Number.EPSILON : undefined} step="any" defaultValue={opening.bbox[field]} onBlur={event => updateBbox(field, event.target.value)} className="mt-1 h-8 text-xs font-mono" /></label>)}</div>
+                                        </div>}
                                         <button onClick={() => { if (selectionType === "door") onDoorDelete?.(opening.id); else onWindowDelete?.(opening.id); clearSelection(); }} className="w-full rounded-md border border-red-500/30 bg-red-500/10 py-2 text-xs font-medium text-red-500">Delete {selectionType === "door" ? "Door" : "Window"}</button>
                                     </>;
                                 })()}
@@ -1707,9 +1753,9 @@ const WallReview = ({
                                     </div>}
                                     {open && <div className="space-y-0.5 px-2 pb-1">{items.length === 0 ? <div className="px-2 py-1 text-[11px] text-muted-foreground">No {label.toLowerCase()}</div> : items.map((item, index) => {
                                         const selected = category === "walls" ? selectedWallId === item.id : category === "doors" ? selectedDoorId === item.id : selectedWindowId === item.id;
-                                        const length = category === "walls" ? getWallLength(endpointDrag?.previewWalls.find(wall => wall.id === item.id) ?? item as DetectedWallSegment) : category === "doors" ? doorWidthM(item as DetectedDoor) : windowWidthM(item as DetectedWindow);
+                                        const length = category === "walls" ? getWallLength(endpointDrag?.previewWalls.find(wall => wall.id === item.id) ?? item as DetectedWallSegment) : null;
                                         const select = category === "walls" ? selectWall : category === "doors" ? selectDoor : selectWindow;
-                                        return <button key={item.id} onClick={() => select(item.id)} className={`flex w-full items-center justify-between rounded px-2 py-1.5 text-left text-[11px] ${selected ? "bg-accent text-foreground" : "text-muted-foreground hover:bg-accent/60"}`}><span>{label.slice(0, -1)} {index + 1}</span><span className="font-mono">{length == null ? "—" : `${length.toFixed(2)} m`}</span></button>;
+                                        return <button key={item.id} onClick={() => select(item.id)} className={`flex w-full items-center justify-between rounded px-2 py-1.5 text-left text-[11px] ${selected ? "bg-accent text-foreground" : "text-muted-foreground hover:bg-accent/60"}`}><span>{label.slice(0, -1)} {index + 1}</span>{category === "walls" && <span className="font-mono">{length == null ? "—" : `${length.toFixed(2)} m`}</span>}</button>;
                                     })}</div>}
                                 </div>;
                             })}
@@ -1732,7 +1778,7 @@ const WallReview = ({
                                             </div>
                                             <div className="mt-1 text-[10px] font-mono text-muted-foreground flex gap-3">
                                                 {/* FIX: แสดง — ก่อน calibrate */}
-                                                <span>L: {calibrated ? `${getWallLength(endpointDrag?.previewWalls.find(item => item.id === wall.id) ?? wall).toFixed(1)}m` : "N/A"}</span>
+                                                <span>L: {calibrated ? `${getWallLength(endpointDrag?.previewWalls.find(item => item.id === wall.id) ?? wall)?.toFixed(1) ?? "—"}m` : "—"}</span>
                                                 <span>T: {getWallThicknessLabel(wall)}</span>
                                                 <span>H: {getWallHeight(wall) != null ? `${getWallHeight(wall)!.toFixed(1)}m` : "N/A"}</span>
                                             </div>
@@ -1748,7 +1794,7 @@ const WallReview = ({
                                     <DoorOpen className="w-3 h-3 text-amber-400" /> Doors ({doors.length})
                                 </p>
                                 {doors.map(d => {
-                                    const wM = doorWidthM(d);
+                                    const wM = openingWidthM(d);
                                     const isSel = selectionType === "door" && selectedDoorId === d.id;
                                     return (
                                         <button key={d.id} data-plan-selection={`door:${d.id}`} onClick={() => selectDoor(d.id)}
@@ -1766,7 +1812,7 @@ const WallReview = ({
                                     <AppWindow className="w-3 h-3 text-cyan-400" /> Windows ({windows.length})
                                 </p>
                                 {windows.map(w => {
-                                    const wM = windowWidthM(w);
+                                    const wM = openingWidthM(w);
                                     const isSel = selectionType === "window" && selectedWindowId === w.id;
                                     return (
                                         <button key={w.id} data-plan-selection={`window:${w.id}`} onClick={() => selectWindow(w.id)}
@@ -1859,7 +1905,7 @@ const WallReview = ({
                                 <div className="text-[10px] text-muted-foreground font-mono flex justify-between">
                                     <span>Length</span>
                                     <span className={calibrated ? "text-foreground font-medium" : "text-muted-foreground/40"}>
-                                        {calibrated ? `${getWallLength(sw).toFixed(2)} m` : "N/A"}
+                                        {getWallLength(sw) !== null ? `${getWallLength(sw)!.toFixed(2)} m` : "—"}
                                     </span>
                                 </div>
                                 <button

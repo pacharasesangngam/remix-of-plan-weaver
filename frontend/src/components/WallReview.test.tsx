@@ -1,7 +1,7 @@
 import { cleanup, fireEvent, render } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import WallReview from "./WallReview";
-import type { DetectedWallSegment } from "@/types/detection";
+import type { DetectedDoor, DetectedWallSegment, DetectedWindow } from "@/types/detection";
 import { useState } from "react";
 
 const wall: DetectedWallSegment = { id: "wall-a", x1: 0.2, y1: 0.3, x2: 0.6, y2: 0.3, type: "interior" };
@@ -225,6 +225,7 @@ describe("opening placement", () => {
 
         expect(onDoorAdd).not.toHaveBeenCalled();
         expect(svg.querySelector('[data-opening-preview="door"]')).not.toBeNull();
+        expect(svg.querySelector('[data-opening-preview-width]')).toHaveTextContent("1.50m");
         expect(svg.style.cursor).toBe("cell");
         expect(pointerOverlay.style.cursor).toBe("cell");
         fireEvent.pointerMove(pointerOverlay, { clientX: 450, clientY: 300 });
@@ -275,5 +276,127 @@ describe("opening placement", () => {
         expect(pointerOverlay.style.cursor).toBe("cell");
         fireEvent.click(pointerOverlay, { clientX: 500, clientY: 150 });
         expect(onDoorAdd).toHaveBeenCalledOnce();
+    });
+});
+
+describe("opening dimensions", () => {
+    const attachedDoor: DetectedDoor = {
+        id: "door-a",
+        wallId: "wall-a",
+        bbox: { x: 0.3, y: 0.2925, w: 0.1, h: 0.015 },
+    };
+    const attachedWindow: DetectedWindow = {
+        id: "window-a",
+        wallId: "wall-a",
+        bbox: { x: 0.3, y: 0.2925, w: 0.1, h: 0.015 },
+    };
+    const reviewRoom = {
+        id: "room-a",
+        name: "Room A",
+        width: 0.2,
+        height: 0.2,
+        confidence: "manual" as const,
+        bbox: { x: 0.1, y: 0.1, w: 0.2, h: 0.2 },
+    };
+
+    const renderOpeningInspector = (scale: number, planWidth: number) => render(
+        <WallReview
+            rooms={[reviewRoom]}
+            walls={[wall]}
+            doors={[attachedDoor]}
+            unit="m"
+            imageUrl="plan.png"
+            scale={scale}
+            planWidth={planWidth}
+            planHeight={10}
+            onScaleChange={vi.fn()}
+            onRoomUpdate={vi.fn()}
+            onGenerate={vi.fn()}
+        />,
+    );
+
+    const selectDoorFromList = (view: ReturnType<typeof render>) => {
+        fireEvent.click(view.getByText("Other Elements"));
+        fireEvent.click(view.getByRole("button", { name: /Doors\s*1/ }));
+        fireEvent.click(view.getByText("Door 1"));
+    };
+
+    it("keeps opening dimensions off the floorplan and requests calibration in the inspector", () => {
+        const view = renderOpeningInspector(0, 0);
+        const svg = view.container.querySelector('svg[viewBox="0 0 100 100"]') as SVGSVGElement;
+        expect(svg.textContent).not.toContain("W ");
+
+        selectDoorFromList(view);
+        expect(view.getByText("Calibrate scale to view dimensions")).toBeInTheDocument();
+        expect(view.queryByText("Normalized Plan Width")).not.toBeInTheDocument();
+    });
+
+    it("derives attached opening width from shared geometry and recalculates it with plan scale", () => {
+        const view = renderOpeningInspector(1, 10);
+        selectDoorFromList(view);
+        expect(view.getByText("1.00 m")).toBeInTheDocument();
+
+        view.rerender(
+            <WallReview
+                rooms={[reviewRoom]}
+                walls={[wall]}
+                doors={[attachedDoor]}
+                unit="m"
+                imageUrl="plan.png"
+                scale={1}
+                planWidth={20}
+                planHeight={20}
+                onScaleChange={vi.fn()}
+                onRoomUpdate={vi.fn()}
+                onGenerate={vi.fn()}
+            />,
+        );
+        expect(view.getByText("2.00 m")).toBeInTheDocument();
+
+        fireEvent.click(view.getByText("Advanced Geometry"));
+        expect(view.getByText("Normalized Plan Width")).toBeInTheDocument();
+        expect(view.getByText(/not meters or physical element height/i)).toBeInTheDocument();
+    });
+
+    it("uses the same calibrated wall span for a selected window", () => {
+        const view = render(
+            <WallReview rooms={[reviewRoom]} walls={[wall]} windows={[attachedWindow]} unit="m" imageUrl="plan.png"
+                scale={1} planWidth={10} planHeight={10} onScaleChange={vi.fn()} onRoomUpdate={vi.fn()} onGenerate={vi.fn()} />,
+        );
+        const svg = view.container.querySelector('svg[viewBox="0 0 100 100"]') as SVGSVGElement;
+        expect(svg.textContent).not.toContain("W 1.00m");
+        fireEvent.click(view.getByText("Other Elements"));
+        fireEvent.click(view.getByRole("button", { name: /Windows\s*1/ }));
+        fireEvent.click(view.getByText("Window 1"));
+        expect(view.getByText("1.00 m")).toBeInTheDocument();
+    });
+
+    it("shows no estimated wall length before calibration and refreshes the list and inspector after recalibration", () => {
+        const view = renderOpeningInspector(0, 0);
+        fireEvent.click(view.getByText("Other Elements"));
+        fireEvent.click(view.getByRole("button", { name: /Walls\s*1/ }));
+        const wallRow = view.getByText("Wall 1").closest("button");
+        expect(wallRow).toHaveTextContent("—");
+        fireEvent.click(wallRow!);
+        expect(view.getByText("Calibrate scale to view dimensions")).toBeInTheDocument();
+
+        view.rerender(
+            <WallReview
+                rooms={[reviewRoom]}
+                walls={[wall]}
+                doors={[attachedDoor]}
+                unit="m"
+                imageUrl="plan.png"
+                scale={1}
+                planWidth={20}
+                planHeight={20}
+                onScaleChange={vi.fn()}
+                onRoomUpdate={vi.fn()}
+                onGenerate={vi.fn()}
+            />,
+        );
+        expect(view.getByDisplayValue("8.00")).toBeInTheDocument();
+        const refreshedWallRow = view.getAllByText("Wall 1").find(element => element.closest("button"));
+        expect(refreshedWallRow?.closest("button")).toHaveTextContent("8.00 m");
     });
 });
