@@ -15,6 +15,8 @@ export interface DetectedDoor {
   doorColor?: string;
   frameColor?: string;
   useBlenderModel?: string;
+  /** The wall selected by the user. AI detections may leave this unresolved. */
+  wallId?: string;
 }
 
 export interface DetectedWindow {
@@ -29,6 +31,8 @@ export interface DetectedWindow {
   frameColor?: string;
   glassColor?: string;
   useBlenderModel?: string;
+  /** The wall selected by the user. AI detections may leave this unresolved. */
+  wallId?: string;
 }
 
 export interface DetectedWallSegment {

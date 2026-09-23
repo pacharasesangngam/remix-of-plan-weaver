@@ -136,6 +136,7 @@ const computeGapIntervals = (
 
   for (const door of doors) {
     if (!door.bbox) continue;
+    if (door.wallId && door.wallId !== wall.id) continue;
     const proj = projectOpeningEdgesOntoWall(door.bbox, wall, wallLengthM, pw, ph);
     if (!proj) continue;
     raw.push({ ...proj, yStart: 0, height: Math.min(wallHeightM * 0.9, 2.2) });
@@ -143,6 +144,7 @@ const computeGapIntervals = (
 
   for (const win of windows) {
     if (!win.bbox) continue;
+    if (win.wallId && win.wallId !== wall.id) continue;
     const proj = projectOpeningEdgesOntoWall(win.bbox, wall, wallLengthM, pw, ph);
     if (!proj) continue;
     raw.push({ ...proj, yStart: wallHeightM * 0.35, height: Math.min(wallHeightM * 0.45, 1.2) });
@@ -411,7 +413,9 @@ const addDoorMeshes = (
 
   doors.forEach((door, index) => {
     if (!door.bbox) return;
-    const wall = findBestWall(door.bbox, walls, pw, ph);
+    const wall = door.wallId
+      ? walls.find((item) => item.id === door.wallId)
+      : findBestWall(door.bbox, walls, pw, ph);
     if (!wall) return;
     const transform = getOpeningTransform(door.bbox, wall, pw, ph);
     if (!transform) return;
@@ -471,7 +475,9 @@ const addWindowMeshes = (
 
   windows.forEach((win, index) => {
     if (!win.bbox) return;
-    const wall = findBestWall(win.bbox, walls, pw, ph);
+    const wall = win.wallId
+      ? walls.find((item) => item.id === win.wallId)
+      : findBestWall(win.bbox, walls, pw, ph);
     if (!wall) return;
     const transform = getOpeningTransform(win.bbox, wall, pw, ph);
     if (!transform) return;

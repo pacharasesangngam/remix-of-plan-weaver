@@ -1,5 +1,5 @@
 import { useState, useCallback, useEffect, useReducer, useMemo } from "react";
-import { ChevronLeft, Loader2, Moon, Sun, RotateCcw, RotateCw } from "lucide-react";
+import { ChevronLeft, Loader2, Moon, Sun } from "lucide-react";
 import { useTheme } from "next-themes";
 import Sidebar from "@/components/Sidebar";
 import RightPanel from "@/components/RightPanel";
@@ -176,13 +176,13 @@ const Index = () => {
   const handleWallAdd = useCallback((item: DetectedWallSegment) => {
     editProject(p => ({ ...p, walls: [...p.walls, item] }), { label: "wall creation" });
   }, [editProject]);
-  const handleDoorUpdate = useCallback((id: string, field: keyof DetectedDoor, value: number | string) => {
+  const handleDoorUpdate = useCallback((id: string, field: keyof DetectedDoor, value: DetectedDoor[keyof DetectedDoor]) => {
     editProject(p => ({ ...p, doors: p.doors.map(item => item.id === id ? { ...item, [field]: value } : item) }), fieldInfo("door", field));
   }, [editProject]);
   const handleDoorAdd = useCallback((item: DetectedDoor) => {
     editProject(p => ({ ...p, doors: [...p.doors, item] }), { label: "door creation" });
   }, [editProject]);
-  const handleWindowUpdate = useCallback((id: string, field: keyof DetectedWindow, value: number | string) => {
+  const handleWindowUpdate = useCallback((id: string, field: keyof DetectedWindow, value: DetectedWindow[keyof DetectedWindow]) => {
     editProject(p => ({ ...p, windows: p.windows.map(item => item.id === id ? { ...item, [field]: value } : item) }), fieldInfo("window", field));
   }, [editProject]);
   const handleWindowAdd = useCallback((item: DetectedWindow) => {
@@ -263,10 +263,6 @@ const Index = () => {
               <h1 className="text-sm font-semibold text-foreground tracking-tight font-sans">Sketch to Spec</h1>
             </div>
             <div className="flex items-center gap-2">
-              {generated && <div className="flex items-center rounded-xl border border-border bg-card">
-                <button onClick={() => undoEditorAction("3d")} disabled={!editorHistory.past.length && !editorHistory.pending} title="Undo (Ctrl/Cmd + Z)" aria-label="Undo" className="p-2 text-muted-foreground hover:bg-accent disabled:opacity-35"><RotateCcw className="h-4 w-4" /></button>
-                <button onClick={() => redoEditorAction("3d")} disabled={!editorHistory.future.length || !!editorHistory.pending} title="Redo (Ctrl/Cmd + Shift + Z)" aria-label="Redo" className="border-l border-border p-2 text-muted-foreground hover:bg-accent disabled:opacity-35"><RotateCw className="h-4 w-4" /></button>
-              </div>}
             <button
               onClick={() => setTheme(theme === "dark" ? "light" : "dark")}
               className="inline-flex items-center gap-2 rounded-xl border border-border bg-card px-3 py-2 text-xs text-muted-foreground transition-colors hover:text-foreground"
@@ -343,7 +339,11 @@ const Index = () => {
               onWallAdd={handleWallAdd}
               onWallDelete={handleWallDelete}
               onDoorDelete={handleDoorDelete}
+              onDoorAdd={handleDoorAdd}
+              onDoorUpdate={handleDoorUpdate}
               onWindowDelete={handleWindowDelete}
+              onWindowAdd={handleWindowAdd}
+              onWindowUpdate={handleWindowUpdate}
               canUndo={editorHistory.past.length > 0 || !!editorHistory.pending}
               canRedo={editorHistory.future.length > 0 && !editorHistory.pending}
               onUndo={() => undoEditorAction("review")}
@@ -382,6 +382,10 @@ const Index = () => {
               onWindowUpdate={handleWindowUpdate}
               onWindowDelete={handleWindowDelete}
               onBack={() => { dispatch({ type: "cancel" }); setGenerated(false); }}
+              canUndo={editorHistory.past.length > 0 || !!editorHistory.pending}
+              canRedo={editorHistory.future.length > 0 && !editorHistory.pending}
+              onUndo={() => undoEditorAction("3d")}
+              onRedo={() => redoEditorAction("3d")}
             />
           )}
         </div>

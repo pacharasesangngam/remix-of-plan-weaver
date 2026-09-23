@@ -13,6 +13,8 @@ import { useProjectActions } from "@/components/ProjectActionContext";
 import { Input } from "@/components/ui/input";
 import { editWallGeometry, endpointPoint, findWallSnap, geometryChanged, projectToWall, screenDistance, SNAP_PX, wallSnapTargets } from "@/lib/wallGeometry";
 import { DEFAULT_WALL_THICKNESS_M, getWallThicknessM, resolvePlanDimensions, uniformWallThicknessM, wallStrokeWidthNormalized } from "@/lib/wallMetrics";
+import { createOpeningBboxFromWallPoints } from "@/lib/openingPlacement";
+import { advanceOpeningDraft, cancelOpeningDraft, isValidOpeningTarget, type OpeningDraftState } from "@/lib/openingInteraction";
 
 // ─────────────────────────────────────────────────────────────
 // TYPES
@@ -37,7 +39,11 @@ interface WallReviewProps {
     onWallAdd?: (wall: DetectedWallSegment) => void;
     onWallDelete?: (id: string) => void;
     onWallGeometryCommit?: (walls: DetectedWallSegment[]) => void;
+    onDoorAdd?: (door: DetectedDoor) => void;
+    onDoorUpdate?: (id: string, field: keyof DetectedDoor, value: DetectedDoor[keyof DetectedDoor]) => void;
     onDoorDelete?: (id: string) => void;
+    onWindowAdd?: (windowItem: DetectedWindow) => void;
+    onWindowUpdate?: (id: string, field: keyof DetectedWindow, value: DetectedWindow[keyof DetectedWindow]) => void;
     onWindowDelete?: (id: string) => void;
     canUndo?: boolean;
     canRedo?: boolean;
@@ -109,7 +115,7 @@ const WallReview = ({
     backgroundImageUrl,
     walls = [], doors = [], windows = [],
     scale, planWidth = 0, planHeight = 0, onScaleChange, onPlanSizeChange,
-    onPpmChange, onRoomUpdate, onRoomDelete, onWallUpdate, onWallAdd, onWallDelete, onWallGeometryCommit, onDoorDelete, onWindowDelete, canUndo = false, canRedo = false, onUndo, onRedo, onGenerate,
+    onPpmChange, onRoomUpdate, onRoomDelete, onWallUpdate, onWallAdd, onWallDelete, onWallGeometryCommit, onDoorAdd, onDoorUpdate, onDoorDelete, onWindowAdd, onWindowUpdate, onWindowDelete, canUndo = false, canRedo = false, onUndo, onRedo, onGenerate,
     wallHeightMeter = 2.8, onWallHeightChange,
 }: WallReviewProps) => {
 
@@ -151,6 +157,9 @@ const WallReview = ({
     const [calibUnit, setCalibUnit] = useState<DimensionUnit>(unit);
     const [mousePos,    setMousePos]    = useState<CalibPoint | null>(null);
     const [wallDrawMode, setWallDrawMode] = useState(false);
+    const [openingDrawMode, setOpeningDrawMode] = useState<"door" | "window" | null>(null);
+    const [openingDraft, setOpeningDraft] = useState<OpeningDraftState | null>(null);
+    const [openingHoverWallId, setOpeningHoverWallId] = useState<string | null>(null);
     const [wallDraftStart, setWallDraftStart] = useState<CalibPoint | null>(null);
     const [wallDraftMouse, setWallDraftMouse] = useState<CalibPoint | null>(null);
     const [addMenuOpen, setAddMenuOpen] = useState(false);
@@ -256,7 +265,8 @@ const WallReview = ({
 
     // Cursor style — อิง isDragging state + hover detection
     const cursorStyle = (() => {
-        if (wallDrawMode) return wallDraftStart ? "crosshair" : "cell";
+        if (wallDrawMode) return "cell";
+        if (openingDrawMode) return isValidOpeningTarget(openingDraft, openingHoverWallId) ? "cell" : "default";
         if (!mousePos) return "crosshair";
         if (isDragging) return "grabbing";
         if (nearestPointIdx(mousePos, calibPts, DRAG_HIT) !== -1) return "grab";
@@ -269,7 +279,22 @@ const WallReview = ({
         setWallDraftMouse(null);
     };
 
+    const stopOpeningDraw = () => {
+        setOpeningDrawMode(null);
+        setOpeningDraft(cancelOpeningDraft());
+        setOpeningHoverWallId(null);
+    };
+
+    const startOpeningDraw = (kind: "door" | "window") => {
+        stopWallDraw();
+        setOpeningDrawMode(kind);
+        setOpeningDraft(null);
+        setOpeningHoverWallId(null);
+        setLayers(prev => new Set(prev).add(kind === "door" ? "doors" : "windows"));
+    };
+
     const startWallDraw = () => {
+        stopOpeningDraw();
         if (inCalibMode) {
             setCalibPhase("idle");
             setCalibPts([]);
@@ -583,7 +608,18 @@ const WallReview = ({
 
     // ── Layer toggle ─────────────────────────────────────────
     const toggleLayer = (layer: OverlayLayer) =>
-        setLayers(prev => { const s = new Set(prev); s.has(layer) ? s.delete(layer) : s.add(layer); return s; });
+        setLayers(prev => {
+            const nextLayers = new Set(prev);
+            if (nextLayers.has(layer)) {
+                nextLayers.delete(layer);
+            } else {
+                nextLayers.add(layer);
+            }
+            return nextLayers;
+        });
+
+    // The compact element list above supersedes these retained editor sections.
+    const showLegacyEditorSections = false;
 
     // ── Room editing ─────────────────────────────────────────
     // FIX: ถ้า calibrate แล้ว แสดงค่าจาก bbox × imgSize × scale แทน normalized width/height
@@ -701,6 +737,16 @@ const WallReview = ({
         window.addEventListener("keydown", onKeyDown);
         return () => window.removeEventListener("keydown", onKeyDown);
     }, [selectedWallId, onWallDelete]);
+    useEffect(() => {
+        if (!openingDrawMode) return;
+        const onKeyDown = (event: KeyboardEvent) => {
+            if (event.key !== "Escape") return;
+            event.preventDefault();
+            stopOpeningDraw();
+        };
+        window.addEventListener("keydown", onKeyDown);
+        return () => window.removeEventListener("keydown", onKeyDown);
+    }, [openingDrawMode]);
     const selectedRoom = rooms.find(r => r.id === selectedId);
     const selectedIdx  = rooms.findIndex(r => r.id === selectedId);
     const palette      = selectedIdx >= 0 ? ROOM_PALETTE[selectedIdx % ROOM_PALETTE.length] : ROOM_PALETTE[0];
@@ -786,7 +832,7 @@ const WallReview = ({
         svg.setPointerCapture(event.pointerId);
     };
     const onEndpointPointerDown = (event: React.PointerEvent<SVGSVGElement>) => {
-        if (inPointerMode || !layers.has("walls")) return;
+        if (inPointerMode || openingDrawMode || !layers.has("walls")) return;
         const wall = walls.find(item => item.id === selectedWallId);
         if (!wall) return;
         const rect = event.currentTarget.getBoundingClientRect();
@@ -850,6 +896,24 @@ const WallReview = ({
         selectWall(drag.wall.id);
     };
 
+    const findOpeningWallAt = (point: CalibPoint, rect: DOMRect): DetectedWallSegment | null => {
+        let targetWall: DetectedWallSegment | null = null;
+        let closestDistance = 12;
+        for (const wall of walls) {
+            const ax = wall.x1 * rect.width, ay = wall.y1 * rect.height;
+            const bx = wall.x2 * rect.width, by = wall.y2 * rect.height;
+            const px = point.x * rect.width, py = point.y * rect.height;
+            const dx = bx - ax, dy = by - ay;
+            const t = Math.max(0, Math.min(1, ((px - ax) * dx + (py - ay) * dy) / (dx * dx + dy * dy || 1)));
+            const distance = Math.hypot(px - (ax + t * dx), py - (ay + t * dy));
+            if (distance < closestDistance || (distance === closestDistance && (!targetWall || wall.id < targetWall.id))) {
+                targetWall = wall;
+                closestDistance = distance;
+            }
+        }
+        return targetWall;
+    };
+
     // Resolve selection from plan-space coordinates so direct selection remains
     // reliable for thin detected lines and at every viewport zoom/pan level.
     const onPlanClick = (e: React.MouseEvent<SVGSVGElement>) => {
@@ -882,6 +946,29 @@ const WallReview = ({
             return Math.hypot(px - (ax + t * dx), py - (ay + t * dy));
         };
 
+        if (openingDrawMode) {
+            const targetWall = findOpeningWallAt(point, rect);
+            if (!targetWall) return;
+            const transition = advanceOpeningDraft(openingDraft, openingDrawMode, targetWall.id, point);
+            if (!transition.confirms) {
+                setOpeningDraft(transition.draft);
+                return;
+            }
+            if (!openingDraft) return;
+            const bbox = createOpeningBboxFromWallPoints(targetWall, openingDraft.start, point, planDimensions.width, planDimensions.height);
+            if (!bbox) return;
+            const id = `manual-${openingDrawMode}-${Date.now()}`;
+            if (openingDrawMode === "door") {
+                onDoorAdd?.({ id, bbox, wallId: targetWall.id });
+                selectDoor(id);
+            } else {
+                onWindowAdd?.({ id, bbox, wallId: targetWall.id });
+                selectWindow(id);
+            }
+            stopOpeningDraw();
+            return;
+        }
+
         const door = layers.has("doors") && doors.find(item => inRect(item.bbox, 0.012));
         if (door) return selectDoor(door.id);
         const windowItem = layers.has("windows") && windows.find(item => inRect(item.bbox, 0.012));
@@ -907,6 +994,25 @@ const WallReview = ({
         });
         if (room) return selectRoom(room.id);
         clearSelection();
+    };
+
+    const openingPreview = (() => {
+        if (!openingDrawMode || !openingDraft || !mousePos || openingDraft.wallId !== openingHoverWallId) return null;
+        const wall = walls.find(item => item.id === openingDraft.wallId);
+        if (!wall) return null;
+        const bbox = createOpeningBboxFromWallPoints(wall, openingDraft.start, mousePos, planDimensions.width, planDimensions.height);
+        return bbox ? { bbox, kind: openingDraft.kind } : null;
+    })();
+
+    const updateOpeningPreview = (event: React.PointerEvent<SVGSVGElement>) => {
+        moveEndpointDrag(event);
+        if (!openingDrawMode) return;
+        const rect = event.currentTarget.getBoundingClientRect();
+        if (!rect.width || !rect.height) return;
+        const point = { x: (event.clientX - rect.left) / rect.width, y: (event.clientY - rect.top) / rect.height };
+        const targetWall = findOpeningWallAt(point, rect);
+        setOpeningHoverWallId(isValidOpeningTarget(openingDraft, targetWall?.id ?? null) ? targetWall!.id : null);
+        setMousePos(point);
     };
 
     // ─────────────────────────────────────────────────────────
@@ -1060,9 +1166,9 @@ const WallReview = ({
 
                     {/* WALL DRAW TOOL */}
                     <div ref={addMenuRef} className={`flex items-center gap-2 rounded-lg px-3 py-1.5 border transition-all duration-200 ${
-                        wallDrawMode ? "border-blue-500/60 bg-blue-500/10" : "border-border bg-card/80"
+                        (wallDrawMode || openingDrawMode) ? "border-blue-500/60 bg-blue-500/10" : "border-border bg-card/80"
                     }`}>
-                        {!wallDrawMode ? (
+                        {!wallDrawMode && !openingDrawMode ? (
                             <>
                             <button onClick={() => setAddMenuOpen(open => !open)}
                                 className="flex items-center gap-1.5 text-[11px] font-medium text-blue-500 hover:text-blue-400 transition-colors">
@@ -1071,17 +1177,17 @@ const WallReview = ({
                             </button>
                             {addMenuOpen && <div className="absolute z-50 mt-2 w-36 rounded-lg border border-border bg-card p-1 shadow-xl">
                                 <button onClick={() => { startWallDraw(); setAddMenuOpen(false); }} className="flex w-full items-center gap-2 rounded px-2 py-2 text-left text-xs hover:bg-accent"><Pencil className="w-3.5 h-3.5" />Wall</button>
-                                <button onClick={() => setAddMenuOpen(false)} className="flex w-full items-center gap-2 rounded px-2 py-2 text-left text-xs hover:bg-accent"><DoorOpen className="w-3.5 h-3.5" />Door</button>
-                                <button onClick={() => setAddMenuOpen(false)} className="flex w-full items-center gap-2 rounded px-2 py-2 text-left text-xs hover:bg-accent"><AppWindow className="w-3.5 h-3.5" />Window</button>
+                                <button onClick={() => { startOpeningDraw("door"); setAddMenuOpen(false); }} className="flex w-full items-center gap-2 rounded px-2 py-2 text-left text-xs hover:bg-accent"><DoorOpen className="w-3.5 h-3.5" />Door</button>
+                                <button onClick={() => { startOpeningDraw("window"); setAddMenuOpen(false); }} className="flex w-full items-center gap-2 rounded px-2 py-2 text-left text-xs hover:bg-accent"><AppWindow className="w-3.5 h-3.5" />Window</button>
                             </div>}
                             </>
                         ) : (
                             <>
-                                <Pencil className="w-3.5 h-3.5 text-blue-400 animate-pulse shrink-0" />
+                                {wallDrawMode ? <Pencil className="w-3.5 h-3.5 text-blue-400 animate-pulse shrink-0" /> : openingDrawMode === "door" ? <DoorOpen className="w-3.5 h-3.5 text-blue-400 animate-pulse shrink-0" /> : <AppWindow className="w-3.5 h-3.5 text-blue-400 animate-pulse shrink-0" />}
                                 <span className="text-[11px] text-blue-300 font-medium whitespace-nowrap">
-                                    {wallDraftStart ? "Click end point" : "Click start point"}
+                                    {wallDrawMode ? (wallDraftStart ? "Click end point" : "Click start point") : (openingDraft ? "Click opening end on the same wall" : "Click opening start on a wall")}
                                 </span>
-                                <button onClick={stopWallDraw} className="p-1 rounded hover:bg-slate-100 text-muted-foreground">
+                                <button onClick={wallDrawMode ? stopWallDraw : stopOpeningDraw} className="p-1 rounded hover:bg-slate-100 text-muted-foreground">
                                     <X className="w-3.5 h-3.5" />
                                 </button>
                             </>
@@ -1181,12 +1287,13 @@ const WallReview = ({
                                 {/* SVG overlays */}
                                 <svg className="absolute inset-0 z-10" width="100%" height="100%"
                                     viewBox="0 0 100 100" preserveAspectRatio="none"
-                                    style={{ pointerEvents: inPointerMode ? "none" : "all", touchAction: "none" }}
+                                    style={{ pointerEvents: inPointerMode ? "none" : "all", touchAction: "none", cursor: openingDrawMode ? cursorStyle : undefined }}
                                     onPointerDownCapture={onEndpointPointerDown}
-                                    onPointerMove={moveEndpointDrag}
+                                    onPointerMove={updateOpeningPreview}
                                     onPointerUp={finishEndpointDrag}
                                     onPointerCancel={finishEndpointDrag}
                                     onLostPointerCapture={finishEndpointDrag}
+                                    onPointerLeave={() => { if (openingDrawMode) { setMousePos(null); setOpeningHoverWallId(null); } }}
                                     onClickCapture={onPlanClick}>
 
                                     <g transform="scale(100)">
@@ -1211,7 +1318,7 @@ const WallReview = ({
                                         const ey2 = isVert  ? displayWall.y2 + half : displayWall.y2;
 
                                         return (
-                                            <g key={wall.id} style={{ cursor: isSel ? "move" : "pointer", pointerEvents: "all" }}>
+                                            <g key={wall.id} data-wall-id={wall.id} style={{ cursor: openingDrawMode ? cursorStyle : isSel ? "move" : "pointer", pointerEvents: "all" }}>
                                                 <line x1={displayWall.x1} y1={displayWall.y1} x2={displayWall.x2} y2={displayWall.y2} stroke="transparent" strokeWidth={sw + 0.025} pointerEvents="stroke" />
                                                 {isSel && <line x1={ex1} y1={ey1} x2={ex2} y2={ey2} stroke="#fbbf24" strokeWidth={sw + 0.008} strokeLinecap="butt" opacity={0.45} />}
                                                 <line x1={ex1} y1={ey1} x2={ex2} y2={ey2} stroke={col} strokeWidth={isSel ? sw + 0.002 : sw} strokeLinecap="butt" opacity={isSel ? 1 : 0.85} />
@@ -1249,6 +1356,15 @@ const WallReview = ({
                                             />
                                             <circle cx={wallDraftStart.x} cy={wallDraftStart.y} r={0.009} fill="#38bdf8" />
                                             <circle cx={wallDraftMouse.x} cy={wallDraftMouse.y} r={0.007} fill="#38bdf8" opacity={0.75} />
+                                        </g>
+                                    )}
+
+                                    {openingPreview && (
+                                        <g data-opening-preview={openingPreview.kind} style={{ pointerEvents: "none" }}>
+                                            <rect x={openingPreview.bbox.x} y={openingPreview.bbox.y} width={openingPreview.bbox.w} height={openingPreview.bbox.h}
+                                                fill={openingPreview.kind === "door" ? "rgba(245,158,11,0.20)" : "rgba(6,182,212,0.18)"}
+                                                stroke={openingPreview.kind === "door" ? "#f59e0b" : "#06b6d4"}
+                                                strokeWidth={0.004} strokeDasharray={openingPreview.kind === "door" ? undefined : "0.010 0.006"} />
                                         </g>
                                     )}
 
@@ -1300,20 +1416,20 @@ const WallReview = ({
                                         const dh = Math.max(dh0, 0.012); 
                                         const cx = dx + dw / 2, cy = dy + dh / 2;
                                         const wM = doorWidthM(door);
-                                        const visualRadius = dw;
-                                        const doorPath = polygonPath(door.polygon) ?? `M ${cx} ${cy} L ${cx + visualRadius} ${cy} A ${visualRadius} ${visualRadius} 0 0 0 ${cx} ${cy - visualRadius} Z`;
+                                        const doorPath = polygonPath(door.polygon);
 
                                         const isSel = selectionType === "door" && selectedDoorId === door.id;
                                         return (
                                             <g key={door.id} style={{ cursor: isSel ? "move" : "pointer", pointerEvents: "all" }}>                                               <rect x={dx - 0.012} y={dy - 0.012} width={dw + 0.024} height={dh + 0.024} fill="transparent" />
                                                 {isSel && <rect x={dx - 0.008} y={dy - 0.008} width={dw + 0.016} height={dh + 0.016} fill="none" stroke="#fef3c7" strokeWidth={0.004} rx={0.003} />}
-                                                <path 
+                                                {!doorPath && <rect x={dx} y={dy} width={dw} height={dh} fill="rgba(245,158,11,0.16)" stroke="#f59e0b" strokeWidth={0.004} />}
+                                                {doorPath && <path
                                                     d={doorPath} 
                                                     fill="rgba(245,158,11,0.25)" // เพิ่มความเข้ม
                                                     stroke="#f59e0b" 
                                                     strokeWidth={0.004} // เพิ่มความหนาเส้น
                                                     opacity={0.9} 
-                                                />
+                                                />}
                                                 {/* ... ส่วน Text ... */}
                                             </g>
                                         );
@@ -1425,6 +1541,13 @@ const WallReview = ({
                                         </g>;
                                     })()}
                                     </g>
+                                    {openingDrawMode && <rect
+                                        data-opening-pointer-overlay
+                                        x="0" y="0" width="100" height="100"
+                                        fill="transparent"
+                                        pointerEvents="all"
+                                        style={{ cursor: cursorStyle }}
+                                    />}
                                 </svg>
 
                                 {/* Calibration hint banner */}
@@ -1502,7 +1625,23 @@ const WallReview = ({
                                     {advancedOpen && <div className="grid grid-cols-2 gap-2">{(["wallHeight", "thickness"] as const).map(field => <div key={field}><div className="mb-1 text-[10px] text-muted-foreground">{field === "wallHeight" ? "Wall Height" : "Wall Thickness"}</div><Input type="number" defaultValue={field === "wallHeight" ? getWallHeight(wall) ?? wallHeightMeter : (getWallThickness(wall) ?? 0.15)} onBlur={e => onWallUpdate?.(wall.id, field, parseFloat(e.target.value) || (field === "wallHeight" ? wallHeightMeter : 0.15))} className="h-8 text-xs" /></div>)}</div>}
                                     <button onClick={deleteSelectedWall} className="w-full rounded-md border border-red-500/30 bg-red-500/10 py-2 text-xs font-medium text-red-500">Delete Wall</button>
                                 </>})()}
-                                {(selectionType === "door" || selectionType === "window") && <><div className="flex items-center justify-between"><span className="text-sm font-semibold text-foreground">{selectionType === "door" ? "Door" : "Window"}</span><button onClick={dismissInspector} className="p-1 text-muted-foreground hover:text-foreground"><X className="w-4 h-4" /></button></div><div className="flex justify-between text-xs text-muted-foreground"><span>Width</span><span className="font-mono text-foreground">{selectionType === "door" ? doorWidthM(doors.find(d => d.id === selectedDoorId)!)?.toFixed(2) : windowWidthM(windows.find(w => w.id === selectedWindowId)!)?.toFixed(2)} m</span></div><button onClick={() => setAdvancedOpen(open => !open)} className="flex w-full items-center justify-between rounded-md bg-muted/50 px-2 py-2 text-xs font-medium">Advanced <ChevronDown className={`w-3.5 h-3.5 ${advancedOpen ? "rotate-180" : ""}`} /></button>{advancedOpen && <div className="rounded-md border border-border/70 px-2 py-2 text-xs text-muted-foreground">{selectionType === "door" ? doors.find(d => d.id === selectedDoorId)?.doorName || "No additional door properties" : windows.find(w => w.id === selectedWindowId)?.windowName || "No additional window properties"}</div>}<button onClick={() => { if (selectionType === "door" && selectedDoorId) onDoorDelete?.(selectedDoorId); if (selectionType === "window" && selectedWindowId) onWindowDelete?.(selectedWindowId); clearSelection(); }} className="w-full rounded-md border border-red-500/30 bg-red-500/10 py-2 text-xs font-medium text-red-500">Delete {selectionType === "door" ? "Door" : "Window"}</button></>}
+                                {(selectionType === "door" || selectionType === "window") && (() => {
+                                    const opening = selectionType === "door" ? doors.find(item => item.id === selectedDoorId) : windows.find(item => item.id === selectedWindowId);
+                                    if (!opening) return null;
+                                    const updateBbox = (field: keyof typeof opening.bbox, value: string) => {
+                                        const numeric = Number(value);
+                                        if (!Number.isFinite(numeric) || ((field === "w" || field === "h") && numeric <= 0)) return;
+                                        const bbox = { ...opening.bbox, [field]: numeric };
+                                        if (selectionType === "door") onDoorUpdate?.(opening.id, "bbox", bbox);
+                                        else onWindowUpdate?.(opening.id, "bbox", bbox);
+                                    };
+                                    return <>
+                                        <div className="flex items-center justify-between"><span className="text-sm font-semibold text-foreground">{selectionType === "door" ? "Door" : "Window"}</span><button onClick={dismissInspector} className="p-1 text-muted-foreground hover:text-foreground"><X className="w-4 h-4" /></button></div>
+                                        <p className="text-[11px] text-muted-foreground">Attached wall: {opening.wallId ?? "unresolved detection"}</p>
+                                        <div className="grid grid-cols-2 gap-2">{(["x", "y", "w", "h"] as const).map(field => <label key={field} className="text-[10px] text-muted-foreground">Plan {field.toUpperCase()}<Input type="number" min={field === "w" || field === "h" ? Number.EPSILON : undefined} step="any" defaultValue={opening.bbox[field]} onBlur={event => updateBbox(field, event.target.value)} className="mt-1 h-8 text-xs font-mono" /></label>)}</div>
+                                        <button onClick={() => { if (selectionType === "door") onDoorDelete?.(opening.id); else onWindowDelete?.(opening.id); clearSelection(); }} className="w-full rounded-md border border-red-500/30 bg-red-500/10 py-2 text-xs font-medium text-red-500">Delete {selectionType === "door" ? "Door" : "Window"}</button>
+                                    </>;
+                                })()}
                             </section>
                         )}
                         <section className="overflow-hidden rounded-xl border border-border/70 bg-card">
@@ -1575,7 +1714,7 @@ const WallReview = ({
                                 </div>;
                             })}
                         </div>}
-                        {false && otherElementsOpen && <div className="space-y-2">
+                        {showLegacyEditorSections && otherElementsOpen && <div className="space-y-2">
                         {walls.length > 0 && (
                             <div className="pt-3">
                                 <p className="text-[10px] uppercase tracking-widest text-muted-foreground px-1 mb-2 flex items-center gap-1.5">
@@ -1657,7 +1796,7 @@ const WallReview = ({
                     <div className="shrink-0 border-t border-border" />
 
                     {/* Room editor */}
-                    {false && selectionType === "room" && selectedRoom && (
+                    {showLegacyEditorSections && selectionType === "room" && selectedRoom && (
                         <div className="shrink-0 p-4 space-y-3">
                             <div className="flex items-center justify-between">
                                 <span className="text-xs font-semibold" style={{ color: palette.stroke }}>{selectedRoom.name}</span>
@@ -1694,7 +1833,7 @@ const WallReview = ({
                     )}
 
                     {/* Wall editor */}
-                    {false && selectionType === "wall" && selectedWallId && (() => {
+                    {showLegacyEditorSections && selectionType === "wall" && selectedWallId && (() => {
                         const sw = walls.find(w => w.id === selectedWallId);
                         if (!sw) return null;
                         const swIdx = walls.findIndex(w => w.id === selectedWallId);

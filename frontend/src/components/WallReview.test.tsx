@@ -207,3 +207,73 @@ describe("wall selection", () => {
         expect(handles()[0]).toHaveAttribute("cx", "0.2");
     });
 });
+
+describe("opening placement", () => {
+    it("adds a door from two points on one wall with its shared wall attachment", () => {
+        const onDoorAdd = vi.fn();
+        const { container, getByText } = render(<WallReview rooms={[]} walls={[wall]} unit="m" imageUrl="plan.png"
+            scale={1} planWidth={10} planHeight={10} onScaleChange={vi.fn()} onRoomUpdate={vi.fn()} onGenerate={vi.fn()} onDoorAdd={onDoorAdd} />);
+        const svg = container.querySelector('svg[viewBox="0 0 100 100"]') as SVGSVGElement;
+        vi.spyOn(svg, "getBoundingClientRect").mockReturnValue({ left: 0, top: 0, width: 1000, height: 500 } as DOMRect);
+
+        fireEvent.click(getByText("Add Element"));
+        fireEvent.click(getByText("Door"));
+        fireEvent.click(svg, { clientX: 300, clientY: 150 });
+        const pointerOverlay = svg.querySelector('[data-opening-pointer-overlay]') as SVGRectElement;
+        expect(pointerOverlay).not.toBeNull();
+        fireEvent.pointerMove(pointerOverlay, { clientX: 450, clientY: 150 });
+
+        expect(onDoorAdd).not.toHaveBeenCalled();
+        expect(svg.querySelector('[data-opening-preview="door"]')).not.toBeNull();
+        expect(svg.style.cursor).toBe("cell");
+        expect(pointerOverlay.style.cursor).toBe("cell");
+        fireEvent.pointerMove(pointerOverlay, { clientX: 450, clientY: 300 });
+        expect(svg.style.cursor).toBe("default");
+        expect(pointerOverlay.style.cursor).toBe("default");
+        fireEvent.click(svg, { clientX: 500, clientY: 150 });
+
+        expect(onDoorAdd).toHaveBeenCalledOnce();
+        expect(onDoorAdd.mock.calls[0][0]).toMatchObject({ id: expect.stringMatching(/^manual-door-/), wallId: "wall-a" });
+        expect(onDoorAdd.mock.calls[0][0].bbox).toMatchObject({ x: 0.3, w: 0.2 });
+    });
+
+    it("cancels an opening preview with Escape without creating an opening", () => {
+        const onWindowAdd = vi.fn();
+        const { container, getByText } = render(<WallReview rooms={[]} walls={[wall]} unit="m" imageUrl="plan.png"
+            scale={1} planWidth={10} planHeight={10} onScaleChange={vi.fn()} onRoomUpdate={vi.fn()} onGenerate={vi.fn()} onWindowAdd={onWindowAdd} />);
+        const svg = container.querySelector('svg[viewBox="0 0 100 100"]') as SVGSVGElement;
+        vi.spyOn(svg, "getBoundingClientRect").mockReturnValue({ left: 0, top: 0, width: 1000, height: 500 } as DOMRect);
+
+        fireEvent.click(getByText("Add Element"));
+        fireEvent.click(getByText("Window"));
+        fireEvent.click(svg, { clientX: 300, clientY: 150 });
+        fireEvent.pointerMove(svg, { clientX: 450, clientY: 150 });
+        expect(svg.querySelector('[data-opening-preview="window"]')).not.toBeNull();
+
+        fireEvent.keyDown(window, { key: "Escape" });
+        expect(onWindowAdd).not.toHaveBeenCalled();
+        expect(svg.querySelector('[data-opening-preview="window"]')).toBeNull();
+    });
+
+    it("keeps the original wall draft when the second point is on another wall", () => {
+        const onDoorAdd = vi.fn();
+        const { container, getByText } = render(<WallReview rooms={[]} walls={[wall, neighbor]} unit="m" imageUrl="plan.png"
+            scale={1} planWidth={10} planHeight={10} onScaleChange={vi.fn()} onRoomUpdate={vi.fn()} onGenerate={vi.fn()} onDoorAdd={onDoorAdd} />);
+        const svg = container.querySelector('svg[viewBox="0 0 100 100"]') as SVGSVGElement;
+        vi.spyOn(svg, "getBoundingClientRect").mockReturnValue({ left: 0, top: 0, width: 1000, height: 500 } as DOMRect);
+
+        fireEvent.click(getByText("Add Element"));
+        fireEvent.click(getByText("Door"));
+        fireEvent.click(svg, { clientX: 300, clientY: 150 }); // wall-a
+        const pointerOverlay = svg.querySelector('[data-opening-pointer-overlay]') as SVGRectElement;
+        fireEvent.pointerMove(pointerOverlay, { clientX: 700, clientY: 250 }); // wall-b
+        expect(pointerOverlay.style.cursor).toBe("default");
+        fireEvent.click(pointerOverlay, { clientX: 700, clientY: 250 });
+        expect(onDoorAdd).not.toHaveBeenCalled();
+
+        fireEvent.pointerMove(pointerOverlay, { clientX: 500, clientY: 150 }); // return to wall-a
+        expect(pointerOverlay.style.cursor).toBe("cell");
+        fireEvent.click(pointerOverlay, { clientX: 500, clientY: 150 });
+        expect(onDoorAdd).toHaveBeenCalledOnce();
+    });
+});

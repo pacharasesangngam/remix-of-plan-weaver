@@ -1,9 +1,9 @@
 import { useProjectActions } from "@/components/ProjectActionContext";
-import { Component, Suspense, createContext, useContext, useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
-import { Canvas, useFrame, useThree } from "@react-three/fiber";
+import { Component, Suspense, createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
+import { Canvas, useFrame, useThree, type ThreeEvent } from "@react-three/fiber";
 import { OrbitControls, Grid, PointerLockControls, Text, useGLTF } from "@react-three/drei";
 import * as THREE from "three";
-import { Box, ChevronDown, ChevronLeft, Download, Image as ImageIcon, Info, Layers3, Maximize2, Move3D, Palette, Plus, RotateCcw, Trash2, X, ZoomIn, ZoomOut } from "lucide-react";
+import { AppWindow, Box, ChevronDown, ChevronLeft, DoorOpen, Download, Image as ImageIcon, Info, Maximize2, MousePointer2, Move3D, Palette, Pencil, Plus, RotateCcw, Trash2, X, ZoomIn, ZoomOut } from "lucide-react";
 import type { BBox, NormalizedPoint, Room } from "@/types/floorplan";
 import type { DetectedWallSegment, DetectedDoor, DetectedWindow } from "@/types/detection";
 import { buildWallSolidGeometries } from "@/lib/wallSolidGeometry";
@@ -25,6 +25,9 @@ import {
 import { createWallTexture } from "@/lib/wallTextures";
 import { createStoneBlockSpecs } from "@/lib/stoneWallPanels";
 import { DEFAULT_WALL_THICKNESS_M, getWallThicknessM, resolvePlanDimensions } from "@/lib/wallMetrics";
+import { createOpeningBboxFromWallPoints } from "@/lib/openingPlacement";
+import { advanceOpeningDraft, cancelOpeningDraft, isValidOpeningTarget, openingPreviewIsOnWall, type OpeningDraftState } from "@/lib/openingInteraction";
+import { capturesThreeTargetPointer, nextThreeSelection, nextThreeToolAfterCreation, type ThreeToolMode } from "@/lib/threeInteraction";
 
 interface RightPanelProps {
   rooms: Room[];
@@ -44,16 +47,20 @@ interface RightPanelProps {
   onWallAdd?: (wall: DetectedWallSegment) => void;
   onWallDelete?: (id: string) => void;
   onDoorAdd?: (door: DetectedDoor) => void;
-  onDoorUpdate?: (id: string, field: keyof DetectedDoor, value: number | string) => void;
+  onDoorUpdate?: (id: string, field: keyof DetectedDoor, value: DetectedDoor[keyof DetectedDoor]) => void;
   onDoorDelete?: (id: string) => void;
   onWindowAdd?: (win: DetectedWindow) => void;
-  onWindowUpdate?: (id: string, field: keyof DetectedWindow, value: number | string) => void;
+  onWindowUpdate?: (id: string, field: keyof DetectedWindow, value: DetectedWindow[keyof DetectedWindow]) => void;
   onWindowDelete?: (id: string) => void;
   onBack?: () => void;
+  canUndo?: boolean;
+  canRedo?: boolean;
+  onUndo?: () => void;
+  onRedo?: () => void;
 }
 
 type ViewPreset = "perspective" | "top" | "front" | "side";
-type BuildMode = "select" | "wall" | "door" | "window";
+type BuildMode = ThreeToolMode;
 type Selection =
   | { type: "room"; id: string }
   | { type: "wall"; id: string; point?: NormalizedPoint }
@@ -62,6 +69,16 @@ type Selection =
   | null;
 type PlacementPreview = { wallId: string; point: NormalizedPoint } | null;
 type WallDraft = { start: NormalizedPoint; end: NormalizedPoint } | null;
+type OpeningDraft = OpeningDraftState | null;
+type WallGizmoPointerEvent = ThreeEvent<PointerEvent>;
+type R3FPointerCaptureTarget = {
+  setPointerCapture(pointerId: number): void;
+  releasePointerCapture(pointerId: number): void;
+};
+
+const supportsR3FPointerCapture = (target: EventTarget): target is EventTarget & R3FPointerCaptureTarget =>
+  typeof Reflect.get(target, "setPointerCapture") === "function"
+  && typeof Reflect.get(target, "releasePointerCapture") === "function";
 
 const ROOM_PALETTE = [
   { wall: "#e8d5b7", floor: "#d4b896" },
@@ -155,6 +172,8 @@ const safeNum = (v: unknown, fallback = 0): number => {
   const n = Number(v);
   return isFinite(n) ? n : fallback;
 };
+
+const clamp01 = (value: number): number => Math.min(1, Math.max(0, value));
 
 const toPlanPoint = (point: NormalizedPoint, pw = PLAN_SIZE, ph = PLAN_SIZE): [number, number] => [
   point.x * pw - pw / 2,
@@ -325,40 +344,6 @@ const getWidthM = (bboxW?: number, real?: number, pw = PLAN_SIZE): number => {
   if (typeof real === "number" && real > 0) return real;
   if (typeof bboxW === "number" && bboxW > 0) return bboxW * pw;
   return 0;
-};
-
-const clamp01 = (v: number): number => Math.min(1, Math.max(0, v));
-
-const createOpeningBboxOnWall = (
-  wall: DetectedWallSegment,
-  kind: "door" | "window",
-  point?: NormalizedPoint,
-): BBox => {
-  const horizontal = isHorizontalSegment(wall);
-  const ax = wall.x1;
-  const ay = wall.y1;
-  const bx = wall.x2;
-  const by = wall.y2;
-  const dx = bx - ax;
-  const dy = by - ay;
-  const lenSq = dx * dx + dy * dy || 1;
-  const rawT = point
-    ? ((point.x - ax) * dx + (point.y - ay) * dy) / lenSq
-    : 0.5;
-  const t = Math.min(0.95, Math.max(0.05, rawT));
-  const cx = ax + dx * t;
-  const cy = ay + dy * t;
-  const along = kind === "door" ? 0.055 : 0.075;
-  const cross = kind === "door" ? 0.026 : 0.018;
-  const w = horizontal ? along : cross;
-  const h = horizontal ? cross : along;
-
-  return {
-    x: clamp01(cx - w / 2),
-    y: clamp01(cy - h / 2),
-    w,
-    h,
-  };
 };
 
 const boundsFromPolygon = (polygon: NormalizedPoint[]): BBox => {
@@ -578,6 +563,7 @@ const computeGapIntervals = (
 
   for (const door of doors) {
     if (!door.bbox) continue;
+    if (door.wallId && door.wallId !== wall.id) continue;
     const proj = projectOpeningEdgesOntoWall(door.bbox, wall, wallLengthM, pw, ph);
     if (!proj) continue;
     raw.push({
@@ -589,6 +575,7 @@ const computeGapIntervals = (
 
   for (const win of windows) {
     if (!win.bbox) continue;
+    if (win.wallId && win.wallId !== wall.id) continue;
     const proj = projectOpeningEdgesOntoWall(win.bbox, wall, wallLengthM, pw, ph);
     if (!proj) continue;
     raw.push({
@@ -788,10 +775,10 @@ function findBestWall(
 
 // ── First-person controller ───────────────────────────────────────────────────
 
-function FirstPersonController({ enabled }: { enabled: boolean }) {
+function FirstPersonController({ enabled, onExit }: { enabled: boolean; onExit: () => void }) {
   const { camera } = useThree();
   const { pw, ph } = usePlanScale();
-  const controlsRef = useRef<any>(null);
+  const controlsRef = useRef<React.ComponentRef<typeof PointerLockControls>>(null);
   const keysRef = useRef({
     KeyW: false,
     KeyA: false,
@@ -799,10 +786,11 @@ function FirstPersonController({ enabled }: { enabled: boolean }) {
     KeyD: false,
   });
 
-  useEffect(() => {
+  useLayoutEffect(() => {
+    const controls = controlsRef.current;
     if (!enabled) {
       keysRef.current = { KeyW: false, KeyA: false, KeyS: false, KeyD: false };
-      if (controlsRef.current?.isLocked) controlsRef.current.unlock();
+      if (controls?.isLocked) controls.unlock();
       return;
     }
 
@@ -817,15 +805,28 @@ function FirstPersonController({ enabled }: { enabled: boolean }) {
       if (event.code in keysRef.current)
         keysRef.current[event.code as keyof typeof keysRef.current] = false;
     };
+    const onKeyDownExit = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      if (controls?.isLocked) controls.unlock();
+      onExit();
+    };
+    const onUnlock = () => onExit();
 
     window.addEventListener("keydown", onKeyDown);
     window.addEventListener("keyup", onKeyUp);
+    window.addEventListener("keydown", onKeyDownExit);
+    controls?.addEventListener("unlock", onUnlock);
+    // useLayoutEffect keeps this in the same user-activation turn as the button click.
+    controls?.lock();
     return () => {
-      if (controlsRef.current?.isLocked) controlsRef.current.unlock();
+      controls?.removeEventListener("unlock", onUnlock);
+      if (controls?.isLocked) controls.unlock();
       window.removeEventListener("keydown", onKeyDown);
       window.removeEventListener("keyup", onKeyUp);
+      window.removeEventListener("keydown", onKeyDownExit);
     };
-  }, [camera, enabled]);
+  }, [camera, enabled, onExit, ph, pw]);
 
   useFrame((_, delta) => {
     if (!enabled || !controlsRef.current?.isLocked) return;
@@ -862,7 +863,7 @@ function CameraPresetController({
   preset: ViewPreset;
   walkMode: boolean;
   distance: number;
-  controlsRef: React.MutableRefObject<any>;
+  controlsRef: React.MutableRefObject<React.ComponentRef<typeof OrbitControls> | null>;
 }) {
   const { camera } = useThree();
 
@@ -909,7 +910,7 @@ function RoomPolygonMesh({
   index: number;
   hovered: boolean;
   onHover: (id: string | null) => void;
-  onSelect: (id: string) => void;
+  onSelect?: (id: string) => void;
   onTargetHover?: (selection: Selection) => void;
 }) {
   const groupRef = useRef<THREE.Group>(null);
@@ -977,18 +978,20 @@ function RoomPolygonMesh({
     <group
       ref={groupRef}
       position={[0, 0, 0]}
-      onPointerEnter={() => {
-        onHover(room.id);
-        onTargetHover?.({ type: "room", id: room.id });
-      }}
-      onPointerLeave={() => {
-        onHover(null);
-        onTargetHover?.(null);
-      }}
-      onClick={(e) => {
-        e.stopPropagation();
-        onSelect(room.id);
-      }}
+      {...(onSelect ? {
+        onPointerEnter: () => {
+          onHover(room.id);
+          onTargetHover?.({ type: "room", id: room.id });
+        },
+        onPointerLeave: () => {
+          onHover(null);
+          onTargetHover?.(null);
+        },
+        onClick: (e: ThreeEvent<MouseEvent>) => {
+          e.stopPropagation();
+          onSelect(room.id);
+        },
+      } : {})}
     >
       <mesh rotation={[-Math.PI / 2, 0, 0]} renderOrder={2}>
         <shapeGeometry args={[shape]} />
@@ -1055,7 +1058,7 @@ function WallSegmentMesh({
   doors: DetectedDoor[];
   windows: DetectedWindow[];
   geometry: THREE.BufferGeometry;
-  onSelect: (id: string, point?: NormalizedPoint) => void;
+  onSelect?: (id: string, point?: NormalizedPoint) => void;
   onPlacementHover?: (wallId: string, point: NormalizedPoint) => void;
   onPlacementLeave?: () => void;
   onTargetHover?: (selection: Selection) => void;
@@ -1098,21 +1101,23 @@ function WallSegmentMesh({
   return (
     <group position={[cx, 0, cz]} rotation={[0, -angle, 0]}>
       <mesh geometry={geometry}
-        onPointerMove={(e) => {
-          if (!onPlacementHover && !onTargetHover) return;
-          e.stopPropagation();
-          const point = getEventPoint(e.point);
-          onPlacementHover?.(wall.id, point);
-          onTargetHover?.({ type: "wall", id: wall.id, point });
-        }}
-        onPointerLeave={() => {
-          onPlacementLeave?.();
-          onTargetHover?.(null);
-        }}
-        onClick={(e) => {
-          e.stopPropagation();
-          onSelect(wall.id, getEventPoint(e.point));
-        }}
+        {...((onPlacementHover || onTargetHover || onSelect) ? {
+          onPointerMove: (e: ThreeEvent<PointerEvent>) => {
+            const point = getEventPoint(e.point);
+            onPlacementHover?.(wall.id, point);
+            onTargetHover?.({ type: "wall", id: wall.id, point });
+            e.stopPropagation();
+          },
+          onPointerLeave: () => {
+            onPlacementLeave?.();
+            onTargetHover?.(null);
+          },
+          onClick: (e: ThreeEvent<MouseEvent>) => {
+            if (!onSelect) return;
+            e.stopPropagation();
+            onSelect(wall.id, getEventPoint(e.point));
+          },
+        } : {})}
       >
         <meshStandardMaterial
           color={wallColor}
@@ -1176,13 +1181,15 @@ function DoorMesh({
   door: DetectedDoor;
   wallHeight: number;
   walls: DetectedWallSegment[];
-  onSelect: (id: string) => void;
+  onSelect?: (id: string) => void;
   onHover?: (selection: Selection) => void;
 }) {
   const { pw, ph } = usePlanScale();
   if (!door.bbox) return null;
 
-  const wall = findBestWall(door.bbox, walls, pw, ph);
+  const wall = door.wallId
+    ? walls.find((item) => item.id === door.wallId)
+    : findBestWall(door.bbox, walls, pw, ph);
   if (!wall) return null;
 
   const transform = getOpeningTransform(door.bbox, wall, pw, ph);
@@ -1210,18 +1217,20 @@ function DoorMesh({
     <group
       position={[center[0], 0, center[1]]}
       rotation={[0, -angle, 0]}
-      onPointerEnter={(e) => {
-        e.stopPropagation();
-        onHover?.({ type: "door", id: door.id });
-      }}
-      onPointerLeave={(e) => {
-        e.stopPropagation();
-        onHover?.(null);
-      }}
-      onClick={(e) => {
-        e.stopPropagation();
-        onSelect(door.id);
-      }}
+      {...(onSelect ? {
+        onPointerEnter: (e: ThreeEvent<PointerEvent>) => {
+          e.stopPropagation();
+          onHover?.({ type: "door", id: door.id });
+        },
+        onPointerLeave: (e: ThreeEvent<PointerEvent>) => {
+          e.stopPropagation();
+          onHover?.(null);
+        },
+        onClick: (e: ThreeEvent<MouseEvent>) => {
+          e.stopPropagation();
+          onSelect(door.id);
+        },
+      } : {})}
     >
       <group position={[localX, 0, 0]}>
         {door.useBlenderModel === "true" && doorOption.modelUrl ? (
@@ -1313,13 +1322,15 @@ function WindowMesh({
   win: DetectedWindow;
   wallHeight: number;
   walls: DetectedWallSegment[];
-  onSelect: (id: string) => void;
+  onSelect?: (id: string) => void;
   onHover?: (selection: Selection) => void;
 }) {
   const { pw, ph } = usePlanScale();
   if (!win.bbox) return null;
 
-  const wall = findBestWall(win.bbox, walls, pw, ph);
+  const wall = win.wallId
+    ? walls.find((item) => item.id === win.wallId)
+    : findBestWall(win.bbox, walls, pw, ph);
   if (!wall) return null;
 
   const transform = getOpeningTransform(win.bbox, wall, pw, ph);
@@ -1341,18 +1352,20 @@ function WindowMesh({
       <group
         position={[center[0], 0, center[1]]}
         rotation={[0, -angle, 0]}
-        onPointerEnter={(e) => {
-          e.stopPropagation();
-          onHover?.({ type: "window", id: win.id });
-        }}
-        onPointerLeave={(e) => {
-          e.stopPropagation();
-          onHover?.(null);
-        }}
-        onClick={(e) => {
-          e.stopPropagation();
-          onSelect(win.id);
-        }}
+        {...(onSelect ? {
+          onPointerEnter: (e: ThreeEvent<PointerEvent>) => {
+            e.stopPropagation();
+            onHover?.({ type: "window", id: win.id });
+          },
+          onPointerLeave: (e: ThreeEvent<PointerEvent>) => {
+            e.stopPropagation();
+            onHover?.(null);
+          },
+          onClick: (e: ThreeEvent<MouseEvent>) => {
+            e.stopPropagation();
+            onSelect(win.id);
+          },
+        } : {})}
       >
         <group position={[localX, sillY, 0]}>
           <DoorModelBoundary fallback={null}>
@@ -1372,18 +1385,20 @@ function WindowMesh({
     <group
       position={[center[0], 0, center[1]]}
       rotation={[0, -angle, 0]}
-      onPointerEnter={(e) => {
-        e.stopPropagation();
-        onHover?.({ type: "window", id: win.id });
-      }}
-      onPointerLeave={(e) => {
-        e.stopPropagation();
-        onHover?.(null);
-      }}
-      onClick={(e) => {
-        e.stopPropagation();
-        onSelect(win.id);
-      }}
+      {...(onSelect ? {
+        onPointerEnter: (e: ThreeEvent<PointerEvent>) => {
+          e.stopPropagation();
+          onHover?.({ type: "window", id: win.id });
+        },
+        onPointerLeave: (e: ThreeEvent<PointerEvent>) => {
+          e.stopPropagation();
+          onHover?.(null);
+        },
+        onClick: (e: ThreeEvent<MouseEvent>) => {
+          e.stopPropagation();
+          onSelect(win.id);
+        },
+      } : {})}
     >
       <group position={[localX, sillY, 0]}>
         {/* Left frame — bottom-anchored: centre at winH/2 */}
@@ -1434,63 +1449,39 @@ function WindowMesh({
 
 function PlacementPreviewMesh({
   preview,
-  kind,
+  draft,
   walls,
   wallHeight,
 }: {
   preview: PlacementPreview;
-  kind: "door" | "window";
+  draft: OpeningDraft;
   walls: DetectedWallSegment[];
   wallHeight: number;
 }) {
-  if (!preview) return null;
-
+  const { pw, ph } = usePlanScale();
+  if (!preview || !draft || !openingPreviewIsOnWall(draft, preview.wallId)) return null;
   const wall = walls.find((item) => item.id === preview.wallId);
   if (!wall) return null;
-
-  const bbox = createOpeningBboxOnWall(wall, kind, preview.point);
-  const transform = getOpeningTransform(bbox, wall);
+  const bbox = createOpeningBboxFromWallPoints(wall, draft.start, preview.point, pw, ph);
+  if (!bbox) return null;
+  const transform = getOpeningTransform(bbox, wall, pw, ph);
   if (!transform) return null;
-
-  const { center, angle, localX, projectedWidth } = transform;
-  const width = Math.max(projectedWidth, kind === "door" ? 0.75 : 0.9);
-  const height =
-    kind === "door"
-      ? Math.min(wallHeight * 0.9, 2.2)
-      : Math.min(wallHeight * 0.45, 1.2);
-  const bottomY = kind === "door" ? 0 : wallHeight * 0.35;
-  const color = kind === "door" ? "#f59e0b" : "#06b6d4";
-  const wallThickness = getWallThicknessM(wall, pw, ph);
-  const faceOffsets = [-(wallThickness / 2 + 0.04), wallThickness / 2 + 0.04];
+  const color = draft.kind === "door" ? "#f59e0b" : "#06b6d4";
+  const height = draft.kind === "door" ? Math.min(wallHeight * 0.9, 2.2) : Math.min(wallHeight * 0.45, 1.2);
+  const bottom = draft.kind === "door" ? 0 : wallHeight * 0.35;
+  const thickness = getWallThicknessM(wall, pw, ph);
 
   return (
-    <group position={[center[0], 0, center[1]]} rotation={[0, -angle, 0]}>
-      <group position={[localX, bottomY + height / 2, 0]}>
-        {faceOffsets.map((offset) => (
-          <group key={offset} position={[0, 0, offset]}>
-            <mesh raycast={() => null}>
-              <boxGeometry args={[width, height, 0.03]} />
-              <meshBasicMaterial color={color} transparent opacity={0.2} />
-            </mesh>
-            <lineSegments raycast={() => null}>
-              <edgesGeometry args={[new THREE.BoxGeometry(width, height, 0.035)]} />
-              <lineBasicMaterial color={color} transparent opacity={0.98} />
-            </lineSegments>
-          </group>
-        ))}
+    <group position={[transform.center[0], 0, transform.center[1]]} rotation={[0, -transform.angle, 0]} userData={{ openingPreview: draft.kind }}>
+      <group position={[transform.localX, bottom + height / 2, 0]}>
         <mesh raycast={() => null}>
-          <boxGeometry args={[width, height, wallThickness + 0.08]} />
-          <meshBasicMaterial color={color} transparent opacity={0.06} />
+          <boxGeometry args={[transform.projectedWidth, height, thickness + 0.02]} />
+          <meshBasicMaterial color={color} transparent opacity={draft.kind === "door" ? 0.16 : 0.12} depthWrite={false} />
         </mesh>
-        <Text
-          position={[0, height / 2 + 0.22, 0]}
-          fontSize={0.14}
-          color={color}
-          anchorX="center"
-          anchorY="middle"
-        >
-          {kind === "door" ? "Place door" : "Place window"}
-        </Text>
+        <lineSegments raycast={() => null}>
+          <edgesGeometry args={[new THREE.BoxGeometry(transform.projectedWidth, height, thickness + 0.025)]} />
+          <lineBasicMaterial color={color} transparent opacity={0.95} />
+        </lineSegments>
       </group>
     </group>
   );
@@ -1569,7 +1560,9 @@ function DeletePreviewMesh({
       : windows.find((item) => item.id === target.id);
   if (!opening?.bbox) return null;
 
-  const wall = findBestWall(opening.bbox, walls, pw, ph);
+  const wall = opening.wallId
+    ? walls.find((item) => item.id === opening.wallId)
+    : findBestWall(opening.bbox, walls, pw, ph);
   if (!wall) return null;
 
   const transform = getOpeningTransform(opening.bbox, wall, pw, ph);
@@ -1603,9 +1596,9 @@ function WallDraftPreviewMesh({
   draft: WallDraft;
   wallHeight: number;
 }) {
+  const { pw, ph } = usePlanScale();
   if (!draft) return null;
 
-  const { pw, ph } = usePlanScale();
   const wall: DetectedWallSegment = {
     id: "wall-draft-preview",
     x1: draft.start.x,
@@ -1700,6 +1693,7 @@ function WallEditGizmo({
 }) {
   const { pw, ph } = usePlanScale();
   const [dragMode, setDragMode] = useState<"start" | "end" | "move" | "height" | null>(null);
+  const pointerCaptureRef = useRef<{ target: R3FPointerCaptureTarget; pointerId: number } | null>(null);
 
   const x1 = wall.x1 * pw - pw / 2;
   const z1 = wall.y1 * ph - ph / 2;
@@ -1720,17 +1714,22 @@ function WallEditGizmo({
 
   const beginDrag = (
     mode: "start" | "end" | "move" | "height",
-    event?: { stopPropagation: () => void; target: { setPointerCapture?: (pointerId: number) => void }; pointerId: number },
+    event?: WallGizmoPointerEvent,
   ) => {
     event?.stopPropagation();
-    event?.target.setPointerCapture?.(event.pointerId);
+    if (event && supportsR3FPointerCapture(event.currentTarget)) {
+      event.currentTarget.setPointerCapture(event.pointerId);
+      pointerCaptureRef.current = { target: event.currentTarget, pointerId: event.pointerId };
+    }
     setDragMode(mode);
     onDragStateChange(true);
   };
 
-  const finishDrag = (event?: { stopPropagation: () => void; target: { releasePointerCapture?: (pointerId: number) => void }; pointerId: number }) => {
+  const finishDrag = (event?: WallGizmoPointerEvent) => {
     event?.stopPropagation();
-    event?.target.releasePointerCapture?.(event.pointerId);
+    const capture = pointerCaptureRef.current;
+    if (capture) capture.target.releasePointerCapture(capture.pointerId);
+    pointerCaptureRef.current = null;
     setDragMode(null);
     onDragStateChange(false);
   };
@@ -1874,6 +1873,7 @@ function Scene({
   cameraDistance,
   buildMode,
   placementPreview,
+  openingDraft,
   selectedTarget,
   hoverTarget,
   onHoverChange,
@@ -1881,12 +1881,14 @@ function Scene({
   onHoverTargetChange,
   onPlacementHover,
   onWallAdd,
+  onToolComplete,
   onWallEndpointDrag,
   onWallMoveDrag,
   onWallHeightDrag,
   onDragStart,
   onDragEnd,
   onDragCancel,
+  onWalkExit,
 }: {
   rooms: Room[];
   walls: DetectedWallSegment[];
@@ -1897,6 +1899,7 @@ function Scene({
   cameraDistance: number;
   buildMode: BuildMode;
   placementPreview: PlacementPreview;
+  openingDraft: OpeningDraft;
   selectedTarget: Selection;
   hoverTarget: Selection;
   onHoverChange: (id: string | null) => void;
@@ -1904,17 +1907,19 @@ function Scene({
   onHoverTargetChange: (selection: Selection) => void;
   onPlacementHover: (preview: PlacementPreview) => void;
   onWallAdd?: (wall: DetectedWallSegment) => void;
+  onToolComplete: () => void;
   onWallEndpointDrag: (id: string, endpoint: "start" | "end", point: NormalizedPoint) => void;
   onWallMoveDrag: (id: string, center: NormalizedPoint) => void;
   onWallHeightDrag: (id: string, deltaM: number) => void;
   onDragStart: () => void;
   onDragEnd: () => void;
   onDragCancel: () => void;
+  onWalkExit: () => void;
 }) {
   const [hoveredId, setHoveredId] = useState<string | null>(null);
   const [wallDragging, setWallDragging] = useState(false);
   const [wallDraft, setWallDraft] = useState<WallDraft>(null);
-  const orbitControlsRef = useRef<any>(null);
+  const orbitControlsRef = useRef<React.ComponentRef<typeof OrbitControls>>(null);
 
   const renderWalls = walls;
   const { pw, ph } = usePlanScale();
@@ -1942,7 +1947,7 @@ function Scene({
     if (buildMode !== "wall") setWallDraft(null);
   }, [buildMode, onHoverTargetChange]);
 
-  const canPreviewTarget = buildMode === "select";
+  const canPreviewTarget = capturesThreeTargetPointer(buildMode, "room");
   const isPlacementMode = buildMode === "door" || buildMode === "window";
   const activeTargetPreview =
     buildMode === "select" ? hoverTarget ?? selectedTarget : hoverTarget;
@@ -1976,6 +1981,7 @@ function Scene({
     });
     onSelect({ type: "wall", id, point: snappedPoint });
     setWallDraft(null);
+    onToolComplete();
   };
 
   return (
@@ -2013,7 +2019,7 @@ function Scene({
           index={i}
           hovered={hoveredId === room.id}
           onHover={handleHover}
-          onSelect={(id) => onSelect({ type: "room", id })}
+          onSelect={canPreviewTarget ? (id) => onSelect({ type: "room", id }) : undefined}
           onTargetHover={canPreviewTarget ? onHoverTargetChange : undefined}
         />
       ))}
@@ -2028,15 +2034,13 @@ function Scene({
             doors={doors}
             windows={windows}
             geometry={wallGeometries.get(wall.id)!}
-            onSelect={(id, point) => {
-              if (buildMode !== "wall") onSelect({ type: "wall", id, point });
-            }}
+            onSelect={capturesThreeTargetPointer(buildMode, "wall") ? (id, point) => onSelect({ type: "wall", id, point }) : undefined}
             onPlacementHover={
               isPlacementMode
                 ? (id, point) => onPlacementHover({ wallId: id, point })
                 : undefined
             }
-            onPlacementLeave={() => onPlacementHover(null)}
+            onPlacementLeave={isPlacementMode ? () => onPlacementHover(null) : undefined}
             onTargetHover={canPreviewTarget ? onHoverTargetChange : undefined}
           />
         );
@@ -2062,7 +2066,7 @@ function Scene({
       {isPlacementMode && (
         <PlacementPreviewMesh
           preview={placementPreview}
-          kind={buildMode}
+          draft={openingDraft}
           walls={renderWalls}
           wallHeight={defaultWallHeight}
         />
@@ -2075,7 +2079,7 @@ function Scene({
           door={door}
           wallHeight={defaultWallHeight}
           walls={renderWalls}
-          onSelect={(id) => onSelect({ type: "door", id })}
+          onSelect={capturesThreeTargetPointer(buildMode, "door") ? (id) => onSelect({ type: "door", id }) : undefined}
           onHover={canPreviewTarget ? onHoverTargetChange : undefined}
         />
       ))}
@@ -2087,7 +2091,7 @@ function Scene({
           win={win}
           wallHeight={defaultWallHeight}
           walls={renderWalls}
-          onSelect={(id) => onSelect({ type: "window", id })}
+          onSelect={capturesThreeTargetPointer(buildMode, "window") ? (id) => onSelect({ type: "window", id }) : undefined}
           onHover={canPreviewTarget ? onHoverTargetChange : undefined}
         />
       ))}
@@ -2114,7 +2118,7 @@ function Scene({
       />
 
       {walkMode ? (
-        <FirstPersonController enabled={walkMode} />
+        <FirstPersonController enabled={walkMode} onExit={onWalkExit} />
       ) : (
         <OrbitControls
           ref={orbitControlsRef}
@@ -2158,6 +2162,10 @@ const RightPanel = ({
   onWindowUpdate,
   onWindowDelete,
   onBack,
+  canUndo = false,
+  canRedo = false,
+  onUndo,
+  onRedo,
 }: RightPanelProps) => {
   // Resolve real-world plan dimensions. Fall back to PLAN_SIZE when not calibrated.
   const planDimensions = resolvePlanDimensions(planWidth, planHeight);
@@ -2165,13 +2173,23 @@ const RightPanel = ({
   const planScale = useMemo(() => ({ pw, ph }), [pw, ph]);
   const [hoveredId, setHoveredId] = useState<string | null>(null);
   const [walkMode, setWalkMode] = useState(false);
+  const exitWalkMode = useCallback(() => setWalkMode(false), []);
+  const toggleWalkMode = useCallback(() => {
+    setWalkMode((enabled) => !enabled);
+  }, []);
   const [viewPreset, setViewPreset] = useState<ViewPreset>("perspective");
   const [buildMode, setBuildMode] = useState<BuildMode>("select");
+  const [isAddMenuOpen, setIsAddMenuOpen] = useState(false);
   const [selection, setSelection] = useState<Selection>(null);
     const projectActions = useProjectActions();
   const [hoverTarget, setHoverTarget] = useState<Selection>(null);
   const [placementPreview, setPlacementPreview] = useState<PlacementPreview>(null);
+  const [openingDraft, setOpeningDraft] = useState<OpeningDraft>(null);
+  const hasValidOpeningTarget = (buildMode === "door" || buildMode === "window")
+    && isValidOpeningTarget(openingDraft, placementPreview?.wallId ?? null);
   const [showPlanReference, setShowPlanReference] = useState(true);
+  // Temporarily retained for later restoration; the compact 3D workspace hides it.
+  const showOriginalPlanWidget = false;
   const [isDecorateOpen, setIsDecorateOpen] = useState(true);
   const [isPlanViewerOpen, setIsPlanViewerOpen] = useState(false);
   const [planZoom, setPlanZoom] = useState(1);
@@ -2179,6 +2197,7 @@ const RightPanel = ({
   const [planWidgetPosition, setPlanWidgetPosition] = useState<{ left: number; top: number } | null>(null);
   const [planWidgetSize, setPlanWidgetSize] = useState<{ width: number; height: number } | null>(null);
   const planWidgetRef = useRef<HTMLDivElement>(null);
+  const addMenuRef = useRef<HTMLDivElement>(null);
   const planWidgetDragRef = useRef<{ offsetX: number; offsetY: number; parent: DOMRect } | null>(null);
   const planWidgetResizeRef = useRef<{
     corner: "nw" | "ne" | "sw" | "se";
@@ -2195,6 +2214,14 @@ const RightPanel = ({
   const selectedWall = selection?.type === "wall" ? walls.find((w) => w.id === selection.id) : null;
   const selectedDoor = selection?.type === "door" ? doors.find((d) => d.id === selection.id) : null;
   const selectedWindow = selection?.type === "window" ? windows.find((w) => w.id === selection.id) : null;
+
+  useEffect(() => {
+    const closeAddMenuOnOutsideClick = (event: PointerEvent) => {
+      if (addMenuRef.current && !addMenuRef.current.contains(event.target as Node)) setIsAddMenuOpen(false);
+    };
+    document.addEventListener("pointerdown", closeAddMenuOnOutsideClick);
+    return () => document.removeEventListener("pointerdown", closeAddMenuOnOutsideClick);
+  }, []);
 
   const maxH =
     rooms.length > 0
@@ -2214,18 +2241,11 @@ const RightPanel = ({
     0,
   );
 
-  const viewOptions: { id: ViewPreset; label: string }[] = [
-    { id: "perspective", label: "Perspective" },
-    { id: "top", label: "Top" },
-    { id: "front", label: "Front" },
-    { id: "side", label: "Side" },
-  ];
-
   const buildOptions: { id: BuildMode; label: string; hint: string }[] = [
     { id: "select", label: "Select", hint: "Hover previews, click selects, click empty space clears" },
     { id: "wall", label: "+ Wall", hint: "Click floor start point, move, then click end point" },
-    { id: "door", label: "+ Door", hint: "Click the exact spot on a wall to place a door" },
-    { id: "window", label: "+ Window", hint: "Click the exact spot on a wall to place a window" },
+    { id: "door", label: "+ Door", hint: "Click the opening start and end on the same wall" },
+    { id: "window", label: "+ Window", hint: "Click the opening start and end on the same wall" },
   ];
 
   const selectedRoomTile = findScgTile(selectedRoom?.tileCode);
@@ -2304,66 +2324,66 @@ const RightPanel = ({
 
   const applyDoorProduct = (doorId: string, code: string) => {
     const product = findScgDoor(code);
-    const patch: Partial<DetectedDoor> = {
-      scgDoorCode: product.code,
-      doorName: product.name,
-      doorMaterial: product.material,
-      doorColor: product.doorHex,
-      frameColor: product.frameHex,
-    };
     projectActions.run({ label: "door product change", threeOnly: true }, () => {
-      Object.entries(patch).forEach(([field, value]) => {
-        if (value !== undefined) {
-          onDoorUpdate?.(doorId, field as keyof DetectedDoor, value);
-        }
-      });
+      onDoorUpdate?.(doorId, "scgDoorCode", product.code);
+      onDoorUpdate?.(doorId, "doorName", product.name);
+      onDoorUpdate?.(doorId, "doorMaterial", product.material);
+      onDoorUpdate?.(doorId, "doorColor", product.doorHex);
+      onDoorUpdate?.(doorId, "frameColor", product.frameHex);
     });
   };
 
   const applyWindowProduct = (windowId: string, code: string) => {
     const product = findScgWindow(code);
-    const patch: Partial<DetectedWindow> = {
-      scgWindowCode: product.code,
-      windowName: product.name,
-      windowMaterial: product.material,
-      frameColor: product.frameHex,
-      glassColor: product.glassHex,
-    };
     projectActions.run({ label: "window product change", threeOnly: true }, () => {
-      Object.entries(patch).forEach(([field, value]) => {
-        if (value !== undefined) {
-          onWindowUpdate?.(windowId, field as keyof DetectedWindow, value);
-        }
-      });
+      onWindowUpdate?.(windowId, "scgWindowCode", product.code);
+      onWindowUpdate?.(windowId, "windowName", product.name);
+      onWindowUpdate?.(windowId, "windowMaterial", product.material);
+      onWindowUpdate?.(windowId, "frameColor", product.frameHex);
+      onWindowUpdate?.(windowId, "glassColor", product.glassHex);
     });
   };
 
   useEffect(() => {
     setPlacementPreview(null);
     setHoverTarget(null);
+    setOpeningDraft(null);
   }, [buildMode]);
+
+  useEffect(() => {
+    if (!openingDraft) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      setOpeningDraft(cancelOpeningDraft());
+      setPlacementPreview(null);
+      setBuildMode("select");
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [openingDraft]);
 
   const addOpeningToWall = (
     wall: DetectedWallSegment,
     kind: "door" | "window",
-    point?: NormalizedPoint,
-  ) => {
-    const bbox = createOpeningBboxOnWall(wall, kind, point);
+    start: NormalizedPoint,
+    end: NormalizedPoint,
+  ): boolean => {
+    const bbox = createOpeningBboxFromWallPoints(wall, start, end, pw, ph);
+    if (!bbox) return false;
     if (kind === "door" && onDoorAdd) {
       const id = `manual-door-${Date.now()}`;
-      onDoorAdd({ id, bbox, widthPx: undefined, widthM: 0.9 });
+      onDoorAdd({ id, bbox, wallId: wall.id });
       setSelection({ type: "door", id });
+      return true;
     }
     if (kind === "window" && onWindowAdd) {
       const id = `manual-window-${Date.now()}`;
-      onWindowAdd({ id, bbox, widthPx: undefined, widthM: 1.2 });
+      onWindowAdd({ id, bbox, wallId: wall.id });
       setSelection({ type: "window", id });
+      return true;
     }
-  };
-
-  const addOpeningToSelectedWall = (kind: "door" | "window") => {
-    if (!selectedWall) return;
-    addOpeningToWall(selectedWall, kind, selection?.type === "wall" ? selection.point : undefined);
+    return false;
   };
 
   const deleteSelection = () => {
@@ -2382,21 +2402,31 @@ const RightPanel = ({
 
     if ((buildMode === "door" || buildMode === "window") && target.type === "wall") {
       const wall = walls.find((item) => item.id === target.id);
-      if (wall) addOpeningToWall(wall, buildMode, target.point);
+      if (!wall || !target.point) return;
+      const transition = advanceOpeningDraft(openingDraft, buildMode, wall.id, target.point);
+      if (transition.confirms) {
+        if (!openingDraft) return;
+        if (addOpeningToWall(wall, buildMode, openingDraft.start, target.point)) {
+          setOpeningDraft(null);
+          setBuildMode((current) => nextThreeToolAfterCreation(current));
+        }
+      } else {
+        setOpeningDraft(transition.draft);
+      }
       setPlacementPreview(null);
       setHoverTarget(null);
       return;
     }
 
     if (buildMode === "select") {
-      setSelection(target);
+      setSelection((current) => nextThreeSelection(current, buildMode, "target", target));
       setHoverTarget(null);
     }
   };
 
   const clearSelect = () => {
     if (buildMode !== "select") return;
-    setSelection(null);
+    setSelection((current) => nextThreeSelection(current, buildMode, "empty"));
     setHoverTarget(null);
   };
 
@@ -2594,7 +2624,7 @@ const RightPanel = ({
               position: [camDist * 0.7, camDist * 0.5, camDist * 0.7],
               fov: 45,
             }}
-            style={{ width: "100%", height: "100%" }}
+            style={{ width: "100%", height: "100%", cursor: buildMode === "wall" || hasValidOpeningTarget ? "cell" : "default" }}
             onPointerMissed={clearSelect}
           >
               <Scene
@@ -2607,6 +2637,7 @@ const RightPanel = ({
               cameraDistance={camDist}
               buildMode={buildMode}
               placementPreview={placementPreview}
+              openingDraft={openingDraft}
               selectedTarget={selection}
               hoverTarget={hoverTarget}
               onHoverChange={setHoveredId}
@@ -2614,19 +2645,21 @@ const RightPanel = ({
               onHoverTargetChange={setHoverTarget}
               onPlacementHover={setPlacementPreview}
               onWallAdd={onWallAdd}
+              onToolComplete={() => setBuildMode((current) => nextThreeToolAfterCreation(current))}
               onWallEndpointDrag={dragSelectedWallEndpoint}
               onWallMoveDrag={moveSelectedWall}
               onWallHeightDrag={resizeSelectedWallHeight}
               onDragStart={() => projectActions.begin({ label: "wall geometry change" })}
               onDragEnd={() => projectActions.commit()}
               onDragCancel={() => projectActions.cancel()}
+              onWalkExit={exitWalkMode}
             />
           </Canvas>
 
-          {originalPlanUrl && (
+          {showOriginalPlanWidget && originalPlanUrl && (
             <div
               ref={planWidgetRef}
-              className={`absolute z-20 min-h-[48px] min-w-[220px] max-w-[calc(100%-2rem)] overflow-hidden rounded-2xl border border-border bg-card/95 shadow-2xl backdrop-blur-md ${planWidgetPosition ? "" : "right-4 top-4"} ${showPlanReference ? "h-64 w-72" : "w-64"}`}
+              className={`absolute z-20 min-h-[48px] min-w-[220px] max-w-[calc(100%-2rem)] overflow-hidden rounded-2xl border border-border bg-card/95 shadow-xl backdrop-blur-md ${planWidgetPosition ? "" : "right-4 top-20"} ${showPlanReference ? "h-64 w-72" : "w-64"}`}
               style={{
                 ...(planWidgetPosition ?? {}),
                 ...(showPlanReference && planWidgetSize ? planWidgetSize : {}),
@@ -2756,24 +2789,7 @@ const RightPanel = ({
             </div>
           )}
 
-          <div className="absolute bottom-4 left-1/2 z-20 flex -translate-x-1/2 items-center gap-1 rounded-2xl border border-border bg-card/92 p-1.5 shadow-2xl backdrop-blur-md">
-            {viewOptions.map((option) => (
-              <button
-                key={option.id}
-                onClick={() => setViewPreset(option.id)}
-                disabled={walkMode}
-                className={`rounded-xl px-3 py-2 text-[11px] font-medium transition-colors ${
-                  viewPreset === option.id
-                    ? "bg-foreground text-background"
-                    : "text-muted-foreground hover:bg-accent hover:text-foreground"
-                } disabled:cursor-not-allowed disabled:opacity-45`}
-              >
-                {option.label}
-              </button>
-            ))}
-          </div>
-
-          <div className="absolute left-1/2 top-20 z-20 flex -translate-x-1/2 items-center gap-1 rounded-3xl border border-border bg-card/95 p-1.5 shadow-2xl backdrop-blur-md">
+          <div className="hidden">
             {buildOptions.map((option) => (
               <button
                 key={option.id}
@@ -2790,11 +2806,11 @@ const RightPanel = ({
             ))}
           </div>
 
-          <div className="absolute left-1/2 top-[132px] z-20 -translate-x-1/2 rounded-full border border-border bg-card/85 px-3 py-1.5 text-[10px] font-mono text-muted-foreground shadow-lg backdrop-blur-md">
+          <div className="hidden">
             {buildOptions.find((option) => option.id === buildMode)?.hint}
           </div>
 
-          <div className="absolute top-4 left-1/2 flex -translate-x-1/2 items-center gap-3 bg-card/90 border border-border backdrop-blur-md rounded-2xl px-3 py-2 z-20 shadow-lg">
+          <div className="hidden">
             <Info className="w-3.5 h-3.5 text-muted-foreground shrink-0" />
             <div className="flex items-center gap-3 text-[10px] font-mono divide-x divide-border">
               <span className="text-muted-foreground">{rooms.length} rooms</span>
@@ -2813,7 +2829,7 @@ const RightPanel = ({
             </div>
             <button
               onClick={() => setWalkMode((prev) => !prev)}
-              className={`ml-2 flex items-center gap-2 px-3 py-2 rounded-lg border text-xs font-semibold transition-all duration-200 ${
+              className={`ml-2 flex items-center gap-1.5 px-3 py-2 rounded-lg border text-xs font-semibold transition-all duration-200 ${
                 walkMode
                   ? "bg-blue-600 text-white border-blue-600 hover:bg-blue-500 shadow-[0_0_0_3px_rgba(37,99,235,0.12)]"
                   : "bg-foreground text-background border-foreground hover:opacity-90"
@@ -2832,7 +2848,39 @@ const RightPanel = ({
             </button>
           </div>
 
-          <div className="absolute bottom-20 right-4 z-20 w-[280px] rounded-3xl border border-border bg-card/92 p-4 shadow-2xl backdrop-blur-md">
+          <div className="absolute inset-x-0 top-0 z-30 flex items-center justify-between gap-3 border-b border-border bg-card/30 px-5 py-3">
+            <div className="flex min-w-0 items-center gap-2">
+              <Box className="h-4 w-4 shrink-0 text-primary" />
+              <div className="min-w-0"><p className="text-sm font-semibold text-foreground">3D View</p><p className="text-[11px] text-muted-foreground">Explore and edit your space in 3D</p></div>
+            </div>
+            <div className="flex items-center gap-3 whitespace-nowrap">
+              <button onClick={() => { setBuildMode("select"); setIsAddMenuOpen(false); }} className={`inline-flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-[11px] font-medium transition-colors ${buildMode === "select" ? "border-blue-600 bg-blue-600 text-white shadow-sm" : "border-border bg-background text-foreground hover:bg-accent"}`}><MousePointer2 className="h-3.5 w-3.5" />Select</button>
+              <div ref={addMenuRef} className={`relative flex items-center gap-2 rounded-lg border px-3 py-1.5 transition-all duration-200 ${buildMode !== "select" ? "border-blue-500/60 bg-blue-500/10" : "border-border bg-card/80"}`}>
+                {buildMode === "select" ? <>
+                  <button onClick={() => setIsAddMenuOpen(open => !open)} aria-expanded={isAddMenuOpen} className="flex items-center gap-1.5 text-[11px] font-medium text-blue-500 transition-colors hover:text-blue-400"><Plus className="h-3.5 w-3.5" />Add Element <ChevronDown className={`h-3 w-3 transition-transform ${isAddMenuOpen ? "rotate-180" : ""}`} /></button>
+                  {isAddMenuOpen && <div className="absolute left-0 top-full z-50 mt-2 w-36 rounded-lg border border-border bg-card p-1 shadow-xl">
+                    {([{ id: "wall", label: "Wall", Icon: Pencil }, { id: "door", label: "Door", Icon: DoorOpen }, { id: "window", label: "Window", Icon: AppWindow }] as const).map(({ id, label, Icon }) => <button key={id} onClick={() => { setBuildMode(id); setIsAddMenuOpen(false); }} className="flex w-full items-center gap-2 rounded px-2 py-2 text-left text-xs hover:bg-accent"><Icon className="h-3.5 w-3.5" />{label}</button>)}
+                  </div>}
+                </> : <>
+                  {buildMode === "wall" ? <Pencil className="h-3.5 w-3.5 shrink-0 animate-pulse text-blue-400" /> : buildMode === "door" ? <DoorOpen className="h-3.5 w-3.5 shrink-0 animate-pulse text-blue-400" /> : <AppWindow className="h-3.5 w-3.5 shrink-0 animate-pulse text-blue-400" />}
+                  <span className="whitespace-nowrap text-[11px] font-medium text-blue-300">{buildMode === "wall" ? "Click start and end point" : openingDraft ? "Click opening end on the same wall" : "Click opening start on a wall"}</span>
+                  <button onClick={() => { setBuildMode("select"); setIsAddMenuOpen(false); }} aria-label="Cancel Add Element" className="rounded p-1 text-muted-foreground hover:bg-accent hover:text-foreground"><X className="h-3.5 w-3.5" /></button>
+                </>}
+              </div>
+              <button onClick={toggleWalkMode} className={`inline-flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-[11px] font-medium transition-colors ${walkMode ? "border-blue-600 bg-blue-600 text-white" : "border-border bg-background text-foreground hover:bg-accent"}`}><Move3D className="h-3.5 w-3.5" />{walkMode ? "Walk Mode On" : "Walk Mode"}</button>
+              <span className="mx-1 h-4 w-px bg-border" />
+              <div className="flex overflow-hidden rounded-lg border border-border bg-card/80"><button onClick={onUndo} disabled={!canUndo} aria-label="Undo" title="Undo (Ctrl/Cmd + Z)" className="p-1.5 text-muted-foreground hover:bg-accent hover:text-foreground disabled:opacity-35"><RotateCcw className="h-3.5 w-3.5" /></button><button onClick={onRedo} disabled={!canRedo} aria-label="Redo" title="Redo (Ctrl/Cmd + Shift + Z)" className="border-l border-border p-1.5 text-muted-foreground hover:bg-accent hover:text-foreground disabled:opacity-35"><RotateCcw className="h-3.5 w-3.5 -scale-x-100" /></button></div>
+            </div>
+            <button onClick={handleExportGlb} className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-background px-3 py-1.5 text-[11px] font-medium text-foreground transition-colors hover:bg-accent" title="Export a .glb file for Blender"><Download className="h-3.5 w-3.5" />Export GLB</button>
+          </div>
+
+          <div className="absolute bottom-5 left-5 z-20 flex h-28 w-28 items-center justify-center rounded-full border border-border bg-card/95 text-[10px] font-semibold text-slate-500 shadow-lg backdrop-blur-md" aria-label="View cube orientation">
+            <button onClick={() => setViewPreset("top")} title="Top view" className="absolute top-2 rounded px-2 py-1 hover:bg-accent">N</button><button onClick={() => setViewPreset("front")} title="Front view" className="absolute bottom-2 rounded px-2 py-1 hover:bg-accent">S</button><button onClick={() => setViewPreset("side")} title="Side view" className="absolute left-1 rounded px-2 py-1 hover:bg-accent">W</button><button onClick={() => setViewPreset("side")} title="Side view" className="absolute right-1 rounded px-2 py-1 hover:bg-accent">E</button>
+            <button onClick={() => setViewPreset("perspective")} title="Perspective view" className="h-8 w-8 rotate-[30deg] transform rounded-sm border border-slate-300 bg-gradient-to-br from-white via-slate-100 to-slate-300 shadow-sm transition-transform hover:scale-110 dark:border-slate-600 dark:from-slate-200 dark:to-slate-400" />
+          </div>
+
+          <div className="absolute bottom-20 right-4 z-20 flex w-[280px] flex-col-reverse gap-3">
+          <div className="w-full rounded-3xl border border-border bg-card/92 p-4 shadow-2xl backdrop-blur-md">
             <div className={isDecorateOpen ? "mb-3 flex items-center justify-between" : "flex items-center justify-between"}>
               <div className="flex items-center gap-2">
                 <Palette className="h-4 w-4 text-primary" />
@@ -3042,14 +3090,14 @@ const RightPanel = ({
                     className="mt-1 h-9 w-full rounded-xl border border-border bg-background px-3 text-xs text-foreground"
                   />
                 </label>
-                <div className="grid grid-cols-2 gap-2">
-                  <button onClick={() => addOpeningToSelectedWall("door")} className="inline-flex items-center justify-center gap-1 rounded-xl border border-border bg-background px-3 py-2 text-[11px] text-foreground hover:bg-accent">
+                {/* <div className="grid grid-cols-2 gap-2">
+                  <button onClick={() => setBuildMode("door")} className="inline-flex items-center justify-center gap-1 rounded-xl border border-border bg-background px-3 py-2 text-[11px] text-foreground hover:bg-accent">
                     <Plus className="h-3 w-3" /> Door
                   </button>
-                  <button onClick={() => addOpeningToSelectedWall("window")} className="inline-flex items-center justify-center gap-1 rounded-xl border border-border bg-background px-3 py-2 text-[11px] text-foreground hover:bg-accent">
+                  <button onClick={() => setBuildMode("window")} className="inline-flex items-center justify-center gap-1 rounded-xl border border-border bg-background px-3 py-2 text-[11px] text-foreground hover:bg-accent">
                     <Plus className="h-3 w-3" /> Window
                   </button>
-                </div>
+                </div> */}
               </div>
             )}
 
@@ -3174,9 +3222,8 @@ const RightPanel = ({
             </>}
           </div>
 
-          <div className="absolute bottom-4 left-4 z-20 w-[276px] rounded-2xl border border-border bg-card/92 p-3 shadow-xl backdrop-blur-md">
+          <div className="w-full rounded-2xl border border-border bg-card/95 p-3 shadow-xl backdrop-blur-md">
             <div className="mb-2 flex items-center gap-2">
-              <Layers3 className="h-3.5 w-3.5 text-primary" />
               <div>
                 <p className="text-[11px] font-semibold text-foreground">Material schedule</p>
                 <p className="text-[9px] text-muted-foreground">Assigned finishes in this 3D model</p>
@@ -3201,7 +3248,8 @@ const RightPanel = ({
             </div>
           </div>
 
-          {hoveredRoom && <RoomInfoCard room={hoveredRoom} />}
+          </div>
+
         </PlanScaleCtx.Provider>
       )}
     </div>

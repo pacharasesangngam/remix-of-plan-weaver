@@ -43,3 +43,20 @@ it("exports the same junction mesh used by preview without straightening, mergin
     expect(walls).toEqual(original);
     expected.forEach(geometry => geometry.dispose());
 });
+
+it("uses an opening's saved wall attachment for its exported mesh", async () => {
+    const walls: DetectedWallSegment[] = [
+        { id: "horizontal", x1: 0.1, y1: 0.5, x2: 0.9, y2: 0.5, type: "interior" },
+        { id: "vertical", x1: 0.5, y1: 0.1, x2: 0.5, y2: 0.9, type: "interior" },
+    ];
+    vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {});
+    vi.stubGlobal("URL", { createObjectURL: () => "blob:test", revokeObjectURL: vi.fn() });
+
+    await exportFloorPlanGlb({
+        rooms: [], walls, windows: [], planWidth: 10, planHeight: 10,
+        doors: [{ id: "attached-door", wallId: "vertical", bbox: { x: 0.49, y: 0.4, w: 0.02, h: 0.2 } }],
+    });
+
+    const door = captured.scene!.getObjectByName("Doors")!.getObjectByName("attached-door")!;
+    expect(door.rotation.y).toBeCloseTo(-Math.PI / 2);
+});
