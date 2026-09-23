@@ -7,6 +7,8 @@ import { Box, ChevronDown, ChevronLeft, Download, Image as ImageIcon, Info, Laye
 import type { BBox, NormalizedPoint, Room } from "@/types/floorplan";
 import type { DetectedWallSegment, DetectedDoor, DetectedWindow } from "@/types/detection";
 import { buildWallSolidGeometries } from "@/lib/wallSolidGeometry";
+import WallMeshHighlight from "./WallMeshHighlight";
+import { targetPreviewShowsOutline } from "./wallHighlightState";
 import { exportFloorPlanGlb } from "@/lib/blenderExport";
 import {
   SCG_DOOR_CATALOG,
@@ -1501,6 +1503,8 @@ function DeletePreviewMesh({
   doors,
   windows,
   wallHeight,
+  wallGeometries,
+  showOutline = true,
   color = "#ef4444",
 }: {
   target: Selection;
@@ -1509,6 +1513,8 @@ function DeletePreviewMesh({
   doors: DetectedDoor[];
   windows: DetectedWindow[];
   wallHeight: number;
+  wallGeometries: Map<string, THREE.BufferGeometry>;
+  showOutline?: boolean;
   color?: string;
 }) {
   const { pw, ph } = usePlanScale();
@@ -1537,7 +1543,8 @@ function DeletePreviewMesh({
 
   if (target.type === "wall") {
     const wall = walls.find((item) => item.id === target.id);
-    if (!wall) return null;
+    const geometry = wallGeometries.get(target.id);
+    if (!wall || !geometry) return null;
 
     const x1 = wall.x1 * pw - pw / 2;
     const z1 = wall.y1 * ph - ph / 2;
@@ -1549,19 +1556,9 @@ function DeletePreviewMesh({
     const angle = Math.atan2(z2 - z1, x2 - x1);
     const cx = (x1 + x2) / 2;
     const cz = (z1 + z2) / 2;
-    const thickness = getWallThicknessM(wall, pw, ph) + 0.08;
-    const height = safeNum(wall.wallHeight, wallHeight);
-
     return (
       <group position={[cx, 0, cz]} rotation={[0, -angle, 0]}>
-        <mesh position={[0, height / 2, 0]} renderOrder={20} raycast={() => null}>
-          <boxGeometry args={[length, height, thickness]} />
-          <meshBasicMaterial color={color} transparent opacity={0.24} depthWrite={false} />
-        </mesh>
-        <lineSegments position={[0, height / 2, 0]} raycast={() => null}>
-          <edgesGeometry args={[new THREE.BoxGeometry(length, height, thickness)]} />
-          <lineBasicMaterial color={color} transparent opacity={1} />
-        </lineSegments>
+        <WallMeshHighlight geometry={geometry} color={color} showOutline={showOutline} />
       </group>
     );
   }
@@ -1685,6 +1682,7 @@ function WallBuildPlane({
 function WallEditGizmo({
   wall,
   wallHeight,
+  geometry,
   onEndpointDrag,
   onMoveDrag,
   onHeightDrag,
@@ -1693,6 +1691,7 @@ function WallEditGizmo({
 }: {
   wall: DetectedWallSegment;
   wallHeight: number;
+  geometry: THREE.BufferGeometry;
   onEndpointDrag: (id: string, endpoint: "start" | "end", point: NormalizedPoint) => void;
   onMoveDrag: (id: string, center: NormalizedPoint) => void;
   onHeightDrag: (id: string, deltaM: number) => void;
@@ -1768,14 +1767,7 @@ function WallEditGizmo({
       )}
 
       <group position={[cx, 0, cz]} rotation={[0, -angle, 0]}>
-        <lineSegments position={[0, height / 2, 0]} raycast={() => null}>
-          <edgesGeometry args={[new THREE.BoxGeometry(Math.max(length, 0.1), height, thickness + 0.08)]} />
-          <lineBasicMaterial color="#38bdf8" transparent opacity={0.95} />
-        </lineSegments>
-        <mesh position={[0, height + 0.035, 0]} raycast={() => null}>
-          <boxGeometry args={[Math.max(length, 0.1), 0.035, thickness + 0.12]} />
-          <meshBasicMaterial color="#38bdf8" transparent opacity={0.45} />
-        </mesh>
+        <WallMeshHighlight geometry={geometry} color="#38bdf8" outlineOnly />
       </group>
 
       {[
@@ -2053,6 +2045,7 @@ function Scene({
       {selectedWallForEdit && (
         <WallEditGizmo
           wall={selectedWallForEdit}
+          geometry={wallGeometries.get(selectedWallForEdit.id)!}
           wallHeight={defaultWallHeight}
           onEndpointDrag={onWallEndpointDrag}
           onMoveDrag={onWallMoveDrag}
@@ -2102,6 +2095,8 @@ function Scene({
       {canPreviewTarget && (
         <DeletePreviewMesh
           target={activeTargetPreview}
+          wallGeometries={wallGeometries}
+          showOutline={targetPreviewShowsOutline(activeTargetPreview, selectedTarget)}
           rooms={rooms}
           walls={renderWalls}
           doors={doors}

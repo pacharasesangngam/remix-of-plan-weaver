@@ -1,0 +1,331 @@
+{
+  "source": "12-wall floorplan-project (1).json; solids projected with unchanged RightPanel opening helpers",
+  "pw": 20,
+  "ph": 20,
+  "inputs": [
+    {
+      "wall": {
+        "id": "w1",
+        "type": "wall",
+        "x1": 0.0777,
+        "y1": 0.2307,
+        "x2": 0.9153,
+        "y2": 0.2307,
+        "thicknessRatio": 0.035,
+        "wallHeight": 2.8,
+        "thickness": 0.15
+      },
+      "thickness": 0.15,
+      "solids": [
+        {
+          "tStart": 0,
+          "tEnd": 8.633026515151515,
+          "yStart": 0,
+          "yEnd": 2.8
+        },
+        {
+          "tStart": 8.633026515151515,
+          "tEnd": 10.818159090909091,
+          "yStart": 2.2,
+          "yEnd": 2.8
+        },
+        {
+          "tStart": 10.818159090909091,
+          "tEnd": 16.752,
+          "yStart": 0,
+          "yEnd": 2.8
+        }
+      ]
+    },
+    {
+      "wall": {
+        "id": "w2",
+        "type": "wall",
+        "x1": 0.0777,
+        "y1": 0.5516,
+        "x2": 0.2501,
+        "y2": 0.5516,
+        "thicknessRatio": 0.015625,
+        "wallHeight": 2.8,
+        "thickness": 0.15
+      },
+      "thickness": 0.15,
+      "solids": [
+        {
+          "tStart": 0,
+          "tEnd": 1.492875,
+          "yStart": 0,
+          "yEnd": 2.8
+        },
+        {
+          "tStart": 1.492875,
+          "tEnd": 3.1855833333333337,
+          "yStart": 2.2,
+          "yEnd": 2.8
+        },
+        {
+          "tStart": 3.1855833333333337,
+          "tEnd": 3.448,
+          "yStart": 0,
+          "yEnd": 2.8
+        }
+      ]
+    },
+    {
+      "wall": {
+        "id": "w3",
+        "type": "wall",
+        "x1": 0.2501,
+        "y1": 0.6036,
+        "x2": 0.447,
+        "y2": 0.6036,
+        "thicknessRatio": 0.019791663406241652,
+        "wallHeight": 2.8,
+        "thickness": 0.15
+      },
+      "thickness": 0.15,
+      "solids": [
+        {
+          "tStart": 0,
+          "tEnd": 3.9380000000000006,
+          "yStart": 0,
+          "yEnd": 2.8
+        }
+      ]
+    },
+    {
+      "wall": {
+        "id": "w4",
+        "type": "wall",
+        "x1": 0.0777,
+        "y1": 0.7391,
+        "x2": 0.447,
+        "y2": 0.7391,
+        "thicknessRatio": 0.019791666666666666,
+        "wallHeight": 2.8,
+        "thickness": 0.15
+      },
+      "thickness": 0.15,
+      "solids": [
+        {
+          "tStart": 0,
+          "tEnd": 3.585678030303029,
+          "yStart": 0,
+          "yEnd": 2.8
+        },
+        {
+          "tStart": 3.585678030303029,
+          "tEnd": 5.401492424242424,
+          "yStart": 2.2,
+          "yEnd": 2.8
+        },
+        {
+          "tStart": 5.401492424242424,
+          "tEnd": 7.386,
+          "yStart": 0,
+          "yEnd": 2.8
+        }
+      ]
+    },
+    {
+      "wall": {
+        "id": "w5",
+        "type": "wall",
+        "x1": 0.0777,
+        "y1": 0.9687,
+        "x2": 0.9471,
+        "y2": 0.9687,
+        "thicknessRatio": 0.035,
+        "wallHeight": 2.8,
+        "thickness": 0.15
+      },
+      "thickness": 0.15,
+      "solids": [
+        {
+          "tStart": 0,
+          "tEnd": 17.388,
+          "yStart": 0,
+          "yEnd": 2.8
+        }
+      ]
+    },
+    {
+      "wall": {
+        "id": "w6",
+        "type": "wall",
+        "x1": 0.0777,
+        "y1": 0.2307,
+        "x2": 0.0777,
+        "y2": 0.9687,
+        "thicknessRatio": 0.023958333333333335,
+        "wallHeight": 2.8,
+        "thickness": 0.15
+      },
+      "thickness": 0.15,
+      "solids": [
+        {
+          "tStart": 0,
+          "tEnd": 14.76,
+          "yStart": 0,
+          "yEnd": 2.8
+        }
+      ]
+    },
+    {
+      "wall": {
+        "id": "w7",
+        "type": "wall",
+        "x1": 0.2501,
+        "y1": 0.5516,
+        "x2": 0.2501,
+        "y2": 0.7391,
+        "thicknessRatio": 0.015625,
+        "wallHeight": 2.8,
+        "thickness": 0.15
+      },
+      "thickness": 0.15,
+      "solids": [
+        {
+          "tStart": 0,
+          "tEnd": 3.75,
+          "yStart": 0,
+          "yEnd": 2.8
+        }
+      ]
+    },
+    {
+      "wall": {
+        "id": "w8",
+        "type": "wall",
+        "x1": 0.3393,
+        "y1": 0.9062,
+        "x2": 0.3393,
+        "y2": 0.9687,
+        "thicknessRatio": 0.035,
+        "wallHeight": 2.8,
+        "thickness": 0.15
+      },
+      "thickness": 0.15,
+      "solids": [
+        {
+          "tStart": 0,
+          "tEnd": 1.25,
+          "yStart": 0,
+          "yEnd": 2.8
+        }
+      ]
+    },
+    {
+      "wall": {
+        "id": "w9",
+        "type": "wall",
+        "x1": 0.3701,
+        "y1": 0.7391,
+        "x2": 0.3701,
+        "y2": 0.9687,
+        "thicknessRatio": 0.011458333333333333,
+        "wallHeight": 2.8,
+        "thickness": 0.15
+      },
+      "thickness": 0.15,
+      "solids": [
+        {
+          "tStart": 0,
+          "tEnd": 0.25966666666666605,
+          "yStart": 0,
+          "yEnd": 2.8
+        },
+        {
+          "tStart": 0.25966666666666605,
+          "tEnd": 1.7388333333333321,
+          "yStart": 2.2,
+          "yEnd": 2.8
+        },
+        {
+          "tStart": 1.7388333333333321,
+          "tEnd": 4.5920000000000005,
+          "yStart": 0,
+          "yEnd": 2.8
+        }
+      ]
+    },
+    {
+      "wall": {
+        "id": "w10",
+        "type": "wall",
+        "x1": 0.447,
+        "y1": 0.2307,
+        "x2": 0.447,
+        "y2": 0.7391,
+        "thicknessRatio": 0.015625,
+        "wallHeight": 2.8,
+        "thickness": 0.15
+      },
+      "thickness": 0.15,
+      "solids": [
+        {
+          "tStart": 0,
+          "tEnd": 4.761,
+          "yStart": 0,
+          "yEnd": 2.8
+        },
+        {
+          "tStart": 4.761,
+          "tEnd": 6.240166666666668,
+          "yStart": 2.2,
+          "yEnd": 2.8
+        },
+        {
+          "tStart": 6.240166666666668,
+          "tEnd": 10.168,
+          "yStart": 0,
+          "yEnd": 2.8
+        }
+      ]
+    },
+    {
+      "wall": {
+        "id": "w11",
+        "type": "wall",
+        "x1": 0.6348,
+        "y1": 0.8188,
+        "x2": 0.6348,
+        "y2": 0.9687,
+        "thicknessRatio": 0.019791663406241652,
+        "wallHeight": 2.8,
+        "thickness": 0.15
+      },
+      "thickness": 0.15,
+      "solids": [
+        {
+          "tStart": 0,
+          "tEnd": 2.9980000000000007,
+          "yStart": 0,
+          "yEnd": 2.8
+        }
+      ]
+    },
+    {
+      "wall": {
+        "id": "w12",
+        "type": "wall",
+        "x1": 0.9153,
+        "y1": 0.0104,
+        "x2": 0.9153,
+        "y2": 0.9687,
+        "thicknessRatio": 0.035,
+        "wallHeight": 2.8,
+        "thickness": 0.15
+      },
+      "thickness": 0.15,
+      "solids": [
+        {
+          "tStart": 0,
+          "tEnd": 19.166,
+          "yStart": 0,
+          "yEnd": 2.8
+        }
+      ]
+    }
+  ]
+}

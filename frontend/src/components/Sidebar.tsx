@@ -206,7 +206,16 @@ const Sidebar = ({
                   <div className="pt-3">
                     <div className="mb-2 flex items-center gap-3 px-1">
                       <div className="rounded-xl bg-primary/10 p-2 text-primary"><Code className="h-4 w-4" /></div>
-                      <div><div className="text-sm font-medium text-foreground">JSON Output</div><div className="mt-0.5 text-xs text-muted-foreground">View or copy the current payload</div></div>
+                      <div className="min-w-0 flex-1"><div className="text-sm font-medium text-foreground">JSON Output</div><div className="mt-0.5 text-xs text-muted-foreground">View or copy the current payload</div></div>
+                      <button
+                        type="button"
+                        onClick={handleExportProject}
+                        aria-label="Download full project JSON"
+                        title="Download full project JSON"
+                        className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-border/55 bg-background text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                      >
+                        <Download className="h-4 w-4" />
+                      </button>
                     </div>
                     <div className="relative overflow-hidden rounded-[22px] border border-border/55 bg-background shadow-inner">
                       <button type="button" onClick={handleCopyJSON} className="absolute right-3 top-3 z-10 inline-flex h-9 items-center gap-1.5 rounded-full border border-border/55 bg-card/95 px-3 text-[11px] font-medium text-foreground shadow-sm transition-colors hover:bg-accent"><Copy className="h-3.5 w-3.5" />{copied ? "Copied" : "Copy"}</button>
