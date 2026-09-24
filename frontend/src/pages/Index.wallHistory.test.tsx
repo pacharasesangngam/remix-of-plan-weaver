@@ -43,6 +43,7 @@ afterEach(cleanup);
 
 it("commits only the edited wall as one action and synchronizes undo, redo, JSON and Generate 3D", () => {
     render(<Index />);
+    fireEvent.click(screen.getByText("อัปโหลดแปลน"));
     fireEvent.click(screen.getByText("Import"));
     fireEvent.click(screen.getByText("Back to Review"));
     expect(screen.getByText("Undo")).toBeDisabled();
@@ -64,6 +65,7 @@ it("commits only the edited wall as one action and synchronizes undo, redo, JSON
 
 it("persists a wall-attached opening edited in Review into 3D", () => {
     render(<Index />);
+    fireEvent.click(screen.getByText("อัปโหลดแปลน"));
     fireEvent.click(screen.getByText("Import"));
     fireEvent.click(screen.getByText("Back to Review"));
     fireEvent.click(screen.getByText("Create door"));

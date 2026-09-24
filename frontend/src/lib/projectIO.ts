@@ -5,6 +5,7 @@ export interface FloorPlanProject {
   app: "remix-of-plan-weaver";
   version: 1;
   meta: {
+    editorMode?: "upload" | "draw";
     unit: DimensionUnit;
     scale: number;
     planWidth: number;
@@ -23,6 +24,7 @@ export interface FloorPlanProject {
 }
 
 export const createFloorPlanProject = ({
+  editorMode,
   unit,
   scale,
   planWidth,
@@ -33,6 +35,7 @@ export const createFloorPlanProject = ({
   windows,
   image,
 }: {
+  editorMode?: "upload" | "draw";
   unit: DimensionUnit;
   scale: number;
   planWidth: number;
@@ -46,6 +49,7 @@ export const createFloorPlanProject = ({
   app: "remix-of-plan-weaver",
   version: 1,
   meta: {
+    ...(editorMode ? { editorMode } : {}),
     unit,
     scale,
     planWidth,
@@ -81,6 +85,7 @@ export const parseFloorPlanProject = (value: unknown): FloorPlanProject => {
     app: "remix-of-plan-weaver",
     version: 1,
     meta: {
+      ...(meta.editorMode === "draw" || meta.editorMode === "upload" ? { editorMode: meta.editorMode } : {}),
       unit: isDimensionUnit(meta.unit) ? meta.unit : "m",
       scale: typeof meta.scale === "number" ? meta.scale : 0,
       planWidth: typeof meta.planWidth === "number" ? meta.planWidth : 0,
