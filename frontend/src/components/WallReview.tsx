@@ -15,6 +15,7 @@ import { editWallGeometry, endpointPoint, findWallSnap, geometryChanged, project
 import { DEFAULT_WALL_THICKNESS_M, getWallThicknessM, resolvePlanDimensions, uniformWallThicknessM, wallStrokeWidthNormalized } from "@/lib/wallMetrics";
 import { createOpeningBboxFromWallPoints } from "@/lib/openingPlacement";
 import { advanceOpeningDraft, cancelOpeningDraft, isValidOpeningTarget, type OpeningDraftState } from "@/lib/openingInteraction";
+import { resolveOpeningWall } from "@/lib/openingAttachment";
 
 // ─────────────────────────────────────────────────────────────
 // TYPES
@@ -159,6 +160,7 @@ const WallReview = ({
     const [wallDrawMode, setWallDrawMode] = useState(false);
     const [openingDrawMode, setOpeningDrawMode] = useState<"door" | "window" | null>(null);
     const [openingDraft, setOpeningDraft] = useState<OpeningDraftState | null>(null);
+    const [attachmentCandidate, setAttachmentCandidate] = useState<{ kind: "door" | "window"; id: string; wallId: string | null } | null>(null);
     const [openingHoverWallId, setOpeningHoverWallId] = useState<string | null>(null);
     const [wallDraftStart, setWallDraftStart] = useState<CalibPoint | null>(null);
     const [wallDraftMouse, setWallDraftMouse] = useState<CalibPoint | null>(null);
@@ -794,8 +796,10 @@ const WallReview = ({
     // the opening is explicitly attached to a wall. Project its persisted bbox
     // onto that wall's physical axis so Review uses the same span as the 3D cutout.
     const openingWidthM = (opening: DetectedDoor | DetectedWindow): number | null => {
-        if (!calibrated || !opening.wallId || !opening.bbox) return null;
-        const wall = walls.find(item => item.id === opening.wallId);
+        if (!calibrated || !opening.bbox) return null;
+        const wall = opening.wallId
+            ? walls.find(item => item.id === opening.wallId) ?? null
+            : resolveOpeningWall(opening.bbox, walls, planDimensions.width, planDimensions.height).wall;
         if (!wall) return null;
 
         const start = { x: wall.x1 * planDimensions.width, y: wall.y1 * planDimensions.height };
@@ -963,6 +967,12 @@ const WallReview = ({
             const t = Math.max(0, Math.min(1, ((px - ax) * dx + (py - ay) * dy) / (dx * dx + dy * dy || 1)));
             return Math.hypot(px - (ax + t * dx), py - (ay + t * dy));
         };
+
+        if (attachmentCandidate) {
+            const targetWall = findOpeningWallAt(point, rect);
+            if (targetWall) setAttachmentCandidate({ ...attachmentCandidate, wallId: targetWall.id });
+            return;
+        }
 
         if (openingDrawMode) {
             const targetWall = findOpeningWallAt(point, rect);
@@ -1321,7 +1331,7 @@ const WallReview = ({
 
                                     {/* WALLS */}
                                     {layers.has("walls") && walls.map(wall => {
-                                        const isSel = selectedWallId === wall.id;
+                                        const isSel = selectedWallId === wall.id || attachmentCandidate?.wallId === wall.id;
                                         const displayWall = endpointDrag?.previewWalls.find(item => item.id === wall.id) ?? wall;
                                         const sw = Math.max(0.002, wallStrokeWidthNormalized(wall, planDimensions.width, planDimensions.height));
                                         const isManual = wall.id.startsWith("manual-wall-");
@@ -1659,6 +1669,10 @@ const WallReview = ({
                                 {(selectionType === "door" || selectionType === "window") && (() => {
                                     const opening = selectionType === "door" ? doors.find(item => item.id === selectedDoorId) : windows.find(item => item.id === selectedWindowId);
                                     if (!opening) return null;
+                                    const resolvedWall = opening.wallId
+                                        ? walls.find(wall => wall.id === opening.wallId) ?? null
+                                        : resolveOpeningWall(opening.bbox, walls, planDimensions.width, planDimensions.height).wall;
+                                    const attachmentActive = attachmentCandidate?.kind === selectionType && attachmentCandidate.id === opening.id;
                                     const widthM = openingWidthM(opening);
                                     const updateBbox = (field: keyof typeof opening.bbox, value: string) => {
                                         const numeric = Number(value);
@@ -1669,7 +1683,11 @@ const WallReview = ({
                                     };
                                     return <>
                                         <div className="flex items-center justify-between"><span className="text-sm font-semibold text-foreground">{selectionType === "door" ? "Door" : "Window"}</span><button onClick={dismissInspector} className="p-1 text-muted-foreground hover:text-foreground"><X className="w-4 h-4" /></button></div>
-                                        <p className="text-[11px] text-muted-foreground">Attached wall: {opening.wallId ?? "unresolved detection"}</p>
+                                        {resolvedWall ? <p className="text-[11px] text-muted-foreground">Attached wall: {resolvedWall.id}</p> : <p className="text-[11px] text-muted-foreground">Attached wall: Not identified · <button onClick={() => setAttachmentCandidate({ kind: selectionType, id: opening.id, wallId: null })} className="font-medium text-primary hover:underline">Select wall</button></p>}
+                                        {attachmentActive && <div className="rounded-md border border-primary/30 bg-primary/10 px-2 py-2 text-[11px] text-foreground">
+                                            {attachmentCandidate.wallId ? `Previewing attachment to ${attachmentCandidate.wallId}` : "Click a wall on the plan to preview the attachment"}
+                                            <div className="mt-2 flex gap-2"><button disabled={!attachmentCandidate.wallId} onClick={() => { if (!attachmentCandidate.wallId) return; if (selectionType === "door") onDoorUpdate?.(opening.id, "wallId", attachmentCandidate.wallId); else onWindowUpdate?.(opening.id, "wallId", attachmentCandidate.wallId); setAttachmentCandidate(null); }} className="rounded bg-primary px-2 py-1 text-[10px] font-medium text-primary-foreground disabled:opacity-50">Confirm</button><button onClick={() => setAttachmentCandidate(null)} className="rounded border border-border px-2 py-1 text-[10px]">Cancel</button></div>
+                                        </div>}
                                         <div className="rounded-md bg-muted/50 px-2 py-2 text-xs">
                                             <span className="text-muted-foreground">Width</span>
                                             <span className="ml-2 font-mono text-foreground">

@@ -28,6 +28,7 @@ import { DEFAULT_WALL_THICKNESS_M, getWallThicknessM, resolvePlanDimensions } fr
 import { createOpeningBboxFromWallPoints } from "@/lib/openingPlacement";
 import { advanceOpeningDraft, cancelOpeningDraft, isValidOpeningTarget, openingPreviewIsOnWall, type OpeningDraftState } from "@/lib/openingInteraction";
 import { capturesThreeTargetPointer, nextThreeSelection, nextThreeToolAfterCreation, type ThreeToolMode } from "@/lib/threeInteraction";
+import { resolveOpeningWall } from "@/lib/openingAttachment";
 
 interface RightPanelProps {
   rooms: Room[];
@@ -556,6 +557,7 @@ const computeGapIntervals = (
   wallHeightM: number,
   doors: DetectedDoor[],
   windows: DetectedWindow[],
+  allWalls: DetectedWallSegment[],
   pw = PLAN_SIZE,
   ph = PLAN_SIZE,
 ): GapInterval[] => {
@@ -564,6 +566,7 @@ const computeGapIntervals = (
   for (const door of doors) {
     if (!door.bbox) continue;
     if (door.wallId && door.wallId !== wall.id) continue;
+    if (!door.wallId && resolveOpeningWall(door.bbox, allWalls, pw, ph).wall?.id !== wall.id) continue;
     const proj = projectOpeningEdgesOntoWall(door.bbox, wall, wallLengthM, pw, ph);
     if (!proj) continue;
     raw.push({
@@ -576,6 +579,7 @@ const computeGapIntervals = (
   for (const win of windows) {
     if (!win.bbox) continue;
     if (win.wallId && win.wallId !== wall.id) continue;
+    if (!win.wallId && resolveOpeningWall(win.bbox, allWalls, pw, ph).wall?.id !== wall.id) continue;
     const proj = projectOpeningEdgesOntoWall(win.bbox, wall, wallLengthM, pw, ph);
     if (!proj) continue;
     raw.push({
@@ -732,6 +736,8 @@ function findBestWall(
   pw = PLAN_SIZE,
   ph = PLAN_SIZE,
 ): DetectedWallSegment | null {
+  return resolveOpeningWall(bbox, walls, pw, ph).wall;
+  /* Legacy nearest-wall implementation retained below for reference. */
   let best: DetectedWallSegment | null = null;
   let bestPerp = Infinity;
 
@@ -1047,6 +1053,7 @@ function WallSegmentMesh({
   wallHeight,
   doors,
   windows,
+  walls,
   geometry,
   onSelect,
   onPlacementHover,
@@ -1057,6 +1064,7 @@ function WallSegmentMesh({
   wallHeight: number;
   doors: DetectedDoor[];
   windows: DetectedWindow[];
+  walls: DetectedWallSegment[];
   geometry: THREE.BufferGeometry;
   onSelect?: (id: string, point?: NormalizedPoint) => void;
   onPlacementHover?: (wallId: string, point: NormalizedPoint) => void;
@@ -1090,7 +1098,7 @@ function WallSegmentMesh({
   const cx = (x1 + x2) / 2;
   const cz = (z1 + z2) / 2;
 
-  const gaps = computeGapIntervals(wall, wallLengthM, resolvedHeight, doors, windows, pw, ph);
+  const gaps = computeGapIntervals(wall, wallLengthM, resolvedHeight, doors, windows, walls, pw, ph);
   const solids = computeSolidSegments(wallLengthM, resolvedHeight, gaps);
 
   const getEventPoint = (point: THREE.Vector3): NormalizedPoint => ({
@@ -1933,7 +1941,7 @@ function Scene({
     const length = getWallLengthM(wall, pw, ph);
     const height = safeNum(wall.wallHeight, defaultWallHeight);
     return { wall, thickness: getWallThicknessM(wall, pw, ph),
-      solids: computeSolidSegments(length, height, computeGapIntervals(wall, length, height, doors, windows, pw, ph)) };
+      solids: computeSolidSegments(length, height, computeGapIntervals(wall, length, height, doors, windows, renderWalls, pw, ph)) };
   }), pw, ph), [renderWalls, doors, windows, defaultWallHeight, pw, ph]);
   useEffect(() => () => wallGeometries.forEach(geometry => geometry.dispose()), [wallGeometries]);
 
@@ -2033,6 +2041,7 @@ function Scene({
             wallHeight={defaultWallHeight}
             doors={doors}
             windows={windows}
+            walls={renderWalls}
             geometry={wallGeometries.get(wall.id)!}
             onSelect={capturesThreeTargetPointer(buildMode, "wall") ? (id, point) => onSelect({ type: "wall", id, point }) : undefined}
             onPlacementHover={
