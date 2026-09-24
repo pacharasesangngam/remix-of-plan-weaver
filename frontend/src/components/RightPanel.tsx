@@ -8,6 +8,7 @@ import type { BBox, NormalizedPoint, Room } from "@/types/floorplan";
 import type { DetectedWallSegment, DetectedDoor, DetectedWindow } from "@/types/detection";
 import { buildWallSolidGeometries } from "@/lib/wallSolidGeometry";
 import WallMeshHighlight from "./WallMeshHighlight";
+import MaterialSwatches from "./MaterialSwatches";
 import { targetPreviewShowsOutline } from "./wallHighlightState";
 import { exportFloorPlanGlb } from "@/lib/blenderExport";
 import {
@@ -2888,27 +2889,29 @@ const RightPanel = ({
             <button onClick={() => setViewPreset("perspective")} title="Perspective view" className="h-8 w-8 rotate-[30deg] transform rounded-sm border border-slate-300 bg-gradient-to-br from-white via-slate-100 to-slate-300 shadow-sm transition-transform hover:scale-110 dark:border-slate-600 dark:from-slate-200 dark:to-slate-400" />
           </div>
 
-          <div className="absolute bottom-20 right-4 z-20 flex w-[280px] flex-col-reverse gap-3">
-          <div className="w-full rounded-3xl border border-border bg-card/92 p-4 shadow-2xl backdrop-blur-md">
-            <div className={isDecorateOpen ? "mb-3 flex items-center justify-between" : "flex items-center justify-between"}>
-              <div className="flex items-center gap-2">
-                <Palette className="h-4 w-4 text-primary" />
-                <div>
-                  <div className="text-xs font-semibold text-foreground">Decorate</div>
-                  <div className="text-[10px] text-muted-foreground">
-                    {selection ? `${selection.type} selected` : "Click an object"}
+          <div className="absolute bottom-4 right-4 top-20 z-20 flex w-[320px] max-w-[calc(100%-2rem)] flex-col gap-3 pointer-events-none">
+          <div className="pointer-events-auto flex min-h-0 flex-col overflow-hidden rounded-2xl border border-border bg-card/95 p-4 shadow-xl backdrop-blur-md">
+            <div className={`flex shrink-0 items-center justify-between gap-2 ${isDecorateOpen ? "mb-3" : ""}`}>
+              <div className="flex min-w-0 items-center gap-2">
+                <Palette className="h-4 w-4 shrink-0 text-primary" />
+                <div className="min-w-0 break-words">
+                  <div className="text-sm font-semibold text-foreground">ปรับแต่งวัตถุ</div>
+                  <div className="text-xs text-muted-foreground" role="status" aria-live="polite">
+                    {selection ? `${({ room: "ห้อง", wall: "ผนัง", door: "ประตู", window: "หน้าต่าง" })[selection.type]} · ${selectedRoom?.name ?? selection.id}` : "เลือกวัตถุในฉากเพื่อเริ่มปรับแต่ง"}
                   </div>
                 </div>
               </div>
               <div className="flex items-center gap-1">
                 {selection && (
-                  <button onClick={() => setSelection(null)} className="rounded-lg p-1 text-muted-foreground hover:bg-accent hover:text-foreground" title="Clear selection">
-                    x
+                  <button onClick={() => setSelection(null)} className="rounded-lg p-2 text-muted-foreground hover:bg-accent hover:text-foreground" title="ยกเลิกการเลือก" aria-label="ยกเลิกการเลือก">
+                    <X className="h-4 w-4" />
                   </button>
                 )}
                 <button
                   onClick={() => setIsDecorateOpen((open) => !open)}
-                  className="rounded-lg p-1.5 text-muted-foreground hover:bg-accent hover:text-foreground"
+                  className="rounded-lg p-2 text-muted-foreground hover:bg-accent hover:text-foreground"
+                  aria-expanded={isDecorateOpen}
+                  aria-controls="decorate-content"
                   title={isDecorateOpen ? "Minimize Decorate" : "Expand Decorate"}
                   aria-label={isDecorateOpen ? "Minimize Decorate" : "Expand Decorate"}
                 >
@@ -2917,7 +2920,8 @@ const RightPanel = ({
               </div>
             </div>
 
-            {isDecorateOpen && <>
+            {isDecorateOpen && <div id="decorate-content" className="min-h-0 overflow-y-auto overscroll-contain pr-2 space-y-4 [&_label]:text-[13px] [&_input]:text-sm [&_select]:text-sm">
+            {selection && <p className="rounded-xl bg-primary/10 p-3 text-xs leading-5 text-muted-foreground">ปรับแล้วเห็นผลทันทีในฉาก · ใช้ปุ่มย้อนกลับเพื่อเลิกทำ</p>}
             {!selection && (
               <div className="space-y-3">
                 <div className="rounded-2xl border border-dashed border-border p-3 text-[11px] leading-5 text-muted-foreground">
@@ -2958,7 +2962,15 @@ const RightPanel = ({
 
             {selectedRoom && (
               <div className="space-y-3">
-                <div className="text-[11px] font-medium text-foreground">{selectedRoom.name}</div>
+                <fieldset className="space-y-3 rounded-xl border border-border p-3">
+                <legend className="px-1 text-sm font-semibold">สีและวัสดุพื้น</legend>
+                <MaterialSwatches label="กระเบื้อง" value={selectedRoom.tileCode ?? selectedRoomTile.code}
+                  onChange={code => applyTileToRoom(selectedRoom.id, code)}
+                  options={SCG_TILE_CATALOG.map(tile => ({ id: tile.code, name: tile.name, detail: `${tile.code} · ${tile.sizeCm} cm`, style: {
+                    backgroundColor: tile.baseHex,
+                    backgroundImage: tile.pattern === "marble" ? `repeating-linear-gradient(135deg, transparent 0 14px, ${tile.accentHex} 15px, transparent 17px 29px)` : tile.pattern === "terrazzo" ? `radial-gradient(${tile.accentHex} 1px, transparent 2px)` : tile.pattern === "stone" ? `repeating-linear-gradient(25deg, transparent 0 4px, ${tile.accentHex}55 5px 7px)` : `linear-gradient(${tile.groutHex} 1px, transparent 1px), linear-gradient(90deg, ${tile.groutHex} 1px, transparent 1px)`,
+                    backgroundSize: tile.pattern === "terrazzo" ? "9px 11px" : tile.pattern === "plain" ? "24px 24px" : undefined,
+                  } }))} />
                 <label className="block text-[11px] text-muted-foreground">
                   Floor tile code
                   <select
@@ -3004,8 +3016,11 @@ const RightPanel = ({
                     className="h-8 w-12 rounded border border-border bg-transparent"
                   />
                 </label>
+                </fieldset>
+                <fieldset className="space-y-3 rounded-xl border border-border p-3">
+                <legend className="px-1 text-sm font-semibold">ขนาด</legend>
                 <label className="block text-[11px] text-muted-foreground">
-                  Room height
+                  ความสูงห้อง (m)
                   <input
                     type="number"
                     min={1.8}
@@ -3015,11 +3030,14 @@ const RightPanel = ({
                     className="mt-1 h-9 w-full rounded-xl border border-border bg-background px-3 text-xs text-foreground"
                   />
                 </label>
+                </fieldset>
               </div>
             )}
 
             {selectedWall && (
               <div className="space-y-3">
+                <fieldset className="space-y-3 rounded-xl border border-border p-3">
+                <legend className="px-1 text-sm font-semibold">สีและวัสดุผนัง</legend>
                 <div className="flex items-center justify-between">
                   <span className="text-[11px] font-medium text-foreground">Wall</span>
                   <button
@@ -3029,34 +3047,23 @@ const RightPanel = ({
                     {selectedWall.type}
                   </button>
                 </div>
-                <label className="block text-[11px] text-muted-foreground">
-                  SCG paint code
-                  <select
-                    value={selectedWall.scgPaintCode ?? selectedWallPaint.code}
-                    onChange={(e) => applyPaintToWall(selectedWall.id, e.target.value)}
-                    className="mt-1 h-9 w-full rounded-xl border border-border bg-background px-3 text-xs text-foreground"
-                  >
-                    {SCG_PAINT_CATALOG.map((paint) => (
-                      <option key={paint.code} value={paint.code}>
-                        {paint.code} - {paint.name}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-                <label className="block text-[11px] text-muted-foreground">
-                  Wall texture
-                  <select
-                    value={selectedWall.wallTexture ?? "painted"}
-                    onChange={(e) => onWallUpdate?.(selectedWall.id, "wallTexture", e.target.value)}
-                    className="mt-1 h-9 w-full rounded-xl border border-border bg-background px-3 text-xs text-foreground"
-                  >
-                    {WALL_TEXTURE_CATALOG.map((texture) => (
-                      <option key={texture.id} value={texture.id}>
-                        {texture.name}
-                      </option>
-                    ))}
-                  </select>
-                </label>
+                <MaterialSwatches label="สีทาผนัง" value={selectedWall.wallColor && selectedWall.wallColor !== selectedWallPaint.hex ? undefined : selectedWall.scgPaintCode ?? selectedWallPaint.code}
+                  onChange={code => applyPaintToWall(selectedWall.id, code)}
+                  options={SCG_PAINT_CATALOG.map(paint => ({ id: paint.code, name: paint.name, detail: paint.code, style: { backgroundColor: paint.hex } }))} />
+                <MaterialSwatches label="พื้นผิวผนัง" value={selectedWall.wallTexture ?? "painted"}
+                  onChange={id => onWallUpdate?.(selectedWall.id, "wallTexture", id)}
+                  options={WALL_TEXTURE_CATALOG.map(texture => ({ id: texture.id, name: texture.name, style: {
+                    backgroundColor: selectedWall.wallColor ?? selectedWallPaint.hex,
+                    backgroundImage: ({
+                      painted: "none",
+                      plaster: "radial-gradient(#0002 0.5px, transparent 1px)",
+                      concrete: "radial-gradient(ellipse at 25% 40%, #0003, transparent 65%), radial-gradient(#0002 1px, transparent 2px)",
+                      brick: "linear-gradient(#0004 2px, transparent 2px), repeating-linear-gradient(90deg, #0003 0 2px, transparent 2px 32px)",
+                      "vertical-panel": "repeating-linear-gradient(90deg, #0003 0 2px, #fff3 2px 4px, transparent 4px 16px)",
+                      "stone-block-panel": "repeating-linear-gradient(0deg, #0003 0 3px, transparent 3px 17px), repeating-linear-gradient(90deg, #fff5 0 3px, #0002 3px 25px, transparent 25px 47px)",
+                    })[texture.id],
+                    backgroundSize: texture.id === "plaster" ? "4px 4px" : texture.id === "brick" ? "32px 16px" : undefined,
+                  } }))} />
                 <label className="flex items-center justify-between gap-3 text-[11px] text-muted-foreground">
                   Wall color
                   <input
@@ -3066,6 +3073,9 @@ const RightPanel = ({
                     className="h-8 w-12 rounded border border-border bg-transparent"
                   />
                 </label>
+                </fieldset>
+                <fieldset className="space-y-3 rounded-xl border border-border p-3">
+                <legend className="px-1 text-sm font-semibold">ขนาดผนัง</legend>
                 <label className="block text-[11px] text-muted-foreground">
                   Width / thickness (m)
                   <input
@@ -3099,6 +3109,7 @@ const RightPanel = ({
                     className="mt-1 h-9 w-full rounded-xl border border-border bg-background px-3 text-xs text-foreground"
                   />
                 </label>
+                </fieldset>
                 {/* <div className="grid grid-cols-2 gap-2">
                   <button onClick={() => setBuildMode("door")} className="inline-flex items-center justify-center gap-1 rounded-xl border border-border bg-background px-3 py-2 text-[11px] text-foreground hover:bg-accent">
                     <Plus className="h-3 w-3" /> Door
@@ -3111,10 +3122,8 @@ const RightPanel = ({
             )}
 
             {(selectedDoor || selectedWindow) && (
-              <div className="space-y-3">
-                <div className="text-[11px] font-medium text-foreground">
-                  {selectedDoor ? "Door" : "Window"}
-                </div>
+              <fieldset className="space-y-3 rounded-xl border border-border p-3">
+                <legend className="px-1 text-sm font-semibold">รุ่นและสีวัสดุ</legend>
                 {selectedDoor ? (
                   <>
                     <label className="block text-[11px] text-muted-foreground">
@@ -3153,7 +3162,7 @@ const RightPanel = ({
                       />
                     </label>
                     <label className="flex items-center justify-between gap-3 rounded-xl border border-border bg-background px-3 py-2 text-[11px] text-muted-foreground">
-                      Use Blender GLB
+                      ใช้โมเดลรายละเอียดสูง
                       <input
                         type="checkbox"
                         checked={selectedDoor.useBlenderModel === "true"}
@@ -3161,9 +3170,6 @@ const RightPanel = ({
                         className="h-4 w-4"
                       />
                     </label>
-                    <div className="rounded-2xl border border-border bg-background px-3 py-2 text-[10px] leading-4 text-muted-foreground">
-                      GLB path: {selectedDoorOption.modelUrl ?? "none"}
-                    </div>
                   </>
                 ) : (
                   <>
@@ -3203,7 +3209,7 @@ const RightPanel = ({
                       />
                     </label>
                     <label className="flex items-center justify-between gap-3 rounded-xl border border-border bg-background px-3 py-2 text-[11px] text-muted-foreground">
-                      Use Blender GLB
+                      ใช้โมเดลรายละเอียดสูง
                       <input
                         type="checkbox"
                         checked={selectedWindow?.useBlenderModel === "true"}
@@ -3211,12 +3217,9 @@ const RightPanel = ({
                         className="h-4 w-4"
                       />
                     </label>
-                    <div className="rounded-2xl border border-border bg-background px-3 py-2 text-[10px] leading-4 text-muted-foreground">
-                      GLB path: {selectedWindowOption.modelUrl ?? "none"}
-                    </div>
                   </>
                 )}
-              </div>
+              </fieldset>
             )}
 
             {selection && !selectedRoom && (
@@ -3228,10 +3231,11 @@ const RightPanel = ({
                 Delete selected
               </button>
             )}
-            </>}
+            </div>}
           </div>
 
-          <div className="w-full rounded-2xl border border-border bg-card/95 p-3 shadow-xl backdrop-blur-md">
+          <details className="pointer-events-auto shrink-0 rounded-2xl border border-border bg-card/95 p-3 shadow-xl backdrop-blur-md">
+            <summary className="cursor-pointer text-sm font-medium">วัสดุในโปรเจกต์</summary>
             <div className="mb-2 flex items-center gap-2">
               <div>
                 <p className="text-[11px] font-semibold text-foreground">Material schedule</p>
@@ -3255,7 +3259,7 @@ const RightPanel = ({
                 </div>
               ))}
             </div>
-          </div>
+          </details>
 
           </div>
 

@@ -5,9 +5,12 @@ import Sidebar from "@/components/Sidebar";
 import RightPanel from "@/components/RightPanel";
 import WallReview from "@/components/WallReview";
 import SplashScreen from "@/components/SplashScreen";
+import StartScreen from "@/components/StartScreen";
+import DrawPlan from "@/components/DrawPlan";
+import { DRAW_PLAN_SIZE } from "@/lib/manualPlan";
 import { detectFloorPlan } from "@/services/floorplanAI";
 import type { FloorPlanProject } from "@/lib/projectIO";
-import { createFloorPlanProject } from "@/lib/projectIO";
+import { createFloorPlanProject, downloadProjectJson } from "@/lib/projectIO";
 import { initialHistory, projectHistoryReducer, emptyProject, type ProjectState, type ActionInfo } from "@/lib/projectHistory";
 import { ProjectActionContext, ProjectInputActions, isNativeUndoTarget } from "@/components/ProjectActionContext";
 import { toast } from "@/hooks/use-toast";
@@ -21,6 +24,8 @@ const Index = () => {
   const { theme, setTheme } = useTheme();
   const [mounted, setMounted]           = useState(false);
   const [showSplash, setShowSplash]   = useState(true);
+  const [workflow, setWorkflow] = useState<"upload" | "draw" | null>(null);
+  const [showStart, setShowStart] = useState(true);
   const [mode, setMode]               = useState<AppMode>("simple");
   const [imageUrl, setImageUrl]       = useState<string | null>(null);
   const [imageDataUrl, setImageDataUrl] = useState<string | null>(null);
@@ -204,6 +209,8 @@ const Index = () => {
   const handleGenerate = useCallback(() => { dispatch({ type: "commit" }); setGenerated(true); }, []);
 
   const handleProjectImport = useCallback((project: FloorPlanProject) => {
+    setWorkflow(project.meta.editorMode ?? "upload");
+    setShowStart(false);
     const importedImageUrl = project.image?.dataUrl ?? null;
     setImageUrl(importedImageUrl);
     setImageDataUrl(importedImageUrl);
@@ -224,6 +231,7 @@ const Index = () => {
 
   const floorPlanData: FloorPlanData = { meta: { unit, scale }, rooms };
   const projectData = createFloorPlanProject({
+    editorMode: workflow ?? "upload",
     unit,
     scale,
     planWidth: planW,
@@ -244,25 +252,35 @@ const Index = () => {
   // Use the clean preprocessed image (same coordinate space as detected walls/rooms).
   // Falls back to the annotated preview, then the original uploaded image.
   const wallReviewBackgroundUrl = cleanImageUrl ?? imageUrl;
+  const chooseWorkflow = (next: "upload" | "draw") => {
+    if (workflow === next) { setShowStart(false); return; }
+    if (workflow && (imageUrl || walls.length || rooms.length) && !window.confirm("เริ่มโหมดใหม่จะล้างงานปัจจุบัน กรุณาบันทึกโปรเจกต์ก่อน ต้องการเริ่มใหม่หรือไม่?")) return;
+    handleClear();
+    setWorkflow(next);
+    setShowStart(false);
+    if (next === "draw") dispatch({ type: "reset", project: { ...emptyProject(), planW: DRAW_PLAN_SIZE, planH: DRAW_PLAN_SIZE, scale: DRAW_PLAN_SIZE / 1000, screenPpm: 1000 / DRAW_PLAN_SIZE } });
+  };
   return (
     <ProjectActionContext.Provider value={actions}><ProjectInputActions>
       {showSplash && <SplashScreen onComplete={() => setShowSplash(false)} />}
       <div className="h-screen flex flex-col bg-background overflow-hidden">
         <header className="shrink-0 border-b border-border bg-card/50 backdrop-blur-sm">
-          <div className="px-6 py-3 flex items-center justify-between">
+          <div className="px-4 py-3 flex flex-wrap gap-3 items-center justify-between">
             <div className="flex items-center gap-3">
-              {generated && (
+              {generated && !showStart && (
                 <button
                   onClick={() => { dispatch({ type: "cancel" }); setGenerated(false); }}
                   className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors group mr-1"
                 >
                   <ChevronLeft className="w-3.5 h-3.5 group-hover:-translate-x-0.5 transition-transform" />
-                  Back to Review
+                  {workflow === "draw" ? "กลับไปวาด 2D" : "Back to Review"}
                 </button>
               )}
               <h1 className="text-sm font-semibold text-foreground tracking-tight font-sans">Sketch to Spec</h1>
             </div>
             <div className="flex items-center gap-2">
+            {workflow && <button className="rounded-xl border px-3 py-2 text-xs hover:bg-accent" onClick={() => downloadProjectJson(projectData)}>บันทึกโปรเจกต์</button>}
+            {!showStart && <button disabled={detecting} className="rounded-xl border px-3 py-2 text-xs hover:bg-accent disabled:opacity-50" onClick={() => setShowStart(true)}>เลือกโหมด</button>}
             <button
               onClick={() => setTheme(theme === "dark" ? "light" : "dark")}
               className="inline-flex items-center gap-2 rounded-xl border border-border bg-card px-3 py-2 text-xs text-muted-foreground transition-colors hover:text-foreground"
@@ -275,8 +293,11 @@ const Index = () => {
           </div>
         </header>
 
-        <div className="flex-1 flex min-h-0">
-          <Sidebar
+        {showStart ? <StartScreen onChoose={chooseWorkflow} onImport={project => {
+          if (workflow && (imageUrl || rooms.length || walls.length) && !window.confirm("เปิดโปรเจกต์นี้แทนงานปัจจุบัน? กรุณาบันทึกงานเดิมก่อน")) return;
+          handleProjectImport(project);
+        }} /> : <div className="flex-1 flex min-h-0">
+          {workflow !== "draw" && <Sidebar
             mode={mode}
             unit={unit}
             imageUrl={imageUrl}
@@ -300,9 +321,11 @@ const Index = () => {
             floorPlanData={floorPlanData}
             projectData={projectData}
             onProjectImport={handleProjectImport}
-          />
+          />}
 
-          {detecting ? (
+          {workflow === "draw" && !generated ? <DrawPlan project={editorHistory.present} onEdit={editProject} onGenerate={handleGenerate}
+            canUndo={editorHistory.past.length > 0 || !!editorHistory.pending} canRedo={editorHistory.future.length > 0 && !editorHistory.pending}
+            onUndo={() => undoEditorAction("review")} onRedo={() => redoEditorAction("review")} /> : detecting ? (
             <div className="flex-1 flex flex-col items-center justify-center gap-5">
               <Loader2 className="w-10 h-10 text-primary animate-spin" />
               <p className="text-sm text-muted-foreground">AI กำลังวิเคราะห์แปลนผัง…</p>
@@ -388,7 +411,7 @@ const Index = () => {
               onRedo={() => redoEditorAction("3d")}
             />
           )}
-        </div>
+        </div>}
       </div>
     </ProjectInputActions></ProjectActionContext.Provider>
   );
