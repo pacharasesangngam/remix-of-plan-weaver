@@ -1,10 +1,22 @@
+import { parseConfirmedDimensions, type ConfirmedDimension } from "./confirmedDimensions";
 import type { DimensionUnit, Room } from "@/types/floorplan";
 import type { DetectedDoor, DetectedWallSegment, DetectedWindow } from "@/types/detection";
+
+import { hasCalibration, type CalibrationStatus } from "./wallMetrics";
+
+export const savedCalibrationStatus = (meta: { calibrationStatus?: unknown; editorMode?: unknown; scale: number; planWidth: number; planHeight: number }): CalibrationStatus => {
+  // Legacy manual drawings have a metric canvas. Uploaded legacy plans need
+  // recalibration because positive dimensions alone do not establish provenance.
+  const status = meta.calibrationStatus ?? (meta.editorMode === "draw" ? "calibrated" : "uncalibrated");
+  return hasCalibration(status, meta.scale, meta.planWidth, meta.planHeight) ? "calibrated" : "uncalibrated";
+};
 
 export interface FloorPlanProject {
   app: "remix-of-plan-weaver";
   version: 1;
   meta: {
+    confirmedDimensions?: ConfirmedDimension[];
+    calibrationStatus?: CalibrationStatus;
     editorMode?: "upload" | "draw";
     unit: DimensionUnit;
     scale: number;
@@ -24,6 +36,8 @@ export interface FloorPlanProject {
 }
 
 export const createFloorPlanProject = ({
+  confirmedDimensions,
+  calibrationStatus,
   editorMode,
   unit,
   scale,
@@ -35,6 +49,8 @@ export const createFloorPlanProject = ({
   windows,
   image,
 }: {
+  confirmedDimensions?: ConfirmedDimension[];
+  calibrationStatus?: CalibrationStatus;
   editorMode?: "upload" | "draw";
   unit: DimensionUnit;
   scale: number;
@@ -49,6 +65,8 @@ export const createFloorPlanProject = ({
   app: "remix-of-plan-weaver",
   version: 1,
   meta: {
+    ...(confirmedDimensions?.length ? { confirmedDimensions } : {}),
+    calibrationStatus: savedCalibrationStatus({ calibrationStatus, editorMode, scale, planWidth, planHeight }),
     ...(editorMode ? { editorMode } : {}),
     unit,
     scale,
@@ -68,6 +86,9 @@ const isObject = (value: unknown): value is Record<string, unknown> =>
 const isDimensionUnit = (value: unknown): value is DimensionUnit =>
   value === "m" || value === "cm" || value === "mm" || value === "ft";
 
+const safeDimension = (value: unknown): number =>
+  typeof value === "number" && Number.isFinite(value) && value > 0 ? value : 0;
+
 export const parseFloorPlanProject = (value: unknown): FloorPlanProject => {
   if (!isObject(value)) throw new Error("Project file is not a JSON object.");
 
@@ -85,11 +106,14 @@ export const parseFloorPlanProject = (value: unknown): FloorPlanProject => {
     app: "remix-of-plan-weaver",
     version: 1,
     meta: {
+      ...(meta.confirmedDimensions ? { confirmedDimensions: parseConfirmedDimensions(meta.confirmedDimensions, walls as DetectedWallSegment[], safeDimension(meta.planWidth), safeDimension(meta.planHeight)) } : {}),
+      calibrationStatus: savedCalibrationStatus({ calibrationStatus: meta.calibrationStatus, editorMode: meta.editorMode,
+        scale: meta.scale as number, planWidth: meta.planWidth as number, planHeight: meta.planHeight as number }),
       ...(meta.editorMode === "draw" || meta.editorMode === "upload" ? { editorMode: meta.editorMode } : {}),
       unit: isDimensionUnit(meta.unit) ? meta.unit : "m",
-      scale: typeof meta.scale === "number" ? meta.scale : 0,
-      planWidth: typeof meta.planWidth === "number" ? meta.planWidth : 0,
-      planHeight: typeof meta.planHeight === "number" ? meta.planHeight : 0,
+      scale: safeDimension(meta.scale),
+      planWidth: safeDimension(meta.planWidth),
+      planHeight: safeDimension(meta.planHeight),
     },
     image: isObject(value.image) && typeof value.image.dataUrl === "string"
       ? {

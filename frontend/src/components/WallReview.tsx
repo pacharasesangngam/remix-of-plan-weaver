@@ -1,4 +1,5 @@
-import { useState, useRef, useEffect, useCallback } from "react";
+import { confirmCalibration, type ConfirmedDimension } from "@/lib/confirmedDimensions";
+import { useState, useRef, useEffect, useCallback, useMemo } from "react";
 import {
     CheckCircle2, AlertCircle, Pencil, Check, X,
     ArrowRight, Zap, ChevronLeft, ChevronRight,
@@ -11,8 +12,10 @@ import { UNITS } from "@/types/floorplan";
 import { Button } from "@/components/ui/button";
 import { useProjectActions } from "@/components/ProjectActionContext";
 import { Input } from "@/components/ui/input";
-import { editWallGeometry, endpointPoint, findWallSnap, geometryChanged, projectToWall, screenDistance, SNAP_PX, wallSnapTargets } from "@/lib/wallGeometry";
+import { editWallGeometry, endpointPoint, findWallSnap, geometryChanged, projectToWall, screenDistance, snapWallTranslation, wallConnectionTargets, SNAP_PX, wallSnapTargets, type WallSnap } from "@/lib/wallGeometry";
 import { DEFAULT_WALL_THICKNESS_M, getWallThicknessM, resolvePlanDimensions, uniformWallThicknessM, wallStrokeWidthNormalized } from "@/lib/wallMetrics";
+import { defaultRenderWallHeight, wallSolidInputs, wallFootprintPaths } from "@/lib/wallRenderGeometry";
+import { proposeWallLength, chooseLengthAnchor, type GeometrySnapshot, type LengthRequest } from "@/lib/wallLengthEdit";
 import { createOpeningBboxFromWallPoints } from "@/lib/openingPlacement";
 import { advanceOpeningDraft, cancelOpeningDraft, isValidOpeningTarget, type OpeningDraftState } from "@/lib/openingInteraction";
 import { resolveOpeningWall } from "@/lib/openingAttachment";
@@ -20,7 +23,12 @@ import { resolveOpeningWall } from "@/lib/openingAttachment";
 // ─────────────────────────────────────────────────────────────
 // TYPES
 // ─────────────────────────────────────────────────────────────
+import { getMeasuredRoomArea, hasCalibration, type CalibrationStatus } from "@/lib/wallMetrics";
+
 interface WallReviewProps {
+    confirmedDimensions?: ConfirmedDimension[];
+    onConfirmedCalibration?: (dimensions: ConfirmedDimension[]) => void;
+    calibrationStatus?: CalibrationStatus;
     rooms: Room[];
     unit: DimensionUnit;
     imageUrl: string | null;
@@ -39,6 +47,7 @@ interface WallReviewProps {
     onWallUpdate?: (id: string, field: keyof DetectedWallSegment, value: number | string) => void;
     onWallAdd?: (wall: DetectedWallSegment) => void;
     onWallDelete?: (id: string) => void;
+    onWallLengthCommit?: (request: LengthRequest, base: GeometrySnapshot, width: number, height: number) => void;
     onWallGeometryCommit?: (walls: DetectedWallSegment[]) => void;
     onDoorAdd?: (door: DetectedDoor) => void;
     onDoorUpdate?: (id: string, field: keyof DetectedDoor, value: DetectedDoor[keyof DetectedDoor]) => void;
@@ -77,7 +86,11 @@ interface EndpointDrag {
     origin: CalibPoint;
     pointerId: number;
     preview: DetectedWallSegment;
-    snapTarget: CalibPoint | null;
+    snapTarget: WallSnap | null;
+    connectionTargets: WallSnap[];
+    feedbackSize: { width: number; height: number };
+    reverseBlocked: Set<string>;
+    blockedEndpoints: Record<"start" | "end", Set<string>>;
     blockedTargets: Set<string>;
 }
 
@@ -107,16 +120,19 @@ const CONF_STYLE: Record<Room["confidence"], { stroke: string; label: string; la
 const DRAG_HIT = 0.045;
 const ENDPOINT_HIT_RADIUS_PX = 12;
 const ZOOM_PRESETS = [0.25, 0.5, 0.75, 1, 1.25, 1.5, 2, 3, 4];
+const EMPTY_WALLS: DetectedWallSegment[] = [];
+const EMPTY_DOORS: DetectedDoor[] = [];
+const EMPTY_WINDOWS: DetectedWindow[] = [];
 
 // ─────────────────────────────────────────────────────────────
 // COMPONENT
 // ─────────────────────────────────────────────────────────────
 const WallReview = ({
-    rooms, unit, imageUrl,
+    rooms: storedRooms, unit, imageUrl, confirmedDimensions, onConfirmedCalibration,
     backgroundImageUrl,
-    walls = [], doors = [], windows = [],
-    scale, planWidth = 0, planHeight = 0, onScaleChange, onPlanSizeChange,
-    onPpmChange, onRoomUpdate, onRoomDelete, onWallUpdate, onWallAdd, onWallDelete, onWallGeometryCommit, onDoorAdd, onDoorUpdate, onDoorDelete, onWindowAdd, onWindowUpdate, onWindowDelete, canUndo = false, canRedo = false, onUndo, onRedo, onGenerate,
+    walls = EMPTY_WALLS, doors: storedDoors = EMPTY_DOORS, windows: storedWindows = EMPTY_WINDOWS,
+    calibrationStatus = "uncalibrated", scale, planWidth = 0, planHeight = 0, onScaleChange, onPlanSizeChange,
+    onPpmChange, onRoomUpdate, onRoomDelete, onWallUpdate, onWallAdd, onWallDelete, onWallGeometryCommit, onWallLengthCommit, onDoorAdd, onDoorUpdate, onDoorDelete, onWindowAdd, onWindowUpdate, onWindowDelete, canUndo = false, canRedo = false, onUndo, onRedo, onGenerate,
     wallHeightMeter = 2.8, onWallHeightChange,
 }: WallReviewProps) => {
 
@@ -141,6 +157,8 @@ const WallReview = ({
     const [localWallH, setLocalWallH] = useState(() => wallHeightMeter);
     const [localWallThickness, setLocalWallThickness] = useState(DEFAULT_WALL_THICKNESS_M);
     const [wallDefaultsEditing, setWallDefaultsEditing] = useState(false);
+    const [lengthDraft, setLengthDraft] = useState<{ wallId: string; value: string } | null>(null);
+    const [lengthError, setLengthError] = useState<string | null>(null);
     const [endpointDrag, setEndpointDrag] = useState<EndpointDrag | null>(null);
     const endpointDragRef = useRef<EndpointDrag | null>(null);
     const suppressEndpointClickRef = useRef(false);
@@ -152,7 +170,8 @@ const WallReview = ({
     }, [walls]);
 
     // Calibration — restore "applied" state when returning from 3D view
-    const [calibPhase,  setCalibPhase]  = useState<CalibPhase>(() => scale > 0 ? "applied" : "idle");
+    const [calibPhase,  setCalibPhase]  = useState<CalibPhase>(() => hasCalibration(calibrationStatus, scale, planWidth, planHeight) ? "applied" : "idle");
+    const [calibrationEndpoint, setCalibrationEndpoint] = useState<CalibPoint | null>(null);
     const [calibPts,    setCalibPts]    = useState<CalibPoint[]>([]);
     const [calibLength, setCalibLength] = useState("");
     const [calibUnit, setCalibUnit] = useState<DimensionUnit>(unit);
@@ -162,6 +181,7 @@ const WallReview = ({
     const [openingDraft, setOpeningDraft] = useState<OpeningDraftState | null>(null);
     const [attachmentCandidate, setAttachmentCandidate] = useState<{ kind: "door" | "window"; id: string; wallId: string | null } | null>(null);
     const [openingHoverWallId, setOpeningHoverWallId] = useState<string | null>(null);
+    const [wallDrawEndpoint, setWallDrawEndpoint] = useState<CalibPoint | null>(null);
     const [wallDraftStart, setWallDraftStart] = useState<CalibPoint | null>(null);
     const [wallDraftMouse, setWallDraftMouse] = useState<CalibPoint | null>(null);
     const [addMenuOpen, setAddMenuOpen] = useState(false);
@@ -198,7 +218,46 @@ const WallReview = ({
 
     // ── scale ใช้งานได้จริงเมื่อ calibrate แล้วเท่านั้น ──────
     const planDimensions = resolvePlanDimensions(planWidth, planHeight);
-    const calibrated = scale > 0;
+    const calibrated = hasCalibration(calibrationStatus, scale, planWidth, planHeight);
+    const sourceGeometry = useMemo(() => ({ walls, rooms: storedRooms, doors: storedDoors, windows: storedWindows, confirmedDimensions }), [walls, storedRooms, storedDoors, storedWindows, confirmedDimensions]);
+    const rooms = storedRooms, doors = storedDoors, windows = storedWindows;
+    const renderWalls = endpointDrag?.previewWalls ?? walls;
+    // Feedback follows the displayed preview, including pointer-down and a
+    // rejected move that restores the original wall. It never selects a snap.
+    const dragConnectionTargets = useMemo(() => {
+        if (!endpointDrag) return [];
+        const connections = endpointDrag.endpoint
+            ? wallConnectionTargets(endpointDrag.preview, endpointDrag.previewWalls, endpointDrag.feedbackSize)
+            : endpointDrag.connectionTargets;
+        return [...(endpointDrag.snapTarget ? [endpointDrag.snapTarget] : []), ...connections];
+    }, [endpointDrag]);
+    // A connection marker supplies the endpoint decoration without stacking dots.
+    const hasDragConnectionAt = (point: CalibPoint) => dragConnectionTargets.some(target =>
+        Math.hypot(target.x - point.x, target.y - point.y) < 1e-10);
+    const defaultWallHeight = defaultRenderWallHeight(rooms);
+    useEffect(() => { setLengthDraft(null); setLengthError(null); }, [sourceGeometry, planWidth, planHeight, scale, selectedWallId]);
+    const commitLength = () => {
+        if (!lengthDraft || !calibrated) return;
+        const current = walls.find(w => w.id === lengthDraft.wallId);
+        const target = Number(lengthDraft.value);
+        if (current && Math.abs(Math.hypot((current.x2 - current.x1) * planDimensions.width,
+            (current.y2 - current.y1) * planDimensions.height) - target) < 1e-7) { setLengthDraft(null); return; }
+        const anchor = chooseLengthAnchor(sourceGeometry, lengthDraft.wallId, target, planDimensions.width, planDimensions.height);
+        const request = { wallId: lengthDraft.wallId, length: target, anchor };
+        const candidate = proposeWallLength(sourceGeometry, request, planDimensions.width, planDimensions.height);
+        if (candidate.ok === false) { setLengthError(candidate.reason); return; }
+        onWallLengthCommit?.(request, sourceGeometry, planDimensions.width, planDimensions.height);
+        setLengthDraft(null);
+        setLengthError(null);
+    };
+    const footprintPaths = useMemo(() => wallFootprintPaths(wallSolidInputs(
+        renderWalls, doors, windows, defaultWallHeight, planDimensions.width, planDimensions.height),
+        planDimensions.width, planDimensions.height),
+        [renderWalls, doors, windows, defaultWallHeight, planDimensions.width, planDimensions.height]);
+
+    useEffect(() => {
+        setCalibPhase(calibrated ? "applied" : "idle");
+    }, [calibrated]);
 
     // The base plane is fitted to the workspace. Zoom and pan are applied later as
     // a shared visual transform, so they never alter plan coordinates.
@@ -279,6 +338,7 @@ const WallReview = ({
         setWallDrawMode(false);
         setWallDraftStart(null);
         setWallDraftMouse(null);
+        setWallDrawEndpoint(null);
     };
 
     const stopOpeningDraw = () => {
@@ -309,6 +369,7 @@ const WallReview = ({
         setWallDrawMode(true);
         setWallDraftStart(null);
         setWallDraftMouse(null);
+        setWallDrawEndpoint(null);
     };
 
     const undoLastManualWall = () => {
@@ -344,10 +405,27 @@ const WallReview = ({
         return true;
     };
 
+    // CSS-pixel radius stays consistent across fit, zoom and aspect ratio.
+    const nearestCalibrationEndpoint = useCallback((point: CalibPoint): CalibPoint | null => {
+        const bounds = overlayRef.current?.getBoundingClientRect();
+        if (!bounds || bounds.width <= 0 || bounds.height <= 0) return null;
+        let closest: CalibPoint | null = null;
+        let distance = ENDPOINT_HIT_RADIUS_PX;
+        for (const wall of walls) for (const endpoint of ["start", "end"] as const) {
+            const candidate = endpointPoint(wall, endpoint);
+            const d = Math.hypot((candidate.x - point.x) * bounds.width, (candidate.y - point.y) * bounds.height);
+            if (d < distance) { closest = candidate; distance = d; }
+        }
+        return closest;
+    }, [walls]);
+
     const onWallDrawPointerDown = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
         e.preventDefault();
-        const pt = evToNorm(e);
-        if (!pt) return;
+        const raw = evToNorm(e);
+        if (!raw) return;
+        const endpoint = nearestCalibrationEndpoint(raw);
+        const pt = endpoint ?? raw;
+        setWallDrawEndpoint(endpoint);
         if (!wallDraftStart) {
             setWallDraftStart(pt);
             setWallDraftMouse(pt);
@@ -357,26 +435,35 @@ const WallReview = ({
         setWallDraftStart(null);
         setWallDraftMouse(null);
         if (created) stopWallDraw();
-    }, [wallDraftStart, walls, imgSize, onWallAdd]);
+    }, [wallDraftStart, walls, imgSize, onWallAdd, nearestCalibrationEndpoint]);
 
     const onWallDrawPointerMove = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
-        const pt = evToNorm(e);
-        if (pt) setWallDraftMouse(pt);
-    }, []);
+        const raw = evToNorm(e);
+        const endpoint = raw ? nearestCalibrationEndpoint(raw) : null;
+        setWallDrawEndpoint(endpoint);
+        setWallDraftMouse(endpoint ?? raw);
+    }, [nearestCalibrationEndpoint]);
 
     const onWallDrawPointerLeave = useCallback(() => {
         setWallDraftMouse(null);
+        setWallDrawEndpoint(null);
     }, []);
 
     // ── Calibration pointer handlers ─────────────────────────
     const onPointerDown = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
         e.preventDefault();
-        const pt = evToNorm(e);
-        if (!pt) return;
+        const raw = evToNorm(e);
+        if (!raw) return;
+        const endpoint = nearestCalibrationEndpoint(raw);
+        const pt = endpoint ?? raw;
+        setCalibrationEndpoint(endpoint);
 
         // ① Grab priority — ถ้าใกล้จุดไหนพอ → drag ทันที ไม่ place ใหม่
-        const idx = nearestPointIdx(pt, calibPts, DRAG_HIT);
+        const idx = endpoint
+            ? calibPts.findIndex(point => point.x === endpoint.x && point.y === endpoint.y)
+            : nearestPointIdx(pt, calibPts, DRAG_HIT);
         if (idx !== -1) {
+            if (endpoint) setCalibPts(prev => prev.map((point, i) => i === idx ? endpoint : point));
             draggingIdx.current = idx;
             setIsDragging(true);
             (e.currentTarget as HTMLDivElement).setPointerCapture(e.pointerId);
@@ -401,11 +488,14 @@ const WallReview = ({
             next[closest] = pt;
             return next;
         });
-    }, [calibPts, nearestPointIdx]);
+    }, [calibPts, nearestPointIdx, nearestCalibrationEndpoint]);
 
     const onPointerMove = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
-        const pt = evToNorm(e);
-        if (!pt) return;
+        const raw = evToNorm(e);
+        if (!raw) return;
+        const endpoint = nearestCalibrationEndpoint(raw);
+        const pt = endpoint ?? raw;
+        setCalibrationEndpoint(endpoint);
         setMousePos(pt);
 
         if (draggingIdx.current !== null) {
@@ -416,7 +506,7 @@ const WallReview = ({
                 return next;
             });
         }
-    }, []);
+    }, [nearestCalibrationEndpoint]);
 
     const onPointerUp = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
         (e.currentTarget as HTMLDivElement).releasePointerCapture(e.pointerId);
@@ -426,6 +516,7 @@ const WallReview = ({
 
     const onPointerLeave = useCallback(() => {
         setMousePos(null);
+        setCalibrationEndpoint(null);
         if (!isDragging) {
             draggingIdx.current = null;
         }
@@ -551,9 +642,12 @@ const WallReview = ({
         const screenScale = realMetres / px
         const screenPpm = px / realMetres
 
-        onScaleChange(screenScale)
-        onPlanSizeChange?.(imgSize.w * screenScale, imgSize.h * screenScale)
-        onPpmChange?.(screenPpm)
+        projectActions.run({ label: "calibration change" }, () => {
+            onScaleChange(screenScale)
+            onPlanSizeChange?.(imgSize.w * screenScale, imgSize.h * screenScale)
+            onPpmChange?.(screenPpm)
+            onConfirmedCalibration?.(confirmCalibration(calibPts, walls, realMetres));
+        })
 
         setCalibPhase("applied")
 
@@ -567,10 +661,13 @@ const WallReview = ({
         draggingIdx.current = null;
         setIsDragging(false);
         onScaleChange(0);
+        onConfirmedCalibration?.([]);
         onPlanSizeChange?.(0, 0);
     };
 
     const startCalibration = () => {
+        setLengthDraft(null);
+        setCalibrationEndpoint(null);
         stopWallDraw();
         setCalibPhase("placing");
         setCalibPts([]);
@@ -579,6 +676,7 @@ const WallReview = ({
     };
 
     const recalibrate = () => {
+        setLengthDraft(null);
         setCalibLength("");
         if (calibPts.length >= 2) {
             // Points still exist → just re-enter distance
@@ -660,26 +758,16 @@ const WallReview = ({
             (w.y2 - w.y1) * planDimensions.height,
         );
     };
-    const setWallLength = (wall: DetectedWallSegment, metres: number) => {
-        if (!onWallGeometryCommit || !calibrated || !Number.isFinite(metres) || metres <= 0) return;
-        const dx = (wall.x2 - wall.x1) * imgSize.w;
-        const dy = (wall.y2 - wall.y1) * imgSize.h;
-        const currentPx = Math.hypot(dx, dy);
-        if (!currentPx) return;
-        const currentLength = getWallLength(wall);
-        if (!currentLength) return;
-        const ratio = metres / currentLength;
-        const next = editWallGeometry(walls, { ...wall, x2: wall.x1 + (wall.x2 - wall.x1) * ratio, y2: wall.y1 + (wall.y2 - wall.y1) * ratio }, "end");
-        if (next && next.some((item, index) => geometryChanged(walls[index], item))) onWallGeometryCommit(next);
-    };
-
     const getWallThickness = (w: DetectedWallSegment): number =>
         getWallThicknessM(w, planDimensions.width, planDimensions.height);
+    const hasWallThicknessMeasurement = (w: DetectedWallSegment): boolean =>
+        calibrated || w.thickness > 0 || !(w.thicknessRatio > 0);
     const getWallHeight = (w: DetectedWallSegment): number | null =>
         typeof w.wallHeight === "number" ? w.wallHeight : wallHeightMeter;
     const getWallThicknessLabel = (w: DetectedWallSegment) =>
         `${(getWallThickness(w) * 100).toFixed(0)}cm`;
-    const allWallThickness = uniformWallThicknessM(walls, planDimensions.width, planDimensions.height);
+    const allWallThickness = walls.every(hasWallThicknessMeasurement)
+        ? uniformWallThicknessM(walls, planDimensions.width, planDimensions.height) : null;
 
     const startWallEdit = (wallId: string, field: WallEditState["field"], val?: number | null) =>
         setWallEditState({ wallId, field, value: val == null ? "" : String(val) });
@@ -772,17 +860,8 @@ const WallReview = ({
         return Math.abs(area) * 0.5 * pw * ph;
     };
 
-    const getRoomAreaM2 = (room: Room): number | null => {
-        if (typeof room.areaSqm === "number" && room.areaSqm > 0) return room.areaSqm;
-        if (room.width > 1 || room.height > 1) return room.width * room.height;
-        const polygon = room.polygon && room.polygon.length >= 3
-            ? room.polygon
-            : room.wallPolygon && room.wallPolygon.length >= 3
-                ? room.wallPolygon
-                : null;
-        if (!calibrated || !polygon) return null;
-        return polygonArea(polygon, planDimensions.width, planDimensions.height);
-    };
+    const getRoomAreaM2 = (room: Room): number | null =>
+        getMeasuredRoomArea(room, planDimensions.width, planDimensions.height, calibrated);
 
     // Preserve the room list's shared scale conversion. Before calibration it
     // deliberately returns null, so no approximate metre values are rendered.
@@ -830,7 +909,7 @@ const WallReview = ({
 
     const endpointDistancePx = screenDistance;
     const startEndpointDrag = (event: React.PointerEvent<SVGSVGElement>, wallId: string, endpoint?: "start" | "end") => {
-        if (event.button !== 0 || endpointDragRef.current || !onWallGeometryCommit) return;
+        if (lengthDraft || event.button !== 0 || endpointDragRef.current || !onWallGeometryCommit) return;
         const persistedWall = walls.find(wall => wall.id === wallId);
         if (!persistedWall) return;
         const wall = { ...persistedWall };
@@ -844,7 +923,19 @@ const WallReview = ({
         const blockedTargets = new Set(wallSnapTargets(point, walls, new Set([wall.id]), rect)
             .filter(target => screenDistance(point, target, rect) < SNAP_PX).map(target => target.key));
         const drag: EndpointDrag = { wall, endpoint, baseWalls: walls, previewWalls: walls, origin,
-            pointerId: event.pointerId, preview: wall, snapTarget: null, blockedTargets };
+            pointerId: event.pointerId, preview: wall, snapTarget: null, blockedTargets,
+            connectionTargets: [], feedbackSize: { width: rect.width, height: rect.height },
+            reverseBlocked: new Set(walls.filter(other => other.id !== wall.id).flatMap(other =>
+                (["start", "end"] as const).filter(end => {
+                    const point = endpointPoint(other, end);
+                    return screenDistance(point, projectToWall(point, wall, rect), rect) < SNAP_PX;
+                }).map(end => `${other.id}:${end}`))),
+            blockedEndpoints: Object.fromEntries((["start", "end"] as const).map(end => {
+                const endpoint = endpointPoint(wall, end);
+                return [end, new Set(wallSnapTargets(endpoint, walls, new Set([wall.id]), rect)
+                    .filter(target => screenDistance(endpoint, target, rect) < SNAP_PX)
+                    .map(target => target.key))];
+            })) as Record<"start" | "end", Set<string>> };
         endpointDragRef.current = drag;
         setEndpointDrag(drag);
         suppressEndpointClickRef.current = true;
@@ -891,20 +982,33 @@ const WallReview = ({
             : { ...drag.wall, x1: drag.wall.x1 + raw.x - drag.origin.x, y1: drag.wall.y1 + raw.y - drag.origin.y,
                 x2: drag.wall.x2 + raw.x - drag.origin.x, y2: drag.wall.y2 + raw.y - drag.origin.y };
         const unsnapped = editWallGeometry(drag.baseWalls, updated, drag.endpoint);
-        if (!unsnapped) return;
-        let snapTarget: CalibPoint | null = null;
+        if (!unsnapped) {
+            endpointDragRef.current = { ...drag, preview: drag.wall, previewWalls: drag.baseWalls, snapTarget: null, connectionTargets: [], feedbackSize: { width: rect.width, height: rect.height } };
+            setEndpointDrag(endpointDragRef.current);
+            return;
+        }
+        let snapTarget: WallSnap | null = null;
+        let connectionTargets: WallSnap[] = [];
         if (drag.endpoint) {
             const excluded = new Set([drag.wall.id]);
             snapTarget = findWallSnap(raw, wallSnapTargets(raw, drag.baseWalls, excluded, rect), rect, drag.blockedTargets);
             if (snapTarget) updated = { ...drag.wall, ...(drag.endpoint === "start" ? { x1: snapTarget.x, y1: snapTarget.y } : { x2: snapTarget.x, y2: snapTarget.y }) };
         }
-        const previewWalls = snapTarget ? editWallGeometry(drag.baseWalls, updated, drag.endpoint) : unsnapped;
+        if (!drag.endpoint) {
+            const snapped = snapWallTranslation(updated, drag.baseWalls, rect, drag.blockedEndpoints, drag.reverseBlocked);
+            updated = snapped.wall;
+            connectionTargets = snapped.targets;
+        }
+        const previewWalls = snapTarget || connectionTargets.length ? editWallGeometry(drag.baseWalls, updated, drag.endpoint) : unsnapped;
         if (!previewWalls) return;
         const preview = previewWalls.find(wall => wall.id === drag.wall.id)!;
-        endpointDragRef.current = { ...drag, preview, previewWalls, snapTarget };
+        endpointDragRef.current = { ...drag, preview, previewWalls, snapTarget, connectionTargets,
+            feedbackSize: { width: rect.width, height: rect.height } };
         setEndpointDrag(endpointDragRef.current);
     };
     const finishEndpointDrag = (event: React.PointerEvent<SVGSVGElement>) => {
+        // Pointer-up can carry a newer position than the last move event.
+        if (event.type === "pointerup" && endpointDragRef.current?.previewWalls !== endpointDragRef.current?.baseWalls) moveEndpointDrag(event);
         const drag = endpointDragRef.current;
         if (!drag || drag.pointerId !== event.pointerId) return;
         event.preventDefault();
@@ -1318,7 +1422,7 @@ const WallReview = ({
                                 {/* SVG overlays */}
                                 <svg className="absolute inset-0 z-10" width="100%" height="100%"
                                     viewBox="0 0 100 100" preserveAspectRatio="none"
-                                    style={{ pointerEvents: inPointerMode ? "none" : "all", touchAction: "none", cursor: openingDrawMode ? cursorStyle : undefined }}
+                                    style={{ overflow: "visible", pointerEvents: inPointerMode ? "none" : "all", touchAction: "none", cursor: openingDrawMode ? cursorStyle : undefined }}
                                     onPointerDownCapture={onEndpointPointerDown}
                                     onPointerMove={updateOpeningPreview}
                                     onPointerUp={finishEndpointDrag}
@@ -1332,27 +1436,17 @@ const WallReview = ({
                                     {/* WALLS */}
                                     {layers.has("walls") && walls.map(wall => {
                                         const isSel = selectedWallId === wall.id || attachmentCandidate?.wallId === wall.id;
-                                        const displayWall = endpointDrag?.previewWalls.find(item => item.id === wall.id) ?? wall;
+                                        const displayWall = renderWalls.find(item => item.id === wall.id) ?? wall;
                                         const sw = Math.max(0.002, wallStrokeWidthNormalized(wall, planDimensions.width, planDimensions.height));
                                         const isManual = wall.id.startsWith("manual-wall-");
                                         const col = isSel ? "#fbbf24" : isManual ? "#38bdf8" : wall.type === "exterior" ? "#1a1a1a" : "#2563eb";
                                         const mx = (displayWall.x1 + displayWall.x2) / 2, my = (displayWall.y1 + displayWall.y2) / 2;
 
-                                        // ขยาย endpoint ออก sw/2 ในแกนที่เป็นแนวของเส้น
-                                        // เพื่อให้มุมผนังเชื่อมกันแม้ preserveAspectRatio="none" ทำให้ linecap ไม่สมมาตร
-                                        const isHoriz = Math.abs(displayWall.y2 - displayWall.y1) < 0.005;
-                                        const isVert  = Math.abs(displayWall.x2 - displayWall.x1) < 0.005;
-                                        const half = sw / 2;
-                                        const ex1 = isHoriz ? displayWall.x1 - half : displayWall.x1;
-                                        const ex2 = isHoriz ? displayWall.x2 + half : displayWall.x2;
-                                        const ey1 = isVert  ? displayWall.y1 - half : displayWall.y1;
-                                        const ey2 = isVert  ? displayWall.y2 + half : displayWall.y2;
-
                                         return (
                                             <g key={wall.id} data-wall-id={wall.id} style={{ cursor: openingDrawMode ? cursorStyle : isSel ? "move" : "pointer", pointerEvents: "all" }}>
                                                 <line x1={displayWall.x1} y1={displayWall.y1} x2={displayWall.x2} y2={displayWall.y2} stroke="transparent" strokeWidth={sw + 0.025} pointerEvents="stroke" />
-                                                {isSel && <line x1={ex1} y1={ey1} x2={ex2} y2={ey2} stroke="#fbbf24" strokeWidth={sw + 0.008} strokeLinecap="butt" opacity={0.45} />}
-                                                <line x1={ex1} y1={ey1} x2={ex2} y2={ey2} stroke={col} strokeWidth={isSel ? sw + 0.002 : sw} strokeLinecap="butt" opacity={isSel ? 1 : 0.85} />
+                                                <path data-wall-footprint={wall.id} d={footprintPaths.get(wall.id) ?? ""}
+                                                    fill={col} fillRule="nonzero" stroke="none" />
                                                 {isSel && (
                                                     <g style={{ pointerEvents: "none" }}>
                                                         <rect x={mx - 0.075} y={my - 0.045} width={0.15} height={0.032} rx={0.005} fill="rgba(251,191,36,0.95)" />
@@ -1432,7 +1526,7 @@ const WallReview = ({
                                                 const next = polygon[(sideIndex + 1) % polygon.length];
                                                 const dx = next.x - point.x;
                                                 const dy = next.y - point.y;
-                                                const length = Math.hypot(dx * imgSize.w, dy * imgSize.h) * scale;
+                                                const length = Math.hypot(dx * planDimensions.width, dy * planDimensions.height);
                                                 const magnitude = Math.hypot(dx, dy) || 1;
                                                 return length >= 0.15 ? { x: (point.x + next.x) / 2 - (dy / magnitude) * 0.012, y: (point.y + next.y) / 2 + (dx / magnitude) * 0.012, label: `${length.toFixed(2)}m` } : null;
                                             }).filter((side): side is { x: number; y: number; label: string } => side !== null)
@@ -1489,6 +1583,33 @@ const WallReview = ({
                                         );
                                     })}
 
+                                    {/* Measurement guides annotate the centerline; they are not wall surfaces. */}
+                                    {layers.has("walls") && renderWalls.filter(wall => inCalibMode || wall.id === selectedWallId).map(wall => (
+                                        <g key={`measure-${wall.id}`} data-wall-measurement={wall.id} pointerEvents="none">
+                                            <title>Wall measurement: stored start to end</title>
+                                            <line data-measurement-span x1={wall.x1} y1={wall.y1} x2={wall.x2} y2={wall.y2}
+                                                stroke="#fbbf24" strokeWidth={1.5} vectorEffect="non-scaling-stroke" strokeDasharray="4 3" />
+                                            {[{ x: wall.x1, y: wall.y1 }, { x: wall.x2, y: wall.y2 }].map((point, index) => {
+                                                if (!inCalibMode && hasDragConnectionAt(point)) return null;
+                                                const hovered = inCalibMode && calibrationEndpoint?.x === point.x && calibrationEndpoint?.y === point.y;
+                                                const chosen = calibPts.some(p => p.x === point.x && p.y === point.y);
+                                                const radius = hovered ? 7 : chosen ? 5 : 3;
+                                                return <ellipse key={index} data-measurement-endpoint={index === 0 ? "start" : "end"}
+                                                    data-calibration-endpoint={hovered ? "hovered" : chosen ? "selected" : undefined}
+                                                    cx={point.x} cy={point.y} rx={radius / (imgSize.w * viewZoom)} ry={radius / (imgSize.h * viewZoom)}
+                                                    fill={chosen ? "#22c55e" : hovered ? "#fff" : "#fbbf24"}
+                                                    stroke={hovered || chosen ? "#22c55e" : "#111827"} strokeWidth={hovered || chosen ? 2 : 1} vectorEffect="non-scaling-stroke" />;
+                                            })}
+                                        </g>
+                                    ))}
+
+                                    {wallDrawMode && wallDrawEndpoint && <ellipse
+                                        data-wall-draw-snap-endpoint
+                                        cx={wallDrawEndpoint.x} cy={wallDrawEndpoint.y}
+                                        rx={7 / (imgSize.w * viewZoom)} ry={7 / (imgSize.h * viewZoom)}
+                                        fill="#fff" stroke="#22c55e" strokeWidth={2} vectorEffect="non-scaling-stroke"
+                                        style={{ pointerEvents: "none" }} />}
+
                                     {/* CALIBRATION GRAPHICS */}
                                     {(inCalibMode || calibPhase === "applied") && (
                                         <>
@@ -1533,11 +1654,14 @@ const WallReview = ({
 
                                             {/* Draggable point handles */}
                                             {inCalibMode && calibPts.map((pt, i) => {
+                                                const snapped = walls.some(wall =>
+                                                    (wall.x1 === pt.x && wall.y1 === pt.y) || (wall.x2 === pt.x && wall.y2 === pt.y));
                                                 const isHovered = mousePos && normDist(mousePos, pt) < DRAG_HIT;
                                                 const isThisDragging = isDragging && draggingIdx.current === i;
                                                 const showRing = isHovered || isThisDragging;
                                                 return (
-                                                    <g key={i} style={{ pointerEvents: "none" }}>
+                                                    <g key={i} data-calibration-point={i} data-snapped={snapped} style={{ pointerEvents: "none" }}>
+                                                        <title>{`P${i + 1}: ${snapped ? "wall endpoint" : "free point"}`}</title>
                                                         <circle cx={pt.x} cy={pt.y} r={0.022}
                                                             fill={isThisDragging ? "rgba(251,191,36,0.25)" : "rgba(251,191,36,0.15)"}
                                                             stroke="#fbbf24"
@@ -1545,7 +1669,7 @@ const WallReview = ({
                                                             opacity={showRing ? 1 : 0}
                                                             style={{ transition: "opacity 0.08s" }}
                                                         />
-                                                        <circle cx={pt.x} cy={pt.y} r={0.007} fill="#fbbf24" />
+                                                        <circle cx={pt.x} cy={pt.y} r={0.007} fill={snapped ? "#22c55e" : "#fbbf24"} />
                                                         <line x1={pt.x - 0.02} y1={pt.y} x2={pt.x + 0.02} y2={pt.y} stroke="#fbbf24" strokeWidth={0.0015} opacity={0.55} />
                                                         <line x1={pt.x} y1={pt.y - 0.02} x2={pt.x} y2={pt.y + 0.02} stroke="#fbbf24" strokeWidth={0.0015} opacity={0.55} />
                                                         <text x={pt.x + 0.013} y={pt.y - 0.008} fontSize={0.013} fill="#fbbf24" fontFamily="monospace" fontWeight="700">P{i + 1}</text>
@@ -1563,16 +1687,30 @@ const WallReview = ({
                                     {layers.has("walls") && !inPointerMode && (() => {
                                         const wall = walls.find(item => item.id === selectedWallId);
                                         if (!wall) return null;
-                                        const displayWall = endpointDrag?.previewWalls.find(item => item.id === wall.id) ?? wall;
+                                        const displayWall = renderWalls.find(item => item.id === wall.id) ?? wall;
                                         return <g>
                                             {(["start", "end"] as const).map(endpoint => {
                                                 const point = endpoint === "start" ? { x: displayWall.x1, y: displayWall.y1 } : { x: displayWall.x2, y: displayWall.y2 };
                                                 return <g key={endpoint} style={{ pointerEvents: "all" }}>
                                                     <ellipse aria-label={`${endpoint === "start" ? "Start" : "End"} endpoint; drag to edit wall`} data-wall-endpoint={endpoint} cx={point.x} cy={point.y} rx={ENDPOINT_HIT_RADIUS_PX / (imgSize.w * viewZoom)} ry={ENDPOINT_HIT_RADIUS_PX / (imgSize.h * viewZoom)} fill="rgba(0,0,0,0.001)" style={{ cursor: "grab", pointerEvents: "all", touchAction: "none" }} />
-                                                    <circle cx={point.x} cy={point.y} r={0.011} fill="#fff" stroke="#f59e0b" strokeWidth={0.004} style={{ pointerEvents: "none" }} />
+                                                    {(inCalibMode || !dragConnectionTargets
+                                                        .some(target => Math.hypot(target.x - point.x, target.y - point.y) < 1e-10)) && <circle cx={point.x} cy={point.y} r={0.011} fill="#fff" stroke="#f59e0b" strokeWidth={0.004} style={{ pointerEvents: "none" }} />}
                                                 </g>;
                                             })}
-                                            {endpointDrag?.snapTarget && <circle cx={endpointDrag.snapTarget.x} cy={endpointDrag.snapTarget.y} r={0.014} fill="none" stroke="#22c55e" strokeWidth={0.003} strokeDasharray="0.005 0.004" style={{ pointerEvents: "none" }} />}
+                                            {dragConnectionTargets
+                                                .filter((target, index, targets) => !targets.slice(0, index).some(other =>
+                                                    Math.hypot(target.x - other.x, target.y - other.y) < 1e-10))
+                                                .map(target => <g key={target.key} style={{ pointerEvents: "none" }}>
+                                                    <circle cx={target.x} cy={target.y} r={0.011}
+                                                        fill="#fff" stroke="#f59e0b" strokeWidth={0.004} />
+                                                    <circle
+                                                    data-wall-snap-target={target.key}
+                                                    aria-label="Release to connect walls"
+                                                    cx={target.x} cy={target.y} r={0.014}
+                                                    fill="none" stroke="#22c55e" strokeWidth={0.003}
+                                                    strokeDasharray="0.005 0.004"
+                                                    style={{ pointerEvents: "none" }} />
+                                                </g>)}
                                         </g>;
                                     })()}
                                     </g>
@@ -1653,17 +1791,21 @@ const WallReview = ({
                                     <div className="flex justify-between text-xs text-muted-foreground"><span>Area</span><span className="font-mono text-foreground">{getRoomAreaM2(selectedRoom)?.toFixed(2) ?? "—"} m²</span></div>
                                     <button onClick={() => { onRoomDelete?.(selectedRoom.id); clearSelection(); }} className="w-full rounded-md border border-red-500/30 bg-red-500/10 py-2 text-xs font-medium text-red-500">Delete Room</button>
                                 </>}
-                                {selectionType === "wall" && selectedWallId && (() => { const persistedWall = walls.find(w => w.id === selectedWallId); const wall = endpointDrag?.previewWalls.find(item => item.id === selectedWallId) ?? persistedWall; const index = walls.findIndex(w => w.id === selectedWallId); if (!wall) return null; const wallLength = getWallLength(wall); return <>
+                                {selectionType === "wall" && selectedWallId && (() => { const persistedWall = walls.find(w => w.id === selectedWallId); const wall = renderWalls.find(item => item.id === selectedWallId) ?? persistedWall; const index = walls.findIndex(w => w.id === selectedWallId); if (!wall) return null; const wallLength = getWallLength(wall); return <>
                                     <div className="flex items-center justify-between"><span className="text-sm font-semibold text-foreground">Wall {index + 1}</span><button onClick={dismissInspector} className="p-1 text-muted-foreground hover:text-foreground"><X className="w-4 h-4" /></button></div>
                                     <label className="block text-xs text-muted-foreground">Length
                                         {wallLength === null ? (
-                                            <div className="mt-1 rounded-md border border-input bg-muted/50 px-2 py-2 text-xs text-muted-foreground">Calibrate scale to view dimensions</div>
+                                            <div className="mt-1 rounded-md border border-input bg-muted/50 px-2 py-2 text-xs text-muted-foreground"><span>—</span><span className="ml-2">Calibrate scale to view dimensions</span></div>
                                         ) : (
-                                            <div className="mt-1 flex items-center rounded-md border border-input bg-background"><input key={`${wall.id}:${wallLength}`} type="number" defaultValue={wallLength.toFixed(2)} onBlur={e => { if (e.target.value !== wallLength.toFixed(2)) setWallLength(wall, parseFloat(e.target.value)); }} className="h-8 min-w-0 flex-1 bg-transparent px-2 text-sm font-mono outline-none" /><span className="px-2 text-xs">m</span></div>
+                                            <div className="mt-1 flex items-center rounded-md border border-input bg-background"><input aria-label="Wall length (m)" type="number" value={lengthDraft?.wallId === wall.id ? lengthDraft.value : wallLength.toFixed(2)}
+                                                onChange={e => { setLengthDraft({ wallId: wall.id, value: e.target.value }); setLengthError(null); }}
+                                                onBlur={commitLength}
+                                                onKeyDown={e => { if (e.key === "Enter") e.currentTarget.blur(); }} className="h-8 min-w-0 flex-1 bg-transparent px-2 text-sm font-mono outline-none" /><span className="px-2 text-xs">m</span></div>
                                         )}
                                     </label>
+                                    {lengthError && <p role="alert" className="text-xs text-destructive">{lengthError}</p>}
                                     <button onClick={() => setAdvancedOpen(open => !open)} className="flex w-full items-center justify-between rounded-md bg-muted/50 px-2 py-2 text-xs font-medium">Advanced <ChevronDown className={`w-3.5 h-3.5 ${advancedOpen ? "rotate-180" : ""}`} /></button>
-                                    {advancedOpen && <div className="grid grid-cols-2 gap-2">{(["wallHeight", "thickness"] as const).map(field => <div key={field}><div className="mb-1 text-[10px] text-muted-foreground">{field === "wallHeight" ? "Wall Height" : "Wall Thickness"}</div><Input type="number" defaultValue={field === "wallHeight" ? getWallHeight(wall) ?? wallHeightMeter : (getWallThickness(wall) ?? 0.15)} onBlur={e => onWallUpdate?.(wall.id, field, parseFloat(e.target.value) || (field === "wallHeight" ? wallHeightMeter : 0.15))} className="h-8 text-xs" /></div>)}</div>}
+                                    {advancedOpen && <div className="grid grid-cols-2 gap-2">{(["wallHeight", "thickness"] as const).map(field => <div key={field}><div className="mb-1 text-[10px] text-muted-foreground">{field === "wallHeight" ? "Wall Height" : "Wall Thickness"}</div><Input type="number" placeholder="—" defaultValue={field === "wallHeight" ? getWallHeight(wall) ?? wallHeightMeter : hasWallThicknessMeasurement(wall) ? getWallThickness(wall) : ""} onBlur={e => { if (e.target.value === "" && field === "thickness" && !hasWallThicknessMeasurement(wall)) return; onWallUpdate?.(wall.id, field, parseFloat(e.target.value) || (field === "wallHeight" ? wallHeightMeter : 0.15)); }} className="h-8 text-xs" /></div>)}</div>}
                                     <button onClick={deleteSelectedWall} className="w-full rounded-md border border-red-500/30 bg-red-500/10 py-2 text-xs font-medium text-red-500">Delete Wall</button>
                                 </>})()}
                                 {(selectionType === "door" || selectionType === "window") && (() => {
@@ -1692,7 +1834,7 @@ const WallReview = ({
                                             <span className="text-muted-foreground">Width</span>
                                             <span className="ml-2 font-mono text-foreground">
                                                 {!calibrated
-                                                    ? "Calibrate scale to view dimensions"
+                                                    ? <><span>—</span><span className="ml-2">Calibrate scale to view dimensions</span></>
                                                     : widthM !== null
                                                         ? `${widthM.toFixed(2)} m`
                                                         : "Unavailable for unresolved detection"}
@@ -1753,7 +1895,7 @@ const WallReview = ({
                         })}
                         </div>
 
-                        <div className="border-t border-border/60 bg-muted/30 px-3 py-2.5 text-xs font-semibold text-foreground flex justify-between"><span>Total Area</span><span className="font-mono">{rooms.reduce((total, room) => total + (getRoomAreaM2(room) ?? 0), 0).toFixed(2)} m²</span></div>
+                        <div className="border-t border-border/60 bg-muted/30 px-3 py-2.5 text-xs font-semibold text-foreground flex justify-between"><span>Total Area</span><span className="font-mono">{calibrated ? rooms.reduce((total, room) => total + (getRoomAreaM2(room) ?? 0), 0).toFixed(2) : "—"} m²</span></div>
                         </section>
 
                         <button onClick={() => setOtherElementsOpen(open => !open)} className="flex w-full items-center justify-between rounded-lg border border-border/70 bg-card px-3 py-3 text-left text-xs font-semibold"><span className="flex items-center gap-2"><Building2 className="w-4 h-4 text-primary" />Other Elements</span><ChevronDown className={`w-4 h-4 transition-transform ${otherElementsOpen ? "rotate-180" : "-rotate-90"}`} /></button>
@@ -1796,7 +1938,7 @@ const WallReview = ({
                                             </div>
                                             <div className="mt-1 text-[10px] font-mono text-muted-foreground flex gap-3">
                                                 {/* FIX: แสดง — ก่อน calibrate */}
-                                                <span>L: {calibrated ? `${getWallLength(endpointDrag?.previewWalls.find(item => item.id === wall.id) ?? wall)?.toFixed(1) ?? "—"}m` : "—"}</span>
+                                                <span>L: {calibrated ? `${getWallLength(renderWalls.find(item => item.id === wall.id) ?? wall)?.toFixed(1) ?? "—"}m` : "—"}</span>
                                                 <span>T: {getWallThicknessLabel(wall)}</span>
                                                 <span>H: {getWallHeight(wall) != null ? `${getWallHeight(wall)!.toFixed(1)}m` : "N/A"}</span>
                                             </div>

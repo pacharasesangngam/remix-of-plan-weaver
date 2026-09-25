@@ -1,18 +1,34 @@
 import type { DetectedWallSegment } from "@/types/detection";
 
+import type { Room } from "@/types/floorplan";
+
+export type CalibrationStatus = "uncalibrated" | "calibrated";
+export const hasCalibration = (status: unknown, scale: number, width: number, height: number): boolean =>
+  status === "calibrated" && [scale, width, height].every(value => Number.isFinite(value) && value > 0);
+
+/** Measurement only: ignore cached areas and provisional rendering dimensions. */
+export const getMeasuredRoomArea = (room: Room, width: number, height: number, calibrated: boolean): number | null => {
+  if (!calibrated) return null;
+  const polygon = room.polygon?.length >= 3 ? room.polygon : room.wallPolygon;
+  if (!polygon || polygon.length < 3) return room.bbox ? room.bbox.w * room.bbox.h * width * height : null;
+  const twiceArea = polygon.reduce((sum, point, index) => {
+    const next = polygon[(index + 1) % polygon.length];
+    return sum + point.x * next.y - next.x * point.y;
+  }, 0);
+  return Math.abs(twiceArea) * 0.5 * width * height;
+};
+
 export const APPROXIMATE_PLAN_SIZE_M = 20;
 export const DEFAULT_WALL_THICKNESS_M = 0.15;
 
 export interface PlanDimensions {
   width: number;
   height: number;
-  measured: boolean;
 }
 
 export const resolvePlanDimensions = (planWidth = 0, planHeight = 0): PlanDimensions => ({
   width: planWidth > 0 ? planWidth : APPROXIMATE_PLAN_SIZE_M,
   height: planHeight > 0 ? planHeight : APPROXIMATE_PLAN_SIZE_M,
-  measured: planWidth > 0 && planHeight > 0,
 });
 
 /** Convert backend normalized thickness using its max-image-dimension basis. */

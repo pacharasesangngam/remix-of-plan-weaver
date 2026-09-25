@@ -1,11 +1,16 @@
+import type { ConfirmedDimension } from "./confirmedDimensions";
 import type { Room, DimensionUnit } from "@/types/floorplan";
 import type { DetectedWallSegment, DetectedDoor, DetectedWindow } from "@/types/detection";
 
+import type { CalibrationStatus } from "./wallMetrics";
+
 export interface ProjectState {
+    confirmedDimensions?: ConfirmedDimension[];
+    calibrationStatus: CalibrationStatus;
     rooms: Room[]; walls: DetectedWallSegment[]; doors: DetectedDoor[]; windows: DetectedWindow[];
     scale: number; planW: number; planH: number; screenPpm: number; unit: DimensionUnit; wallHeightMeter: number;
 }
-export const emptyProject = (): ProjectState => ({ rooms: [], walls: [], doors: [], windows: [], scale: 0,
+export const emptyProject = (): ProjectState => ({ calibrationStatus: "uncalibrated", rooms: [], walls: [], doors: [], windows: [], scale: 0,
     planW: 0, planH: 0, screenPpm: 0, unit: "m", wallHeightMeter: 2.8 });
 export interface ActionInfo { label: string; threeOnly?: boolean }
 interface Entry extends ActionInfo { before: ProjectState; after: ProjectState }

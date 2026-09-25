@@ -1,0 +1,26 @@
+{
+  "source": "backend\\floor.png",
+  "source_sha256": "0564112dda5af77eed7f8ed32506127be20651540fc5715c5a8fb399c7556d06",
+  "production_sha256": "8f90dcff86584f76289df52bf303dc2e463025d7e31f51dc1c9560ea7bb7c60c",
+  "model": "backend\\best_v2.pt",
+  "model_sha256": "f65ad7c9c81691d10724101b0114528c3d1a75ac454a151ae32467560c134f4d",
+  "python": "3.13.1",
+  "torch": "2.11.0+cpu",
+  "ultralytics": "8.4.33",
+  "preprocessing": {
+    "resize_scale": 1.0,
+    "deskew_angle": 0.0,
+    "crop_box": {
+      "x": 67,
+      "y": 15,
+      "w": 512,
+      "h": 736
+    }
+  },
+  "shape": [
+    736,
+    512
+  ],
+  "ppm": null,
+  "imgsz": 960
+}

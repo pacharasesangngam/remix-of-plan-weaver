@@ -1,0 +1,751 @@
+{
+  "production_hash_unchanged": true,
+  "fixture_assertions_passed": 14,
+  "metadata_checks": [
+    {
+      "axis": "h",
+      "gap_bridge": false,
+      "equal": true
+    },
+    {
+      "axis": "h",
+      "gap_bridge": true,
+      "equal": true
+    },
+    {
+      "axis": "v",
+      "gap_bridge": false,
+      "equal": true
+    },
+    {
+      "axis": "v",
+      "gap_bridge": true,
+      "equal": true
+    }
+  ],
+  "walls_identical": true,
+  "rooms_identical": true,
+  "openings_identical": true,
+  "baseline_metrics": {
+    "walls": 30,
+    "sum_span_px": 5332.6752,
+    "union_span_px": 5332.6752,
+    "components": 1,
+    "dangling_count": 3,
+    "junction_count": 31,
+    "cells": 16,
+    "closed_area_px2": 293877.45837056,
+    "dangling": [
+      [
+        432.384,
+        421.2864
+      ],
+      [
+        18.3808,
+        704.9408
+      ],
+      [
+        483.4816,
+        133.3632
+      ]
+    ],
+    "junctions": [
+      [
+        226.304,
+        30.2496
+      ],
+      [
+        226.304,
+        167.2928
+      ],
+      [
+        483.4816,
+        167.2928
+      ],
+      [
+        29.3376,
+        200.1184
+      ],
+      [
+        134.5536,
+        200.1184
+      ],
+      [
+        29.3376,
+        233.3856
+      ],
+      [
+        134.5536,
+        233.3856
+      ],
+      [
+        182.7328,
+        233.3856
+      ],
+      [
+        226.304,
+        233.3856
+      ],
+      [
+        29.3376,
+        322.0
+      ],
+      [
+        182.7328,
+        322.0
+      ],
+      [
+        226.304,
+        322.0
+      ],
+      [
+        284.0576,
+        336.9408
+      ],
+      [
+        308.992,
+        336.9408
+      ],
+      [
+        483.4816,
+        336.9408
+      ],
+      [
+        308.992,
+        421.2864
+      ],
+      [
+        483.4816,
+        421.2864
+      ],
+      [
+        29.3376,
+        476.7072
+      ],
+      [
+        93.1328,
+        476.7072
+      ],
+      [
+        483.4816,
+        476.7072
+      ],
+      [
+        29.3376,
+        526.608
+      ],
+      [
+        93.1328,
+        526.608
+      ],
+      [
+        134.5536,
+        526.608
+      ],
+      [
+        182.7328,
+        526.608
+      ],
+      [
+        284.0576,
+        526.608
+      ],
+      [
+        335.4112,
+        526.608
+      ],
+      [
+        390.4,
+        526.608
+      ],
+      [
+        413.2352,
+        526.608
+      ],
+      [
+        182.7328,
+        616.768
+      ],
+      [
+        284.0576,
+        616.768
+      ],
+      [
+        29.3376,
+        704.9408
+      ]
+    ],
+    "cell_areas_px2": [
+      1602.7870822400005,
+      2066.9310566399995,
+      2103.1069286400043,
+      3183.4315161600007,
+      3500.2417152000003,
+      3861.0357452800013,
+      4644.8463052800025,
+      9135.443967999996,
+      13593.023610880002,
+      16647.582351359993,
+      25667.59514112002,
+      27355.395522559986,
+      34907.93783296,
+      43629.66548479999,
+      50565.288591360004,
+      51413.14551808002
+    ],
+    "room_mask_best_cell_iou": [
+      0.9284928927457512,
+      0.9495593562812077,
+      0.948662126017133,
+      0.8677943409312757,
+      0.866135417909744,
+      0.9462861818949243,
+      0.9216049250613255,
+      0.9111390738065352,
+      0.8666449650105579,
+      0.9186482092312668,
+      0.9347658834671837,
+      0.7706518881035351,
+      0.6614868973245944,
+      0.7448484582249884,
+      0.8460562907830057
+    ],
+    "openings": [
+      {
+        "id": "door-14",
+        "kind": "door",
+        "axis": "v",
+        "center_to_wall_px": 1.5297282470703235,
+        "wall_in_bbox_px": 32.20001220703125
+      },
+      {
+        "id": "door-23",
+        "kind": "door",
+        "axis": "h",
+        "center_to_wall_px": 0.00918168945315756,
+        "wall_in_bbox_px": 32.19999694824219
+      },
+      {
+        "id": "door-26",
+        "kind": "door",
+        "axis": "h",
+        "center_to_wall_px": 0.00918168945315756,
+        "wall_in_bbox_px": 32.966644287109375
+      },
+      {
+        "id": "door-30",
+        "kind": "door",
+        "axis": "h",
+        "center_to_wall_px": 5.075319091796814,
+        "wall_in_bbox_px": 0.0
+      },
+      {
+        "id": "door-31",
+        "kind": "door",
+        "axis": "v",
+        "center_to_wall_px": 0.5005297729492213,
+        "wall_in_bbox_px": 32.9666748046875
+      },
+      {
+        "id": "door-32",
+        "kind": "door",
+        "axis": "h",
+        "center_to_wall_px": 0.6072091552734946,
+        "wall_in_bbox_px": 32.9666633605957
+      },
+      {
+        "id": "door-37",
+        "kind": "door",
+        "axis": "v",
+        "center_to_wall_px": 0.2166534423828352,
+        "wall_in_bbox_px": 36.033355712890625
+      },
+      {
+        "id": "door-38",
+        "kind": "door",
+        "axis": "v",
+        "center_to_wall_px": 0.6494793823242163,
+        "wall_in_bbox_px": 36.03334045410159
+      },
+      {
+        "id": "door-40",
+        "kind": "door",
+        "axis": "h",
+        "center_to_wall_px": 0.44772824707033015,
+        "wall_in_bbox_px": 32.96665954589844
+      },
+      {
+        "id": "door-41",
+        "kind": "door",
+        "axis": "h",
+        "center_to_wall_px": 1.058012207031311,
+        "wall_in_bbox_px": 32.9666748046875
+      },
+      {
+        "id": "door-42",
+        "kind": "door",
+        "axis": "h",
+        "center_to_wall_px": 3.609473278808594,
+        "wall_in_bbox_px": 0.0
+      },
+      {
+        "id": "door-46",
+        "kind": "door",
+        "axis": "h",
+        "center_to_wall_px": 0.7022732788085762,
+        "wall_in_bbox_px": 32.96665954589844
+      },
+      {
+        "id": "door-49",
+        "kind": "door",
+        "axis": "h",
+        "center_to_wall_px": 0.364922143554736,
+        "wall_in_bbox_px": 59.79999542236328
+      },
+      {
+        "id": "door-53",
+        "kind": "door",
+        "axis": "v",
+        "center_to_wall_px": 0.759065649414083,
+        "wall_in_bbox_px": 66.70001220703125
+      },
+      {
+        "id": "door-59",
+        "kind": "door",
+        "axis": "h",
+        "center_to_wall_px": 0.44772824707033004,
+        "wall_in_bbox_px": 32.96665954589844
+      },
+      {
+        "id": "window-45",
+        "kind": "window",
+        "axis": "v",
+        "center_to_wall_px": 0.864946557617202,
+        "wall_in_bbox_px": 54.43333435058594
+      },
+      {
+        "id": "window-57",
+        "kind": "window",
+        "axis": "h",
+        "center_to_wall_px": 1.0580122070313107,
+        "wall_in_bbox_px": 29.899993896484375
+      },
+      {
+        "id": "window-58",
+        "kind": "window",
+        "axis": "h",
+        "center_to_wall_px": 0.00918168945315756,
+        "wall_in_bbox_px": 66.69998931884766
+      },
+      {
+        "id": "window-60",
+        "kind": "window",
+        "axis": "h",
+        "center_to_wall_px": 1.9350564941406672,
+        "wall_in_bbox_px": 54.433319091796875
+      },
+      {
+        "id": "window-62",
+        "kind": "window",
+        "axis": "h",
+        "center_to_wall_px": 0.033732824707033864,
+        "wall_in_bbox_px": 63.633331298828125
+      },
+      {
+        "id": "window-64",
+        "kind": "window",
+        "axis": "v",
+        "center_to_wall_px": 2.479065649414064,
+        "wall_in_bbox_px": 54.433319091796875
+      },
+      {
+        "id": "window-67",
+        "kind": "window",
+        "axis": "h",
+        "center_to_wall_px": 0.781987792968721,
+        "wall_in_bbox_px": 32.9666748046875
+      }
+    ]
+  },
+  "proposed_metrics": {
+    "walls": 30,
+    "sum_span_px": 5332.6752,
+    "union_span_px": 5332.6752,
+    "components": 1,
+    "dangling_count": 3,
+    "junction_count": 31,
+    "cells": 16,
+    "closed_area_px2": 293877.45837056,
+    "dangling": [
+      [
+        432.384,
+        421.2864
+      ],
+      [
+        18.3808,
+        704.9408
+      ],
+      [
+        483.4816,
+        133.3632
+      ]
+    ],
+    "junctions": [
+      [
+        226.304,
+        30.2496
+      ],
+      [
+        226.304,
+        167.2928
+      ],
+      [
+        483.4816,
+        167.2928
+      ],
+      [
+        29.3376,
+        200.1184
+      ],
+      [
+        134.5536,
+        200.1184
+      ],
+      [
+        29.3376,
+        233.3856
+      ],
+      [
+        134.5536,
+        233.3856
+      ],
+      [
+        182.7328,
+        233.3856
+      ],
+      [
+        226.304,
+        233.3856
+      ],
+      [
+        29.3376,
+        322.0
+      ],
+      [
+        182.7328,
+        322.0
+      ],
+      [
+        226.304,
+        322.0
+      ],
+      [
+        284.0576,
+        336.9408
+      ],
+      [
+        308.992,
+        336.9408
+      ],
+      [
+        483.4816,
+        336.9408
+      ],
+      [
+        308.992,
+        421.2864
+      ],
+      [
+        483.4816,
+        421.2864
+      ],
+      [
+        29.3376,
+        476.7072
+      ],
+      [
+        93.1328,
+        476.7072
+      ],
+      [
+        483.4816,
+        476.7072
+      ],
+      [
+        29.3376,
+        526.608
+      ],
+      [
+        93.1328,
+        526.608
+      ],
+      [
+        134.5536,
+        526.608
+      ],
+      [
+        182.7328,
+        526.608
+      ],
+      [
+        284.0576,
+        526.608
+      ],
+      [
+        335.4112,
+        526.608
+      ],
+      [
+        390.4,
+        526.608
+      ],
+      [
+        413.2352,
+        526.608
+      ],
+      [
+        182.7328,
+        616.768
+      ],
+      [
+        284.0576,
+        616.768
+      ],
+      [
+        29.3376,
+        704.9408
+      ]
+    ],
+    "cell_areas_px2": [
+      1602.7870822400005,
+      2066.9310566399995,
+      2103.1069286400043,
+      3183.4315161600007,
+      3500.2417152000003,
+      3861.0357452800013,
+      4644.8463052800025,
+      9135.443967999996,
+      13593.023610880002,
+      16647.582351359993,
+      25667.59514112002,
+      27355.395522559986,
+      34907.93783296,
+      43629.66548479999,
+      50565.288591360004,
+      51413.14551808002
+    ],
+    "room_mask_best_cell_iou": [
+      0.9284928927457512,
+      0.9495593562812077,
+      0.948662126017133,
+      0.8677943409312757,
+      0.866135417909744,
+      0.9462861818949243,
+      0.9216049250613255,
+      0.9111390738065352,
+      0.8666449650105579,
+      0.9186482092312668,
+      0.9347658834671837,
+      0.7706518881035351,
+      0.6614868973245944,
+      0.7448484582249884,
+      0.8460562907830057
+    ],
+    "openings": [
+      {
+        "id": "door-14",
+        "kind": "door",
+        "axis": "v",
+        "center_to_wall_px": 1.5297282470703235,
+        "wall_in_bbox_px": 32.20001220703125
+      },
+      {
+        "id": "door-23",
+        "kind": "door",
+        "axis": "h",
+        "center_to_wall_px": 0.00918168945315756,
+        "wall_in_bbox_px": 32.19999694824219
+      },
+      {
+        "id": "door-26",
+        "kind": "door",
+        "axis": "h",
+        "center_to_wall_px": 0.00918168945315756,
+        "wall_in_bbox_px": 32.966644287109375
+      },
+      {
+        "id": "door-30",
+        "kind": "door",
+        "axis": "h",
+        "center_to_wall_px": 5.075319091796814,
+        "wall_in_bbox_px": 0.0
+      },
+      {
+        "id": "door-31",
+        "kind": "door",
+        "axis": "v",
+        "center_to_wall_px": 0.5005297729492213,
+        "wall_in_bbox_px": 32.9666748046875
+      },
+      {
+        "id": "door-32",
+        "kind": "door",
+        "axis": "h",
+        "center_to_wall_px": 0.6072091552734946,
+        "wall_in_bbox_px": 32.9666633605957
+      },
+      {
+        "id": "door-37",
+        "kind": "door",
+        "axis": "v",
+        "center_to_wall_px": 0.2166534423828352,
+        "wall_in_bbox_px": 36.033355712890625
+      },
+      {
+        "id": "door-38",
+        "kind": "door",
+        "axis": "v",
+        "center_to_wall_px": 0.6494793823242163,
+        "wall_in_bbox_px": 36.03334045410159
+      },
+      {
+        "id": "door-40",
+        "kind": "door",
+        "axis": "h",
+        "center_to_wall_px": 0.44772824707033015,
+        "wall_in_bbox_px": 32.96665954589844
+      },
+      {
+        "id": "door-41",
+        "kind": "door",
+        "axis": "h",
+        "center_to_wall_px": 1.058012207031311,
+        "wall_in_bbox_px": 32.9666748046875
+      },
+      {
+        "id": "door-42",
+        "kind": "door",
+        "axis": "h",
+        "center_to_wall_px": 3.609473278808594,
+        "wall_in_bbox_px": 0.0
+      },
+      {
+        "id": "door-46",
+        "kind": "door",
+        "axis": "h",
+        "center_to_wall_px": 0.7022732788085762,
+        "wall_in_bbox_px": 32.96665954589844
+      },
+      {
+        "id": "door-49",
+        "kind": "door",
+        "axis": "h",
+        "center_to_wall_px": 0.364922143554736,
+        "wall_in_bbox_px": 59.79999542236328
+      },
+      {
+        "id": "door-53",
+        "kind": "door",
+        "axis": "v",
+        "center_to_wall_px": 0.759065649414083,
+        "wall_in_bbox_px": 66.70001220703125
+      },
+      {
+        "id": "door-59",
+        "kind": "door",
+        "axis": "h",
+        "center_to_wall_px": 0.44772824707033004,
+        "wall_in_bbox_px": 32.96665954589844
+      },
+      {
+        "id": "window-45",
+        "kind": "window",
+        "axis": "v",
+        "center_to_wall_px": 0.864946557617202,
+        "wall_in_bbox_px": 54.43333435058594
+      },
+      {
+        "id": "window-57",
+        "kind": "window",
+        "axis": "h",
+        "center_to_wall_px": 1.0580122070313107,
+        "wall_in_bbox_px": 29.899993896484375
+      },
+      {
+        "id": "window-58",
+        "kind": "window",
+        "axis": "h",
+        "center_to_wall_px": 0.00918168945315756,
+        "wall_in_bbox_px": 66.69998931884766
+      },
+      {
+        "id": "window-60",
+        "kind": "window",
+        "axis": "h",
+        "center_to_wall_px": 1.9350564941406672,
+        "wall_in_bbox_px": 54.433319091796875
+      },
+      {
+        "id": "window-62",
+        "kind": "window",
+        "axis": "h",
+        "center_to_wall_px": 0.033732824707033864,
+        "wall_in_bbox_px": 63.633331298828125
+      },
+      {
+        "id": "window-64",
+        "kind": "window",
+        "axis": "v",
+        "center_to_wall_px": 2.479065649414064,
+        "wall_in_bbox_px": 54.433319091796875
+      },
+      {
+        "id": "window-67",
+        "kind": "window",
+        "axis": "h",
+        "center_to_wall_px": 0.781987792968721,
+        "wall_in_bbox_px": 32.9666748046875
+      }
+    ]
+  },
+  "geometry_delta": {
+    "exact_segments_removed_or_changed": 0,
+    "exact_segments_added_or_changed": 0,
+    "merge_candidates": {},
+    "split_candidates": {},
+    "unmatched_before": [],
+    "unmatched_after": [],
+    "matched_endpoint_changes": [],
+    "max_matched_endpoint_displacement_px": 0,
+    "added_coverage_outside_1px_px": 0.0,
+    "removed_coverage_outside_1px_px": 0.0,
+    "hausdorff_px": 0.0,
+    "added_parts": []
+  },
+  "merge_calls": [
+    {
+      "call_line": 1222,
+      "inputs_identical": true,
+      "outputs_identical": true,
+      "before_count": 29,
+      "baseline_after_count": 29,
+      "proposed_after_count": 29
+    },
+    {
+      "call_line": 1254,
+      "inputs_identical": true,
+      "outputs_identical": true,
+      "before_count": 63,
+      "baseline_after_count": 30,
+      "proposed_after_count": 30
+    },
+    {
+      "call_line": 1274,
+      "inputs_identical": true,
+      "outputs_identical": true,
+      "before_count": 63,
+      "baseline_after_count": 30,
+      "proposed_after_count": 30
+    }
+  ]
+}

@@ -31,7 +31,7 @@ export default function MaterialSwatches({ label, options, value, onChange }: {
           </button>
         ))}
       </div>
-      <p className="text-xs text-muted-foreground">ตัวอย่างสีและลายโดยประมาณ</p>
+      <p className="text-xs text-muted-foreground">Approximate color and pattern preview.</p>
     </div>
   );
 }

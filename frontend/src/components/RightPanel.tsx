@@ -7,6 +7,7 @@ import { AppWindow, Box, ChevronDown, ChevronLeft, DoorOpen, Download, Image as 
 import type { BBox, NormalizedPoint, Room } from "@/types/floorplan";
 import type { DetectedWallSegment, DetectedDoor, DetectedWindow } from "@/types/detection";
 import { buildWallSolidGeometries } from "@/lib/wallSolidGeometry";
+import { computeGapIntervals, computeSolidSegments, projectOpeningEdgesOntoWall, defaultRenderWallHeight, wallSolidInputs } from "@/lib/wallRenderGeometry";
 import WallMeshHighlight from "./WallMeshHighlight";
 import MaterialSwatches from "./MaterialSwatches";
 import { targetPreviewShowsOutline } from "./wallHighlightState";
@@ -31,7 +32,11 @@ import { advanceOpeningDraft, cancelOpeningDraft, isValidOpeningTarget, openingP
 import { capturesThreeTargetPointer, nextThreeSelection, nextThreeToolAfterCreation, type ThreeToolMode } from "@/lib/threeInteraction";
 import { resolveOpeningWall } from "@/lib/openingAttachment";
 
+import { getMeasuredRoomArea, hasCalibration, type CalibrationStatus } from "@/lib/wallMetrics";
+
 interface RightPanelProps {
+  calibrationStatus?: CalibrationStatus;
+  scale?: number;
   rooms: Room[];
   generated: boolean;
   walls?: DetectedWallSegment[];
@@ -165,7 +170,7 @@ const createTileTexture = (tile: ScgTileOption): THREE.CanvasTexture => {
 
 // Plan scale context — provides real-world metres per normalised unit.
 // Falls back to PLAN_SIZE (20 m) when calibration hasn't been applied.
-const PlanScaleCtx = createContext({ pw: PLAN_SIZE, ph: PLAN_SIZE });
+const PlanScaleCtx = createContext({ pw: PLAN_SIZE, ph: PLAN_SIZE, calibrated: false });
 const usePlanScale = () => useContext(PlanScaleCtx);
 
 // ── Utilities ─────────────────────────────────────────────────────────────────
@@ -356,7 +361,7 @@ const boundsFromPolygon = (polygon: NormalizedPoint[]): BBox => {
   return { x, y, w: Math.max(...xs) - x, h: Math.max(...ys) - y };
 };
 
-const getWallLengthM = (wall: DetectedWallSegment, pw = PLAN_SIZE, ph = PLAN_SIZE): number =>
+const getWallLengthM = (wall: DetectedWallSegment, pw: number, ph: number): number =>
   Math.sqrt(
     Math.pow((wall.x2 - wall.x1) * pw, 2) +
       Math.pow((wall.y2 - wall.y1) * ph, 2),
@@ -487,175 +492,6 @@ function BlenderWindowModel({
 
   return <primitive object={scene} />;
 }
-
-/**
- * A gap interval in the wall's local axis space.
- * t values are world-metres measured from the wall's start endpoint.
- */
-interface GapInterval {
-  tStart: number;
-  tEnd: number;
-  yStart: number; // 0 for doors, wallHeight*0.35 for windows
-  height: number; // opening height in metres
-}
-
-/**
- * Project an opening's bbox centre onto the wall axis.
- * Returns the [tStart, tEnd] interval in wall-local metres, or null
- * if the opening is too far off-axis to belong to this wall.
- */
-const projectOpeningEdgesOntoWall = (
-  bbox: BBox,
-  wall: DetectedWallSegment,
-  wallLengthM: number,
-  pw = PLAN_SIZE,
-  ph = PLAN_SIZE,
-): { tStart: number; tEnd: number } | null => {
-  const wx1 = wall.x1 * pw;
-  const wz1 = wall.y1 * ph;
-  const wx2 = wall.x2 * pw;
-  const wz2 = wall.y2 * ph;
-
-  const dx = wx2 - wx1;
-  const dz = wz2 - wz1;
-  const wallLen = Math.sqrt(dx * dx + dz * dz);
-  if (wallLen < 1e-6) return null;
-
-  const ux = dx / wallLen;
-  const uz = dz / wallLen;
-
-  const leftX  = bbox.x * pw;
-  const rightX = (bbox.x + bbox.w) * pw;
-  const topZ   = bbox.y * ph;
-  const bottomZ = (bbox.y + bbox.h) * ph;
-
-  const corners = [[leftX, topZ], [rightX, topZ], [rightX, bottomZ], [leftX, bottomZ]];
-  let minT = Infinity, maxT = -Infinity;
-  for (const [px, pz] of corners) {
-    const t = (px - wx1) * ux + (pz - wz1) * uz;
-    minT = Math.min(minT, t);
-    maxT = Math.max(maxT, t);
-  }
-
-  const thickness = getWallThicknessM(wall, pw, ph);
-  const tolerance = Math.max(thickness, 0.2);
-  const cx = (bbox.x + bbox.w / 2) * pw;
-  const cz = (bbox.y + bbox.h / 2) * ph;
-  const perp = Math.abs((cx - wx1) * (-uz) + (cz - wz1) * ux);
-  if (perp > tolerance) return null;
-  if (maxT < 0 || minT > wallLengthM) return null;
-
-  return { tStart: Math.max(0, minT), tEnd: Math.min(wallLengthM, maxT) };
-};
-
-/**
- * Collect all gap intervals for a wall from doors + windows.
- * Sorts and merges overlapping intervals.
- */
-const computeGapIntervals = (
-  wall: DetectedWallSegment,
-  wallLengthM: number,
-  wallHeightM: number,
-  doors: DetectedDoor[],
-  windows: DetectedWindow[],
-  allWalls: DetectedWallSegment[],
-  pw = PLAN_SIZE,
-  ph = PLAN_SIZE,
-): GapInterval[] => {
-  const raw: GapInterval[] = [];
-
-  for (const door of doors) {
-    if (!door.bbox) continue;
-    if (door.wallId && door.wallId !== wall.id) continue;
-    if (!door.wallId && resolveOpeningWall(door.bbox, allWalls, pw, ph).wall?.id !== wall.id) continue;
-    const proj = projectOpeningEdgesOntoWall(door.bbox, wall, wallLengthM, pw, ph);
-    if (!proj) continue;
-    raw.push({
-      ...proj,
-      yStart: 0,
-      height: Math.min(wallHeightM * 0.9, 2.2),
-    });
-  }
-
-  for (const win of windows) {
-    if (!win.bbox) continue;
-    if (win.wallId && win.wallId !== wall.id) continue;
-    if (!win.wallId && resolveOpeningWall(win.bbox, allWalls, pw, ph).wall?.id !== wall.id) continue;
-    const proj = projectOpeningEdgesOntoWall(win.bbox, wall, wallLengthM, pw, ph);
-    if (!proj) continue;
-    raw.push({
-      ...proj,
-      yStart: wallHeightM * 0.35,
-      height: Math.min(wallHeightM * 0.45, 1.2),
-    });
-  }
-
-  if (raw.length === 0) return [];
-
-  raw.sort((a, b) => a.tStart - b.tStart);
-
-  const merged: GapInterval[] = [{ ...raw[0] }];
-  for (let i = 1; i < raw.length; i++) {
-    const prev = merged[merged.length - 1];
-    const cur = raw[i];
-    const EPS = 0.05;
-    if (cur.tStart <= prev.tEnd + EPS) {
-      const newYStart = Math.min(prev.yStart, cur.yStart);
-      const prevTop = prev.yStart + prev.height;
-      const curTop = cur.yStart + cur.height;
-      prev.tEnd = Math.max(prev.tEnd, cur.tEnd);
-      prev.yStart = newYStart;
-      prev.height = Math.max(prevTop, curTop) - newYStart;
-    } else {
-      merged.push({ ...cur });
-    }
-  }
-
-  return merged;
-};
-
-/**
- * A solid box sub-segment of the wall.
- */
-interface SolidSegment {
-  tStart: number;
-  tEnd: number;
-  yStart: number;
-  yEnd: number;
-}
-
-const computeSolidSegments = (
-  wallLengthM: number,
-  wallHeightM: number,
-  gaps: GapInterval[],
-): SolidSegment[] => {
-  const solids: SolidSegment[] = [];
-  if (gaps.length === 0 && wallLengthM > 1e-9) return [{ tStart: 0, tEnd: wallLengthM, yStart: 0, yEnd: wallHeightM }];
-
-  let cursor = 0;
-  for (const gap of gaps) {
-    if (gap.tStart > cursor + 0.001) {
-      solids.push({ tStart: cursor, tEnd: gap.tStart, yStart: 0, yEnd: wallHeightM });
-    }
-
-    if (gap.yStart > 0.01) {
-      solids.push({ tStart: gap.tStart, tEnd: gap.tEnd, yStart: 0, yEnd: gap.yStart });
-    }
-
-    const gapTop = gap.yStart + gap.height;
-    if (gapTop < wallHeightM - 0.01) {
-      solids.push({ tStart: gap.tStart, tEnd: gap.tEnd, yStart: gapTop, yEnd: wallHeightM });
-    }
-
-    cursor = gap.tEnd;
-  }
-
-  if (cursor < wallLengthM - 0.001) {
-    solids.push({ tStart: cursor, tEnd: wallLengthM, yStart: 0, yEnd: wallHeightM });
-  }
-
-  return solids;
-};
 
 // ── Shared opening transform ──────────────────────────────────────────────────
 
@@ -930,7 +766,7 @@ function RoomPolygonMesh({
   const baseColorRef = useRef(new THREE.Color(floorColor));
   const hoverColorRef = useRef(new THREE.Color(FLOOR_HOVER_COLOR));
 
-  const { pw, ph } = usePlanScale();
+  const { pw, ph, calibrated } = usePlanScale();
   const polygon = useMemo(() => getRoomPolygon(room), [room]);
 
   const shape = useMemo(() => {
@@ -1030,7 +866,7 @@ function RoomPolygonMesh({
         anchorX="center"
         anchorY="middle"
       >
-        {`${sizeHint.w.toFixed(1)}m`}
+        {calibrated ? `${sizeHint.w.toFixed(1)}m` : "—"}
       </Text>
 
       <Text
@@ -1041,7 +877,7 @@ function RoomPolygonMesh({
         anchorX="center"
         anchorY="middle"
       >
-        {`${sizeHint.d.toFixed(1)}m`}
+        {calibrated ? `${sizeHint.d.toFixed(1)}m` : "—"}
       </Text>
     </group>
   );
@@ -1193,7 +1029,7 @@ function DoorMesh({
   onSelect?: (id: string) => void;
   onHover?: (selection: Selection) => void;
 }) {
-  const { pw, ph } = usePlanScale();
+  const { pw, ph, calibrated } = usePlanScale();
   if (!door.bbox) return null;
 
   const wall = door.wallId
@@ -1308,7 +1144,7 @@ function DoorMesh({
           anchorX="center"
           anchorY="middle"
         >
-          {`D ${doorW.toFixed(1)}m`}
+          {calibrated ? `D ${doorW.toFixed(1)}m` : "—"}
         </Text>
           </>
         )}
@@ -1334,7 +1170,7 @@ function WindowMesh({
   onSelect?: (id: string) => void;
   onHover?: (selection: Selection) => void;
 }) {
-  const { pw, ph } = usePlanScale();
+  const { pw, ph, calibrated } = usePlanScale();
   if (!win.bbox) return null;
 
   const wall = win.wallId
@@ -1447,7 +1283,7 @@ function WindowMesh({
           anchorX="center"
           anchorY="middle"
         >
-          {`W ${winW.toFixed(1)}m`}
+          {calibrated ? `W ${winW.toFixed(1)}m` : "—"}
         </Text>
       </group>
     </group>
@@ -1845,23 +1681,23 @@ function WallEditGizmo({
 }
 
 function RoomInfoCard({ room }: { room: Room }) {
-  const { pw, ph } = usePlanScale();
+  const { pw, ph, calibrated } = usePlanScale();
   const bounds = getRoomBounds(room);
   const w = Math.max(safeNum(bounds?.w) * pw, 0);
   const d = Math.max(safeNum(bounds?.h) * ph, 0);
   const h = safeNum(room.wallHeight, 2.8);
-  const area = polygonArea(getRoomFloorPolygon(room), pw, ph);
+  const area = getMeasuredRoomArea(room, pw, ph, calibrated);
 
   return (
     <div className="absolute bottom-16 left-4 z-20 px-4 py-2.5 rounded-2xl bg-card/90 backdrop-blur-md border border-border shadow-2xl flex items-center gap-4 min-w-[280px] pointer-events-none">
       <div className="flex-1 min-w-0">
         <p className="text-xs font-semibold text-foreground truncate">{room.name}</p>
         <p className="text-[10px] text-muted-foreground mt-0.5 font-mono">
-          {w.toFixed(2)}m × {d.toFixed(2)}m · H: {h.toFixed(2)}m
+          {calibrated ? w.toFixed(2) : "—"}m × {calibrated ? d.toFixed(2) : "—"}m · H: {h.toFixed(2)}m
         </p>
       </div>
       <div className="text-right shrink-0">
-        <p className="text-[11px] font-mono text-primary">{area.toFixed(1)} m²</p>
+        <p className="text-[11px] font-mono text-primary">{area?.toFixed(1) ?? "—"} m²</p>
         <p className="text-[9px] text-muted-foreground/60 uppercase tracking-wider">
           {room.confidence}
         </p>
@@ -1933,17 +1769,10 @@ function Scene({
   const renderWalls = walls;
   const { pw, ph } = usePlanScale();
 
-  const defaultWallHeight =
-    rooms.length > 0
-      ? Math.max(...rooms.map((r) => safeNum(r.wallHeight, 2.8)), 2.8)
-      : 2.8;
-
-  const wallGeometries = useMemo(() => buildWallSolidGeometries(renderWalls.map(wall => {
-    const length = getWallLengthM(wall, pw, ph);
-    const height = safeNum(wall.wallHeight, defaultWallHeight);
-    return { wall, thickness: getWallThicknessM(wall, pw, ph),
-      solids: computeSolidSegments(length, height, computeGapIntervals(wall, length, height, doors, windows, renderWalls, pw, ph)) };
-  }), pw, ph), [renderWalls, doors, windows, defaultWallHeight, pw, ph]);
+  const defaultWallHeight = defaultRenderWallHeight(rooms);
+  const wallGeometries = useMemo(() => buildWallSolidGeometries(
+    wallSolidInputs(renderWalls, doors, windows, defaultWallHeight, pw, ph), pw, ph),
+    [renderWalls, doors, windows, defaultWallHeight, pw, ph]);
   useEffect(() => () => wallGeometries.forEach(geometry => geometry.dispose()), [wallGeometries]);
 
   const handleHover = (id: string | null) => {
@@ -2154,6 +1983,8 @@ const RightPanel = ({
   walls = [],
   doors = [],
   windows = [],
+  calibrationStatus = "uncalibrated",
+  scale = 0,
   planWidth = 0,
   planHeight = 0,
   originalPlanUrl = null,
@@ -2177,10 +2008,11 @@ const RightPanel = ({
   onUndo,
   onRedo,
 }: RightPanelProps) => {
-  // Resolve real-world plan dimensions. Fall back to PLAN_SIZE when not calibrated.
+  // Preserve rendering dimensions; measurements require explicit calibration below.
   const planDimensions = resolvePlanDimensions(planWidth, planHeight);
   const { width: pw, height: ph } = planDimensions;
-  const planScale = useMemo(() => ({ pw, ph }), [pw, ph]);
+  const calibrated = hasCalibration(calibrationStatus, scale, planWidth, planHeight);
+  const planScale = useMemo(() => ({ pw, ph, calibrated }), [pw, ph, calibrated]);
   const [hoveredId, setHoveredId] = useState<string | null>(null);
   const [walkMode, setWalkMode] = useState(false);
   const exitWalkMode = useCallback(() => setWalkMode(false), []);
@@ -2247,7 +2079,7 @@ const RightPanel = ({
   const camDist = Math.max(planSpan * 1.15, 12);
 
   const totalArea = rooms.reduce(
-    (s, room) => s + polygonArea(getRoomFloorPolygon(room), pw, ph),
+    (s, room) => s + (getMeasuredRoomArea(room, pw, ph, calibrated) ?? 0),
     0,
   );
 
@@ -2262,8 +2094,8 @@ const RightPanel = ({
   const selectedWallPaint = findScgPaint(selectedWall?.scgPaintCode);
   const selectedDoorOption = findScgDoor(selectedDoor?.scgDoorCode);
   const selectedWindowOption = findScgWindow(selectedWindow?.scgWindowCode);
-  const selectedRoomFloorArea = selectedRoom ? polygonArea(getRoomFloorPolygon(selectedRoom), pw, ph) : 0;
-  const selectedRoomTileCount = selectedRoom ? estimateTileCount(selectedRoomFloorArea, selectedRoomTile) : null;
+  const selectedRoomFloorArea = selectedRoom ? getMeasuredRoomArea(selectedRoom, pw, ph, calibrated) : null;
+  const selectedRoomTileCount = selectedRoomFloorArea != null ? estimateTileCount(selectedRoomFloorArea, selectedRoomTile) : null;
   const materialSummary = useMemo(() => {
     const unique = (items: string[]) => [...new Set(items.filter(Boolean))];
     return {
@@ -2833,9 +2665,9 @@ const RightPanel = ({
               {windows.length > 0 && (
                 <span className="pl-3 text-cyan-400">{windows.length} windows</span>
               )}
-              <span className="pl-3 text-muted-foreground">{totalArea.toFixed(1)} m²</span>
+              <span className="pl-3 text-muted-foreground">{calibrated ? totalArea.toFixed(1) : "—"} m²</span>
               <span className="pl-3 text-muted-foreground">H: {maxH.toFixed(1)}m</span>
-              <span className="pl-3 text-amber-400">{planDimensions.measured ? "Measured scale" : "Approximate scale"}</span>
+              <span className="pl-3 text-amber-400">{calibrated ? "Measured scale" : "Uncalibrated"}</span>
             </div>
             <button
               onClick={() => setWalkMode((prev) => !prev)}
@@ -2895,9 +2727,9 @@ const RightPanel = ({
               <div className="flex min-w-0 items-center gap-2">
                 <Palette className="h-4 w-4 shrink-0 text-primary" />
                 <div className="min-w-0 break-words">
-                  <div className="text-sm font-semibold text-foreground">ปรับแต่งวัตถุ</div>
+                  <div className="text-sm font-semibold text-foreground">Decoration</div>
                   <div className="text-xs text-muted-foreground" role="status" aria-live="polite">
-                    {selection ? `${({ room: "ห้อง", wall: "ผนัง", door: "ประตู", window: "หน้าต่าง" })[selection.type]} · ${selectedRoom?.name ?? selection.id}` : "เลือกวัตถุในฉากเพื่อเริ่มปรับแต่ง"}
+                    {selection ? `${({ room: "ห้อง", wall: "ผนัง", door: "ประตู", window: "หน้าต่าง" })[selection.type]} · ${selectedRoom?.name ?? selection.id}` : "Select an object to start decorating."}
                   </div>
                 </div>
               </div>
@@ -2921,12 +2753,13 @@ const RightPanel = ({
             </div>
 
             {isDecorateOpen && <div id="decorate-content" className="min-h-0 overflow-y-auto overscroll-contain pr-2 space-y-4 [&_label]:text-[13px] [&_input]:text-sm [&_select]:text-sm">
-            {selection && <p className="rounded-xl bg-primary/10 p-3 text-xs leading-5 text-muted-foreground">ปรับแล้วเห็นผลทันทีในฉาก · ใช้ปุ่มย้อนกลับเพื่อเลิกทำ</p>}
+            {!calibrated && <p className="rounded-xl bg-primary/10 p-3 text-xs text-muted-foreground">Calibrate scale in Review to estimate quantities</p>}
+            {/* {selection && <p className="rounded-xl bg-primary/10 p-3 text-xs leading-5 text-muted-foreground">ปรับแล้วเห็นผลทันทีในฉาก · ใช้ปุ่มย้อนกลับเพื่อเลิกทำ</p>} */}
             {!selection && (
               <div className="space-y-3">
-                <div className="rounded-2xl border border-dashed border-border p-3 text-[11px] leading-5 text-muted-foreground">
+                {/* <div className="rounded-2xl border border-dashed border-border p-3 text-[11px] leading-5 text-muted-foreground">
                   Select a room, wall, door, or window in the 3D view to edit it.
-                </div>
+                </div> */}
                 <label className="block text-[11px] text-muted-foreground">
                   Paint all walls
                   <select
@@ -2963,8 +2796,8 @@ const RightPanel = ({
             {selectedRoom && (
               <div className="space-y-3">
                 <fieldset className="space-y-3 rounded-xl border border-border p-3">
-                <legend className="px-1 text-sm font-semibold">สีและวัสดุพื้น</legend>
-                <MaterialSwatches label="กระเบื้อง" value={selectedRoom.tileCode ?? selectedRoomTile.code}
+                <legend className="px-1 text-sm font-semibold">Meterials</legend>
+                <MaterialSwatches label="Tiles" value={selectedRoom.tileCode ?? selectedRoomTile.code}
                   onChange={code => applyTileToRoom(selectedRoom.id, code)}
                   options={SCG_TILE_CATALOG.map(tile => ({ id: tile.code, name: tile.name, detail: `${tile.code} · ${tile.sizeCm} cm`, style: {
                     backgroundColor: tile.baseHex,
@@ -2991,7 +2824,7 @@ const RightPanel = ({
                 <div className="rounded-2xl border border-border bg-background/70 p-3 space-y-1.5 text-[11px] font-mono">
                   <div className="flex items-center justify-between gap-3">
                     <span className="text-muted-foreground">Area</span>
-                    <span className="text-foreground">{selectedRoomFloorArea.toFixed(2)} m²</span>
+                    <span className="text-foreground">{selectedRoomFloorArea?.toFixed(2) ?? "—"} m²</span>
                   </div>
                   <div className="flex items-center justify-between gap-3">
                     <span className="text-muted-foreground">Tile size</span>
@@ -3000,7 +2833,7 @@ const RightPanel = ({
                   <div className="flex items-center justify-between gap-3">
                     <span className="text-muted-foreground">Needed</span>
                     <span className="text-foreground font-semibold">
-                      {selectedRoomTileCount != null ? `${selectedRoomTileCount.toLocaleString()} แผ่น` : "N/A"}
+                      {selectedRoomTileCount != null ? `${selectedRoomTileCount.toLocaleString()} แผ่น` : "—"}
                     </span>
                   </div>
                   <div className="text-[10px] text-muted-foreground/70">
@@ -3018,9 +2851,9 @@ const RightPanel = ({
                 </label>
                 </fieldset>
                 <fieldset className="space-y-3 rounded-xl border border-border p-3">
-                <legend className="px-1 text-sm font-semibold">ขนาด</legend>
+                <legend className="px-1 text-sm font-semibold">size</legend>
                 <label className="block text-[11px] text-muted-foreground">
-                  ความสูงห้อง (m)
+                  height (m)
                   <input
                     type="number"
                     min={1.8}
@@ -3074,42 +2907,12 @@ const RightPanel = ({
                   />
                 </label>
                 </fieldset>
-                <fieldset className="space-y-3 rounded-xl border border-border p-3">
-                <legend className="px-1 text-sm font-semibold">ขนาดผนัง</legend>
-                <label className="block text-[11px] text-muted-foreground">
-                  Width / thickness (m)
-                  <input
-                    type="number"
-                    min={0.05}
-                    step={0.01}
-                    value={getWallThicknessM(selectedWall, pw, ph).toFixed(2)}
-                    onChange={(e) => onWallUpdate?.(selectedWall.id, "thickness", parseFloat(e.target.value) || 0.15)}
-                    className="mt-1 h-9 w-full rounded-xl border border-border bg-background px-3 text-xs text-foreground"
-                  />
-                </label>
-                <label className="block text-[11px] text-muted-foreground">
-                  Length (m)
-                  <input
-                    type="number"
-                    min={0.1}
-                    step={0.1}
-                    value={getWallLengthM(selectedWall).toFixed(2)}
-                    onChange={(e) => updateSelectedWallLength(parseFloat(e.target.value) || getWallLengthM(selectedWall))}
-                    className="mt-1 h-9 w-full rounded-xl border border-border bg-background px-3 text-xs text-foreground"
-                  />
-                </label>
-                <label className="block text-[11px] text-muted-foreground">
-                  Height (m)
-                  <input
-                    type="number"
-                    min={1.8}
-                    step={0.1}
-                    value={safeNum(selectedWall.wallHeight, maxH)}
-                    onChange={(e) => onWallUpdate?.(selectedWall.id, "wallHeight", parseFloat(e.target.value) || maxH)}
-                    className="mt-1 h-9 w-full rounded-xl border border-border bg-background px-3 text-xs text-foreground"
-                  />
-                </label>
-                </fieldset>
+                <div className="space-y-2 rounded-xl border border-border p-3 text-xs">
+                  <div>Length (m) <output aria-label="Length (m)">{calibrated ? getWallLengthM(selectedWall, pw, ph).toFixed(2) : "—"}</output></div>
+                  <div>Width / thickness (m) <output>{calibrated || selectedWall.thickness > 0 ? getWallThicknessM(selectedWall, pw, ph).toFixed(2) : "—"}</output></div>
+                  <div>Height (m) <output>{safeNum(selectedWall.wallHeight, maxH)}</output></div>
+                  <button onClick={onBack} className="text-primary underline">Edit wall dimensions in Review</button>
+                </div>
                 {/* <div className="grid grid-cols-2 gap-2">
                   <button onClick={() => setBuildMode("door")} className="inline-flex items-center justify-center gap-1 rounded-xl border border-border bg-background px-3 py-2 text-[11px] text-foreground hover:bg-accent">
                     <Plus className="h-3 w-3" /> Door

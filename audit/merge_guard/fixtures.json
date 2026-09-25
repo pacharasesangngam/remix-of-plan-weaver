@@ -1,0 +1,1894 @@
+[
+  {
+    "name": "h_parallel",
+    "input": [
+      [
+        {
+          "x1": 0.1,
+          "x2": 0.4,
+          "y": 0.301
+        },
+        {
+          "x1": 0.3,
+          "x2": 0.6,
+          "y": 0.309
+        }
+      ],
+      []
+    ],
+    "baseline": [
+      [
+        {
+          "x1": 0.1,
+          "x2": 0.6,
+          "y": 0.301,
+          "t": 0.012,
+          "conf": 0
+        }
+      ],
+      []
+    ],
+    "proposed": [
+      [
+        {
+          "x1": 0.1,
+          "x2": 0.4,
+          "y": 0.301
+        },
+        {
+          "x1": 0.3,
+          "x2": 0.6,
+          "y": 0.309
+        }
+      ],
+      []
+    ],
+    "predicate_only": [
+      [
+        {
+          "x1": 0.1,
+          "x2": 0.4,
+          "y": 0.301
+        },
+        {
+          "x1": 0.3,
+          "x2": 0.6,
+          "y": 0.309
+        }
+      ],
+      []
+    ],
+    "baseline_metrics": {
+      "walls": 1,
+      "sum_span_px": 256.0,
+      "union_span_px": 256.0,
+      "components": 1,
+      "dangling_count": 2,
+      "junction_count": 0,
+      "cells": 0,
+      "closed_area_px2": 0,
+      "dangling": [
+        [
+          51.2,
+          221.536
+        ],
+        [
+          307.2,
+          221.536
+        ]
+      ],
+      "junctions": [],
+      "cell_areas_px2": [],
+      "room_mask_best_cell_iou": [],
+      "openings": []
+    },
+    "proposed_metrics": {
+      "walls": 2,
+      "sum_span_px": 307.20000000000005,
+      "union_span_px": 307.20000000000005,
+      "components": 2,
+      "dangling_count": 4,
+      "junction_count": 0,
+      "cells": 0,
+      "closed_area_px2": 0,
+      "dangling": [
+        [
+          51.2,
+          221.536
+        ],
+        [
+          204.8,
+          221.536
+        ],
+        [
+          153.6,
+          227.424
+        ],
+        [
+          307.2,
+          227.424
+        ]
+      ],
+      "junctions": [],
+      "cell_areas_px2": [],
+      "room_mask_best_cell_iou": [],
+      "openings": []
+    },
+    "delta": {
+      "exact_segments_removed_or_changed": 1,
+      "exact_segments_added_or_changed": 2,
+      "merge_candidates": {},
+      "split_candidates": {},
+      "unmatched_before": [],
+      "unmatched_after": [
+        "h1"
+      ],
+      "matched_endpoint_changes": [
+        {
+          "before": "h0",
+          "after": "h0",
+          "p_displacement_px": 0.0,
+          "q_displacement_px": 102.39999999999998,
+          "span_delta_px": -102.39999999999998
+        }
+      ],
+      "max_matched_endpoint_displacement_px": 102.39999999999998,
+      "added_coverage_outside_1px_px": 153.6,
+      "removed_coverage_outside_1px_px": 101.39999999999998,
+      "hausdorff_px": 5.888000000000005,
+      "added_parts": [
+        {
+          "coords_px": [
+            [
+              153.6,
+              227.424
+            ],
+            [
+              307.2,
+              227.424
+            ]
+          ],
+          "length_px": 153.6,
+          "dark_support_fraction_3x3": 0.0
+        }
+      ]
+    }
+  },
+  {
+    "name": "h_overlap",
+    "input": [
+      [
+        {
+          "x1": 0.1,
+          "x2": 0.4,
+          "y": 0.3
+        },
+        {
+          "x1": 0.3,
+          "x2": 0.6,
+          "y": 0.3
+        }
+      ],
+      []
+    ],
+    "baseline": [
+      [
+        {
+          "x1": 0.1,
+          "x2": 0.6,
+          "y": 0.3,
+          "t": 0.012,
+          "conf": 0
+        }
+      ],
+      []
+    ],
+    "proposed": [
+      [
+        {
+          "x1": 0.1,
+          "x2": 0.6,
+          "y": 0.3,
+          "t": 0.012,
+          "conf": 0
+        }
+      ],
+      []
+    ],
+    "predicate_only": [
+      [
+        {
+          "x1": 0.1,
+          "x2": 0.6,
+          "y": 0.3,
+          "t": 0.012,
+          "conf": 0
+        }
+      ],
+      []
+    ],
+    "baseline_metrics": {
+      "walls": 1,
+      "sum_span_px": 256.0,
+      "union_span_px": 256.0,
+      "components": 1,
+      "dangling_count": 2,
+      "junction_count": 0,
+      "cells": 0,
+      "closed_area_px2": 0,
+      "dangling": [
+        [
+          51.2,
+          220.8
+        ],
+        [
+          307.2,
+          220.8
+        ]
+      ],
+      "junctions": [],
+      "cell_areas_px2": [],
+      "room_mask_best_cell_iou": [],
+      "openings": []
+    },
+    "proposed_metrics": {
+      "walls": 1,
+      "sum_span_px": 256.0,
+      "union_span_px": 256.0,
+      "components": 1,
+      "dangling_count": 2,
+      "junction_count": 0,
+      "cells": 0,
+      "closed_area_px2": 0,
+      "dangling": [
+        [
+          51.2,
+          220.8
+        ],
+        [
+          307.2,
+          220.8
+        ]
+      ],
+      "junctions": [],
+      "cell_areas_px2": [],
+      "room_mask_best_cell_iou": [],
+      "openings": []
+    },
+    "delta": {
+      "exact_segments_removed_or_changed": 0,
+      "exact_segments_added_or_changed": 0,
+      "merge_candidates": {},
+      "split_candidates": {},
+      "unmatched_before": [],
+      "unmatched_after": [],
+      "matched_endpoint_changes": [],
+      "max_matched_endpoint_displacement_px": 0,
+      "added_coverage_outside_1px_px": 0.0,
+      "removed_coverage_outside_1px_px": 0.0,
+      "hausdorff_px": 0.0,
+      "added_parts": []
+    }
+  },
+  {
+    "name": "h_touch",
+    "input": [
+      [
+        {
+          "x1": 0.1,
+          "x2": 0.4,
+          "y": 0.3
+        },
+        {
+          "x1": 0.4,
+          "x2": 0.6,
+          "y": 0.3
+        }
+      ],
+      []
+    ],
+    "baseline": [
+      [
+        {
+          "x1": 0.1,
+          "x2": 0.6,
+          "y": 0.3,
+          "t": 0.012,
+          "conf": 0
+        }
+      ],
+      []
+    ],
+    "proposed": [
+      [
+        {
+          "x1": 0.1,
+          "x2": 0.6,
+          "y": 0.3,
+          "t": 0.012,
+          "conf": 0
+        }
+      ],
+      []
+    ],
+    "predicate_only": [
+      [
+        {
+          "x1": 0.1,
+          "x2": 0.6,
+          "y": 0.3,
+          "t": 0.012,
+          "conf": 0
+        }
+      ],
+      []
+    ],
+    "baseline_metrics": {
+      "walls": 1,
+      "sum_span_px": 256.0,
+      "union_span_px": 256.0,
+      "components": 1,
+      "dangling_count": 2,
+      "junction_count": 0,
+      "cells": 0,
+      "closed_area_px2": 0,
+      "dangling": [
+        [
+          51.2,
+          220.8
+        ],
+        [
+          307.2,
+          220.8
+        ]
+      ],
+      "junctions": [],
+      "cell_areas_px2": [],
+      "room_mask_best_cell_iou": [],
+      "openings": []
+    },
+    "proposed_metrics": {
+      "walls": 1,
+      "sum_span_px": 256.0,
+      "union_span_px": 256.0,
+      "components": 1,
+      "dangling_count": 2,
+      "junction_count": 0,
+      "cells": 0,
+      "closed_area_px2": 0,
+      "dangling": [
+        [
+          51.2,
+          220.8
+        ],
+        [
+          307.2,
+          220.8
+        ]
+      ],
+      "junctions": [],
+      "cell_areas_px2": [],
+      "room_mask_best_cell_iou": [],
+      "openings": []
+    },
+    "delta": {
+      "exact_segments_removed_or_changed": 0,
+      "exact_segments_added_or_changed": 0,
+      "merge_candidates": {},
+      "split_candidates": {},
+      "unmatched_before": [],
+      "unmatched_after": [],
+      "matched_endpoint_changes": [],
+      "max_matched_endpoint_displacement_px": 0,
+      "added_coverage_outside_1px_px": 0.0,
+      "removed_coverage_outside_1px_px": 0.0,
+      "hausdorff_px": 0.0,
+      "added_parts": []
+    }
+  },
+  {
+    "name": "h_duplicate",
+    "input": [
+      [
+        {
+          "x1": 0.1,
+          "x2": 0.4,
+          "y": 0.3
+        },
+        {
+          "x1": 0.1,
+          "x2": 0.4,
+          "y": 0.3
+        }
+      ],
+      []
+    ],
+    "baseline": [
+      [
+        {
+          "x1": 0.1,
+          "x2": 0.4,
+          "y": 0.3,
+          "t": 0.012,
+          "conf": 0
+        }
+      ],
+      []
+    ],
+    "proposed": [
+      [
+        {
+          "x1": 0.1,
+          "x2": 0.4,
+          "y": 0.3,
+          "t": 0.012,
+          "conf": 0
+        }
+      ],
+      []
+    ],
+    "predicate_only": [
+      [
+        {
+          "x1": 0.1,
+          "x2": 0.4,
+          "y": 0.3,
+          "t": 0.012,
+          "conf": 0
+        }
+      ],
+      []
+    ],
+    "baseline_metrics": {
+      "walls": 1,
+      "sum_span_px": 153.60000000000002,
+      "union_span_px": 153.60000000000002,
+      "components": 1,
+      "dangling_count": 2,
+      "junction_count": 0,
+      "cells": 0,
+      "closed_area_px2": 0,
+      "dangling": [
+        [
+          51.2,
+          220.8
+        ],
+        [
+          204.8,
+          220.8
+        ]
+      ],
+      "junctions": [],
+      "cell_areas_px2": [],
+      "room_mask_best_cell_iou": [],
+      "openings": []
+    },
+    "proposed_metrics": {
+      "walls": 1,
+      "sum_span_px": 153.60000000000002,
+      "union_span_px": 153.60000000000002,
+      "components": 1,
+      "dangling_count": 2,
+      "junction_count": 0,
+      "cells": 0,
+      "closed_area_px2": 0,
+      "dangling": [
+        [
+          51.2,
+          220.8
+        ],
+        [
+          204.8,
+          220.8
+        ]
+      ],
+      "junctions": [],
+      "cell_areas_px2": [],
+      "room_mask_best_cell_iou": [],
+      "openings": []
+    },
+    "delta": {
+      "exact_segments_removed_or_changed": 0,
+      "exact_segments_added_or_changed": 0,
+      "merge_candidates": {},
+      "split_candidates": {},
+      "unmatched_before": [],
+      "unmatched_after": [],
+      "matched_endpoint_changes": [],
+      "max_matched_endpoint_displacement_px": 0,
+      "added_coverage_outside_1px_px": 0.0,
+      "removed_coverage_outside_1px_px": 0.0,
+      "hausdorff_px": 0.0,
+      "added_parts": []
+    }
+  },
+  {
+    "name": "h_gap",
+    "input": [
+      [
+        {
+          "x1": 0.1,
+          "x2": 0.4,
+          "y": 0.3
+        },
+        {
+          "x1": 0.41,
+          "x2": 0.6,
+          "y": 0.3
+        }
+      ],
+      []
+    ],
+    "baseline": [
+      [
+        {
+          "x1": 0.1,
+          "x2": 0.4,
+          "y": 0.3
+        },
+        {
+          "x1": 0.41,
+          "x2": 0.6,
+          "y": 0.3
+        }
+      ],
+      []
+    ],
+    "proposed": [
+      [
+        {
+          "x1": 0.1,
+          "x2": 0.4,
+          "y": 0.3
+        },
+        {
+          "x1": 0.41,
+          "x2": 0.6,
+          "y": 0.3
+        }
+      ],
+      []
+    ],
+    "predicate_only": [
+      [
+        {
+          "x1": 0.1,
+          "x2": 0.4,
+          "y": 0.3
+        },
+        {
+          "x1": 0.41,
+          "x2": 0.6,
+          "y": 0.3
+        }
+      ],
+      []
+    ],
+    "baseline_metrics": {
+      "walls": 2,
+      "sum_span_px": 250.88000000000002,
+      "union_span_px": 250.88000000000002,
+      "components": 2,
+      "dangling_count": 4,
+      "junction_count": 0,
+      "cells": 0,
+      "closed_area_px2": 0,
+      "dangling": [
+        [
+          51.2,
+          220.8
+        ],
+        [
+          204.8,
+          220.8
+        ],
+        [
+          209.92,
+          220.8
+        ],
+        [
+          307.2,
+          220.8
+        ]
+      ],
+      "junctions": [],
+      "cell_areas_px2": [],
+      "room_mask_best_cell_iou": [],
+      "openings": []
+    },
+    "proposed_metrics": {
+      "walls": 2,
+      "sum_span_px": 250.88000000000002,
+      "union_span_px": 250.88000000000002,
+      "components": 2,
+      "dangling_count": 4,
+      "junction_count": 0,
+      "cells": 0,
+      "closed_area_px2": 0,
+      "dangling": [
+        [
+          51.2,
+          220.8
+        ],
+        [
+          204.8,
+          220.8
+        ],
+        [
+          209.92,
+          220.8
+        ],
+        [
+          307.2,
+          220.8
+        ]
+      ],
+      "junctions": [],
+      "cell_areas_px2": [],
+      "room_mask_best_cell_iou": [],
+      "openings": []
+    },
+    "delta": {
+      "exact_segments_removed_or_changed": 0,
+      "exact_segments_added_or_changed": 0,
+      "merge_candidates": {},
+      "split_candidates": {},
+      "unmatched_before": [],
+      "unmatched_after": [],
+      "matched_endpoint_changes": [],
+      "max_matched_endpoint_displacement_px": 0,
+      "added_coverage_outside_1px_px": 0.0,
+      "removed_coverage_outside_1px_px": 0.0,
+      "hausdorff_px": 0.0,
+      "added_parts": []
+    }
+  },
+  {
+    "name": "h_interleaved",
+    "input": [
+      [
+        {
+          "x1": 0.1,
+          "x2": 0.4,
+          "y": 0.301
+        },
+        {
+          "x1": 0.2,
+          "x2": 0.3,
+          "y": 0.309
+        },
+        {
+          "x1": 0.35,
+          "x2": 0.6,
+          "y": 0.301
+        }
+      ],
+      []
+    ],
+    "baseline": [
+      [
+        {
+          "x1": 0.1,
+          "x2": 0.6,
+          "y": 0.301,
+          "t": 0.012,
+          "conf": 0
+        }
+      ],
+      []
+    ],
+    "proposed": [
+      [
+        {
+          "x1": 0.1,
+          "x2": 0.6,
+          "y": 0.301,
+          "t": 0.012,
+          "conf": 0
+        },
+        {
+          "x1": 0.2,
+          "x2": 0.3,
+          "y": 0.309
+        }
+      ],
+      []
+    ],
+    "predicate_only": [
+      [
+        {
+          "x1": 0.1,
+          "x2": 0.4,
+          "y": 0.301
+        },
+        {
+          "x1": 0.2,
+          "x2": 0.3,
+          "y": 0.309
+        },
+        {
+          "x1": 0.35,
+          "x2": 0.6,
+          "y": 0.301
+        }
+      ],
+      []
+    ],
+    "baseline_metrics": {
+      "walls": 1,
+      "sum_span_px": 256.0,
+      "union_span_px": 256.0,
+      "components": 1,
+      "dangling_count": 2,
+      "junction_count": 0,
+      "cells": 0,
+      "closed_area_px2": 0,
+      "dangling": [
+        [
+          51.2,
+          221.536
+        ],
+        [
+          307.2,
+          221.536
+        ]
+      ],
+      "junctions": [],
+      "cell_areas_px2": [],
+      "room_mask_best_cell_iou": [],
+      "openings": []
+    },
+    "proposed_metrics": {
+      "walls": 2,
+      "sum_span_px": 307.2,
+      "union_span_px": 307.2,
+      "components": 2,
+      "dangling_count": 4,
+      "junction_count": 0,
+      "cells": 0,
+      "closed_area_px2": 0,
+      "dangling": [
+        [
+          51.2,
+          221.536
+        ],
+        [
+          307.2,
+          221.536
+        ],
+        [
+          102.4,
+          227.424
+        ],
+        [
+          153.6,
+          227.424
+        ]
+      ],
+      "junctions": [],
+      "cell_areas_px2": [],
+      "room_mask_best_cell_iou": [],
+      "openings": []
+    },
+    "delta": {
+      "exact_segments_removed_or_changed": 0,
+      "exact_segments_added_or_changed": 1,
+      "merge_candidates": {},
+      "split_candidates": {},
+      "unmatched_before": [],
+      "unmatched_after": [
+        "h1"
+      ],
+      "matched_endpoint_changes": [],
+      "max_matched_endpoint_displacement_px": 0,
+      "added_coverage_outside_1px_px": 51.19999999999999,
+      "removed_coverage_outside_1px_px": 0.0,
+      "hausdorff_px": 5.888000000000005,
+      "added_parts": [
+        {
+          "coords_px": [
+            [
+              102.4,
+              227.424
+            ],
+            [
+              153.6,
+              227.424
+            ]
+          ],
+          "length_px": 51.19999999999999,
+          "dark_support_fraction_3x3": 0.0
+        }
+      ]
+    }
+  },
+  {
+    "name": "h_tiny_distinct_axis",
+    "input": [
+      [
+        {
+          "x1": 0.1,
+          "x2": 0.4,
+          "y": 0.3
+        },
+        {
+          "x1": 0.3,
+          "x2": 0.6,
+          "y": 0.30000001
+        }
+      ],
+      []
+    ],
+    "baseline": [
+      [
+        {
+          "x1": 0.1,
+          "x2": 0.6,
+          "y": 0.3,
+          "t": 0.012,
+          "conf": 0
+        }
+      ],
+      []
+    ],
+    "proposed": [
+      [
+        {
+          "x1": 0.1,
+          "x2": 0.4,
+          "y": 0.3
+        },
+        {
+          "x1": 0.3,
+          "x2": 0.6,
+          "y": 0.30000001
+        }
+      ],
+      []
+    ],
+    "predicate_only": [
+      [
+        {
+          "x1": 0.1,
+          "x2": 0.4,
+          "y": 0.3
+        },
+        {
+          "x1": 0.3,
+          "x2": 0.6,
+          "y": 0.30000001
+        }
+      ],
+      []
+    ],
+    "baseline_metrics": {
+      "walls": 1,
+      "sum_span_px": 256.0,
+      "union_span_px": 256.0,
+      "components": 1,
+      "dangling_count": 2,
+      "junction_count": 0,
+      "cells": 0,
+      "closed_area_px2": 0,
+      "dangling": [
+        [
+          51.2,
+          220.8
+        ],
+        [
+          307.2,
+          220.8
+        ]
+      ],
+      "junctions": [],
+      "cell_areas_px2": [],
+      "room_mask_best_cell_iou": [],
+      "openings": []
+    },
+    "proposed_metrics": {
+      "walls": 2,
+      "sum_span_px": 307.20000000000005,
+      "union_span_px": 307.20000000000005,
+      "components": 2,
+      "dangling_count": 4,
+      "junction_count": 0,
+      "cells": 0,
+      "closed_area_px2": 0,
+      "dangling": [
+        [
+          51.2,
+          220.8
+        ],
+        [
+          204.8,
+          220.8
+        ],
+        [
+          153.6,
+          220.800007
+        ],
+        [
+          307.2,
+          220.800007
+        ]
+      ],
+      "junctions": [],
+      "cell_areas_px2": [],
+      "room_mask_best_cell_iou": [],
+      "openings": []
+    },
+    "delta": {
+      "exact_segments_removed_or_changed": 1,
+      "exact_segments_added_or_changed": 2,
+      "merge_candidates": {},
+      "split_candidates": {
+        "h0": [
+          "h0",
+          "h1"
+        ]
+      },
+      "unmatched_before": [],
+      "unmatched_after": [],
+      "matched_endpoint_changes": [
+        {
+          "before": "h0",
+          "after": "h0",
+          "p_displacement_px": 0.0,
+          "q_displacement_px": 102.39999999999998,
+          "span_delta_px": -102.39999999999998
+        }
+      ],
+      "max_matched_endpoint_displacement_px": 102.39999999999998,
+      "added_coverage_outside_1px_px": 0.0,
+      "removed_coverage_outside_1px_px": 0.0,
+      "hausdorff_px": 7.360000012113233e-06,
+      "added_parts": []
+    }
+  },
+  {
+    "name": "v_parallel",
+    "input": [
+      [],
+      [
+        {
+          "y1": 0.1,
+          "y2": 0.4,
+          "x": 0.301
+        },
+        {
+          "y1": 0.3,
+          "y2": 0.6,
+          "x": 0.309
+        }
+      ]
+    ],
+    "baseline": [
+      [],
+      [
+        {
+          "y1": 0.1,
+          "y2": 0.6,
+          "x": 0.301,
+          "t": 0.012,
+          "conf": 0
+        }
+      ]
+    ],
+    "proposed": [
+      [],
+      [
+        {
+          "y1": 0.1,
+          "y2": 0.4,
+          "x": 0.301
+        },
+        {
+          "y1": 0.3,
+          "y2": 0.6,
+          "x": 0.309
+        }
+      ]
+    ],
+    "predicate_only": [
+      [],
+      [
+        {
+          "y1": 0.1,
+          "y2": 0.4,
+          "x": 0.301
+        },
+        {
+          "y1": 0.3,
+          "y2": 0.6,
+          "x": 0.309
+        }
+      ]
+    ],
+    "baseline_metrics": {
+      "walls": 1,
+      "sum_span_px": 367.99999999999994,
+      "union_span_px": 367.99999999999994,
+      "components": 1,
+      "dangling_count": 2,
+      "junction_count": 0,
+      "cells": 0,
+      "closed_area_px2": 0,
+      "dangling": [
+        [
+          154.112,
+          73.6
+        ],
+        [
+          154.112,
+          441.6
+        ]
+      ],
+      "junctions": [],
+      "cell_areas_px2": [],
+      "room_mask_best_cell_iou": [],
+      "openings": []
+    },
+    "proposed_metrics": {
+      "walls": 2,
+      "sum_span_px": 441.6,
+      "union_span_px": 441.6,
+      "components": 2,
+      "dangling_count": 4,
+      "junction_count": 0,
+      "cells": 0,
+      "closed_area_px2": 0,
+      "dangling": [
+        [
+          154.112,
+          73.6
+        ],
+        [
+          154.112,
+          294.4
+        ],
+        [
+          158.208,
+          220.8
+        ],
+        [
+          158.208,
+          441.6
+        ]
+      ],
+      "junctions": [],
+      "cell_areas_px2": [],
+      "room_mask_best_cell_iou": [],
+      "openings": []
+    },
+    "delta": {
+      "exact_segments_removed_or_changed": 1,
+      "exact_segments_added_or_changed": 2,
+      "merge_candidates": {},
+      "split_candidates": {},
+      "unmatched_before": [],
+      "unmatched_after": [
+        "v1"
+      ],
+      "matched_endpoint_changes": [
+        {
+          "before": "v0",
+          "after": "v0",
+          "p_displacement_px": 0.0,
+          "q_displacement_px": 147.19999999999993,
+          "span_delta_px": -147.19999999999993
+        }
+      ],
+      "max_matched_endpoint_displacement_px": 147.19999999999993,
+      "added_coverage_outside_1px_px": 220.79999999999998,
+      "removed_coverage_outside_1px_px": 146.19999999999993,
+      "hausdorff_px": 4.0960000000000045,
+      "added_parts": [
+        {
+          "coords_px": [
+            [
+              158.208,
+              220.79999999999998
+            ],
+            [
+              158.208,
+              441.59999999999997
+            ]
+          ],
+          "length_px": 220.79999999999998,
+          "dark_support_fraction_3x3": 0.0
+        }
+      ]
+    }
+  },
+  {
+    "name": "v_overlap",
+    "input": [
+      [],
+      [
+        {
+          "y1": 0.1,
+          "y2": 0.4,
+          "x": 0.3
+        },
+        {
+          "y1": 0.3,
+          "y2": 0.6,
+          "x": 0.3
+        }
+      ]
+    ],
+    "baseline": [
+      [],
+      [
+        {
+          "y1": 0.1,
+          "y2": 0.6,
+          "x": 0.3,
+          "t": 0.012,
+          "conf": 0
+        }
+      ]
+    ],
+    "proposed": [
+      [],
+      [
+        {
+          "y1": 0.1,
+          "y2": 0.6,
+          "x": 0.3,
+          "t": 0.012,
+          "conf": 0
+        }
+      ]
+    ],
+    "predicate_only": [
+      [],
+      [
+        {
+          "y1": 0.1,
+          "y2": 0.6,
+          "x": 0.3,
+          "t": 0.012,
+          "conf": 0
+        }
+      ]
+    ],
+    "baseline_metrics": {
+      "walls": 1,
+      "sum_span_px": 367.99999999999994,
+      "union_span_px": 367.99999999999994,
+      "components": 1,
+      "dangling_count": 2,
+      "junction_count": 0,
+      "cells": 0,
+      "closed_area_px2": 0,
+      "dangling": [
+        [
+          153.6,
+          73.6
+        ],
+        [
+          153.6,
+          441.6
+        ]
+      ],
+      "junctions": [],
+      "cell_areas_px2": [],
+      "room_mask_best_cell_iou": [],
+      "openings": []
+    },
+    "proposed_metrics": {
+      "walls": 1,
+      "sum_span_px": 367.99999999999994,
+      "union_span_px": 367.99999999999994,
+      "components": 1,
+      "dangling_count": 2,
+      "junction_count": 0,
+      "cells": 0,
+      "closed_area_px2": 0,
+      "dangling": [
+        [
+          153.6,
+          73.6
+        ],
+        [
+          153.6,
+          441.6
+        ]
+      ],
+      "junctions": [],
+      "cell_areas_px2": [],
+      "room_mask_best_cell_iou": [],
+      "openings": []
+    },
+    "delta": {
+      "exact_segments_removed_or_changed": 0,
+      "exact_segments_added_or_changed": 0,
+      "merge_candidates": {},
+      "split_candidates": {},
+      "unmatched_before": [],
+      "unmatched_after": [],
+      "matched_endpoint_changes": [],
+      "max_matched_endpoint_displacement_px": 0,
+      "added_coverage_outside_1px_px": 0.0,
+      "removed_coverage_outside_1px_px": 0.0,
+      "hausdorff_px": 0.0,
+      "added_parts": []
+    }
+  },
+  {
+    "name": "v_touch",
+    "input": [
+      [],
+      [
+        {
+          "y1": 0.1,
+          "y2": 0.4,
+          "x": 0.3
+        },
+        {
+          "y1": 0.4,
+          "y2": 0.6,
+          "x": 0.3
+        }
+      ]
+    ],
+    "baseline": [
+      [],
+      [
+        {
+          "y1": 0.1,
+          "y2": 0.6,
+          "x": 0.3,
+          "t": 0.012,
+          "conf": 0
+        }
+      ]
+    ],
+    "proposed": [
+      [],
+      [
+        {
+          "y1": 0.1,
+          "y2": 0.6,
+          "x": 0.3,
+          "t": 0.012,
+          "conf": 0
+        }
+      ]
+    ],
+    "predicate_only": [
+      [],
+      [
+        {
+          "y1": 0.1,
+          "y2": 0.6,
+          "x": 0.3,
+          "t": 0.012,
+          "conf": 0
+        }
+      ]
+    ],
+    "baseline_metrics": {
+      "walls": 1,
+      "sum_span_px": 367.99999999999994,
+      "union_span_px": 367.99999999999994,
+      "components": 1,
+      "dangling_count": 2,
+      "junction_count": 0,
+      "cells": 0,
+      "closed_area_px2": 0,
+      "dangling": [
+        [
+          153.6,
+          73.6
+        ],
+        [
+          153.6,
+          441.6
+        ]
+      ],
+      "junctions": [],
+      "cell_areas_px2": [],
+      "room_mask_best_cell_iou": [],
+      "openings": []
+    },
+    "proposed_metrics": {
+      "walls": 1,
+      "sum_span_px": 367.99999999999994,
+      "union_span_px": 367.99999999999994,
+      "components": 1,
+      "dangling_count": 2,
+      "junction_count": 0,
+      "cells": 0,
+      "closed_area_px2": 0,
+      "dangling": [
+        [
+          153.6,
+          73.6
+        ],
+        [
+          153.6,
+          441.6
+        ]
+      ],
+      "junctions": [],
+      "cell_areas_px2": [],
+      "room_mask_best_cell_iou": [],
+      "openings": []
+    },
+    "delta": {
+      "exact_segments_removed_or_changed": 0,
+      "exact_segments_added_or_changed": 0,
+      "merge_candidates": {},
+      "split_candidates": {},
+      "unmatched_before": [],
+      "unmatched_after": [],
+      "matched_endpoint_changes": [],
+      "max_matched_endpoint_displacement_px": 0,
+      "added_coverage_outside_1px_px": 0.0,
+      "removed_coverage_outside_1px_px": 0.0,
+      "hausdorff_px": 0.0,
+      "added_parts": []
+    }
+  },
+  {
+    "name": "v_duplicate",
+    "input": [
+      [],
+      [
+        {
+          "y1": 0.1,
+          "y2": 0.4,
+          "x": 0.3
+        },
+        {
+          "y1": 0.1,
+          "y2": 0.4,
+          "x": 0.3
+        }
+      ]
+    ],
+    "baseline": [
+      [],
+      [
+        {
+          "y1": 0.1,
+          "y2": 0.4,
+          "x": 0.3,
+          "t": 0.012,
+          "conf": 0
+        }
+      ]
+    ],
+    "proposed": [
+      [],
+      [
+        {
+          "y1": 0.1,
+          "y2": 0.4,
+          "x": 0.3,
+          "t": 0.012,
+          "conf": 0
+        }
+      ]
+    ],
+    "predicate_only": [
+      [],
+      [
+        {
+          "y1": 0.1,
+          "y2": 0.4,
+          "x": 0.3,
+          "t": 0.012,
+          "conf": 0
+        }
+      ]
+    ],
+    "baseline_metrics": {
+      "walls": 1,
+      "sum_span_px": 220.8,
+      "union_span_px": 220.8,
+      "components": 1,
+      "dangling_count": 2,
+      "junction_count": 0,
+      "cells": 0,
+      "closed_area_px2": 0,
+      "dangling": [
+        [
+          153.6,
+          73.6
+        ],
+        [
+          153.6,
+          294.4
+        ]
+      ],
+      "junctions": [],
+      "cell_areas_px2": [],
+      "room_mask_best_cell_iou": [],
+      "openings": []
+    },
+    "proposed_metrics": {
+      "walls": 1,
+      "sum_span_px": 220.8,
+      "union_span_px": 220.8,
+      "components": 1,
+      "dangling_count": 2,
+      "junction_count": 0,
+      "cells": 0,
+      "closed_area_px2": 0,
+      "dangling": [
+        [
+          153.6,
+          73.6
+        ],
+        [
+          153.6,
+          294.4
+        ]
+      ],
+      "junctions": [],
+      "cell_areas_px2": [],
+      "room_mask_best_cell_iou": [],
+      "openings": []
+    },
+    "delta": {
+      "exact_segments_removed_or_changed": 0,
+      "exact_segments_added_or_changed": 0,
+      "merge_candidates": {},
+      "split_candidates": {},
+      "unmatched_before": [],
+      "unmatched_after": [],
+      "matched_endpoint_changes": [],
+      "max_matched_endpoint_displacement_px": 0,
+      "added_coverage_outside_1px_px": 0.0,
+      "removed_coverage_outside_1px_px": 0.0,
+      "hausdorff_px": 0.0,
+      "added_parts": []
+    }
+  },
+  {
+    "name": "v_gap",
+    "input": [
+      [],
+      [
+        {
+          "y1": 0.1,
+          "y2": 0.4,
+          "x": 0.3
+        },
+        {
+          "y1": 0.41,
+          "y2": 0.6,
+          "x": 0.3
+        }
+      ]
+    ],
+    "baseline": [
+      [],
+      [
+        {
+          "y1": 0.1,
+          "y2": 0.4,
+          "x": 0.3
+        },
+        {
+          "y1": 0.41,
+          "y2": 0.6,
+          "x": 0.3
+        }
+      ]
+    ],
+    "proposed": [
+      [],
+      [
+        {
+          "y1": 0.1,
+          "y2": 0.4,
+          "x": 0.3
+        },
+        {
+          "y1": 0.41,
+          "y2": 0.6,
+          "x": 0.3
+        }
+      ]
+    ],
+    "predicate_only": [
+      [],
+      [
+        {
+          "y1": 0.1,
+          "y2": 0.4,
+          "x": 0.3
+        },
+        {
+          "y1": 0.41,
+          "y2": 0.6,
+          "x": 0.3
+        }
+      ]
+    ],
+    "baseline_metrics": {
+      "walls": 2,
+      "sum_span_px": 360.64,
+      "union_span_px": 360.64,
+      "components": 2,
+      "dangling_count": 4,
+      "junction_count": 0,
+      "cells": 0,
+      "closed_area_px2": 0,
+      "dangling": [
+        [
+          153.6,
+          73.6
+        ],
+        [
+          153.6,
+          294.4
+        ],
+        [
+          153.6,
+          301.76
+        ],
+        [
+          153.6,
+          441.6
+        ]
+      ],
+      "junctions": [],
+      "cell_areas_px2": [],
+      "room_mask_best_cell_iou": [],
+      "openings": []
+    },
+    "proposed_metrics": {
+      "walls": 2,
+      "sum_span_px": 360.64,
+      "union_span_px": 360.64,
+      "components": 2,
+      "dangling_count": 4,
+      "junction_count": 0,
+      "cells": 0,
+      "closed_area_px2": 0,
+      "dangling": [
+        [
+          153.6,
+          73.6
+        ],
+        [
+          153.6,
+          294.4
+        ],
+        [
+          153.6,
+          301.76
+        ],
+        [
+          153.6,
+          441.6
+        ]
+      ],
+      "junctions": [],
+      "cell_areas_px2": [],
+      "room_mask_best_cell_iou": [],
+      "openings": []
+    },
+    "delta": {
+      "exact_segments_removed_or_changed": 0,
+      "exact_segments_added_or_changed": 0,
+      "merge_candidates": {},
+      "split_candidates": {},
+      "unmatched_before": [],
+      "unmatched_after": [],
+      "matched_endpoint_changes": [],
+      "max_matched_endpoint_displacement_px": 0,
+      "added_coverage_outside_1px_px": 0.0,
+      "removed_coverage_outside_1px_px": 0.0,
+      "hausdorff_px": 0.0,
+      "added_parts": []
+    }
+  },
+  {
+    "name": "v_interleaved",
+    "input": [
+      [],
+      [
+        {
+          "y1": 0.1,
+          "y2": 0.4,
+          "x": 0.301
+        },
+        {
+          "y1": 0.2,
+          "y2": 0.3,
+          "x": 0.309
+        },
+        {
+          "y1": 0.35,
+          "y2": 0.6,
+          "x": 0.301
+        }
+      ]
+    ],
+    "baseline": [
+      [],
+      [
+        {
+          "y1": 0.1,
+          "y2": 0.6,
+          "x": 0.301,
+          "t": 0.012,
+          "conf": 0
+        }
+      ]
+    ],
+    "proposed": [
+      [],
+      [
+        {
+          "y1": 0.1,
+          "y2": 0.6,
+          "x": 0.301,
+          "t": 0.012,
+          "conf": 0
+        },
+        {
+          "y1": 0.2,
+          "y2": 0.3,
+          "x": 0.309
+        }
+      ]
+    ],
+    "predicate_only": [
+      [],
+      [
+        {
+          "y1": 0.1,
+          "y2": 0.4,
+          "x": 0.301
+        },
+        {
+          "y1": 0.2,
+          "y2": 0.3,
+          "x": 0.309
+        },
+        {
+          "y1": 0.35,
+          "y2": 0.6,
+          "x": 0.301
+        }
+      ]
+    ],
+    "baseline_metrics": {
+      "walls": 1,
+      "sum_span_px": 367.99999999999994,
+      "union_span_px": 367.99999999999994,
+      "components": 1,
+      "dangling_count": 2,
+      "junction_count": 0,
+      "cells": 0,
+      "closed_area_px2": 0,
+      "dangling": [
+        [
+          154.112,
+          73.6
+        ],
+        [
+          154.112,
+          441.6
+        ]
+      ],
+      "junctions": [],
+      "cell_areas_px2": [],
+      "room_mask_best_cell_iou": [],
+      "openings": []
+    },
+    "proposed_metrics": {
+      "walls": 2,
+      "sum_span_px": 441.5999999999999,
+      "union_span_px": 441.5999999999999,
+      "components": 2,
+      "dangling_count": 4,
+      "junction_count": 0,
+      "cells": 0,
+      "closed_area_px2": 0,
+      "dangling": [
+        [
+          154.112,
+          73.6
+        ],
+        [
+          154.112,
+          441.6
+        ],
+        [
+          158.208,
+          147.2
+        ],
+        [
+          158.208,
+          220.8
+        ]
+      ],
+      "junctions": [],
+      "cell_areas_px2": [],
+      "room_mask_best_cell_iou": [],
+      "openings": []
+    },
+    "delta": {
+      "exact_segments_removed_or_changed": 0,
+      "exact_segments_added_or_changed": 1,
+      "merge_candidates": {},
+      "split_candidates": {},
+      "unmatched_before": [],
+      "unmatched_after": [
+        "v1"
+      ],
+      "matched_endpoint_changes": [],
+      "max_matched_endpoint_displacement_px": 0,
+      "added_coverage_outside_1px_px": 73.59999999999997,
+      "removed_coverage_outside_1px_px": 0.0,
+      "hausdorff_px": 4.096000000000004,
+      "added_parts": [
+        {
+          "coords_px": [
+            [
+              158.208,
+              147.20000000000002
+            ],
+            [
+              158.208,
+              220.79999999999998
+            ]
+          ],
+          "length_px": 73.59999999999997,
+          "dark_support_fraction_3x3": 0.0
+        }
+      ]
+    }
+  },
+  {
+    "name": "v_tiny_distinct_axis",
+    "input": [
+      [],
+      [
+        {
+          "y1": 0.1,
+          "y2": 0.4,
+          "x": 0.3
+        },
+        {
+          "y1": 0.3,
+          "y2": 0.6,
+          "x": 0.30000001
+        }
+      ]
+    ],
+    "baseline": [
+      [],
+      [
+        {
+          "y1": 0.1,
+          "y2": 0.6,
+          "x": 0.3,
+          "t": 0.012,
+          "conf": 0
+        }
+      ]
+    ],
+    "proposed": [
+      [],
+      [
+        {
+          "y1": 0.1,
+          "y2": 0.4,
+          "x": 0.3
+        },
+        {
+          "y1": 0.3,
+          "y2": 0.6,
+          "x": 0.30000001
+        }
+      ]
+    ],
+    "predicate_only": [
+      [],
+      [
+        {
+          "y1": 0.1,
+          "y2": 0.4,
+          "x": 0.3
+        },
+        {
+          "y1": 0.3,
+          "y2": 0.6,
+          "x": 0.30000001
+        }
+      ]
+    ],
+    "baseline_metrics": {
+      "walls": 1,
+      "sum_span_px": 367.99999999999994,
+      "union_span_px": 367.99999999999994,
+      "components": 1,
+      "dangling_count": 2,
+      "junction_count": 0,
+      "cells": 0,
+      "closed_area_px2": 0,
+      "dangling": [
+        [
+          153.6,
+          73.6
+        ],
+        [
+          153.6,
+          441.6
+        ]
+      ],
+      "junctions": [],
+      "cell_areas_px2": [],
+      "room_mask_best_cell_iou": [],
+      "openings": []
+    },
+    "proposed_metrics": {
+      "walls": 2,
+      "sum_span_px": 441.6,
+      "union_span_px": 441.6,
+      "components": 2,
+      "dangling_count": 4,
+      "junction_count": 0,
+      "cells": 0,
+      "closed_area_px2": 0,
+      "dangling": [
+        [
+          153.6,
+          73.6
+        ],
+        [
+          153.6,
+          294.4
+        ],
+        [
+          153.600005,
+          220.8
+        ],
+        [
+          153.600005,
+          441.6
+        ]
+      ],
+      "junctions": [],
+      "cell_areas_px2": [],
+      "room_mask_best_cell_iou": [],
+      "openings": []
+    },
+    "delta": {
+      "exact_segments_removed_or_changed": 1,
+      "exact_segments_added_or_changed": 2,
+      "merge_candidates": {},
+      "split_candidates": {
+        "v0": [
+          "v0",
+          "v1"
+        ]
+      },
+      "unmatched_before": [],
+      "unmatched_after": [],
+      "matched_endpoint_changes": [
+        {
+          "before": "v0",
+          "after": "v0",
+          "p_displacement_px": 0.0,
+          "q_displacement_px": 147.19999999999993,
+          "span_delta_px": -147.19999999999993
+        }
+      ],
+      "max_matched_endpoint_displacement_px": 147.19999999999993,
+      "added_coverage_outside_1px_px": 0.0,
+      "removed_coverage_outside_1px_px": 0.0,
+      "hausdorff_px": 5.119999997305059e-06,
+      "added_parts": []
+    }
+  }
+]
