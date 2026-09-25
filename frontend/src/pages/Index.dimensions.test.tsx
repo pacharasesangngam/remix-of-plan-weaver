@@ -118,8 +118,10 @@ function assertReviewLengths(container: HTMLElement, horizontal: string, vertica
   }
   fireEvent.click(container.querySelector('[data-plan-selection="room:room"]')!);
   const sideLabels = [...svg.querySelectorAll("text")].map(node => node.textContent);
-  expect(sideLabels.filter(label => label === `${horizontal}m`)).toHaveLength(2);
-  expect(sideLabels.filter(label => label === `${vertical}m`)).toHaveLength(2);
+  // Room boundaries come from the walls, so the triangle they enclose labels each side once.
+  for (const length of [horizontal, vertical, diagonal]) {
+    expect(sideLabels.filter(label => label === `${length}m`)).toHaveLength(1);
+  }
 }
 
 function assertThreeLengths(horizontal: number, vertical: number, diagonal: number) {
@@ -411,7 +413,8 @@ it("hides provisional and cached measurements while allowing materials, then est
   fireEvent.pointerDown(overlay, { clientX: 300, clientY: 80 });
   fireEvent.change(screen.getByPlaceholderText("3.5"), { target: { value: "4.8" } });
   fireEvent.click(screen.getByRole("button", { name: "Apply" }));
-  expect(screen.getByText("Total Area").parentElement).toHaveTextContent("11.52");
+  // The three walls enclose a triangle: 0.4 x 0.3 image span calibrated to 4.8 x 3.6 m.
+  expect(screen.getByText("Total Area").parentElement).toHaveTextContent("5.76");
   let saved = JSON.parse(screen.getByTestId("project").textContent!) as FloorPlanProject;
   expect(saved.meta.calibrationStatus).toBe("calibrated");
   expect(saved.walls).toEqual(project.walls);
@@ -419,14 +422,14 @@ it("hides provisional and cached measurements while allowing materials, then est
 
   fireEvent.click(screen.getByRole("button", { name: /Generate 3D/ }));
   fireEvent.click(screen.getByText("Pick room"));
-  expect(valueFor("Area")).toHaveTextContent("11.52");
+  expect(valueFor("Area")).toHaveTextContent("5.76");
   const [tileWidth, tileHeight] = tile.sizeCm.split(/[x×]/).map(Number);
-  const count = Math.ceil(11.52 / (tileWidth * tileHeight / 10000) * 1.1);
+  const count = Math.ceil(5.76 / (tileWidth * tileHeight / 10000) * 1.1);
   expect(valueFor("Needed")).toHaveTextContent(count.toLocaleString());
   expect(screen.queryByText("Calibrate scale in Review to estimate quantities")).not.toBeInTheDocument();
   fireEvent.click(screen.getByText("Scale only"));
-  expect(valueFor("Area")).toHaveTextContent("25.92");
-  expect(valueFor("Needed")).toHaveTextContent(Math.ceil(25.92 / (tileWidth * tileHeight / 10000) * 1.1).toLocaleString());
+  expect(valueFor("Area")).toHaveTextContent("12.96");
+  expect(valueFor("Needed")).toHaveTextContent(Math.ceil(12.96 / (tileWidth * tileHeight / 10000) * 1.1).toLocaleString());
   saved = JSON.parse(screen.getByTestId("project").textContent!) as FloorPlanProject;
   expect(saved.meta.calibrationStatus).toBe("calibrated");
 });

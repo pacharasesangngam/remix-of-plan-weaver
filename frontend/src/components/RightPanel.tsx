@@ -343,6 +343,22 @@ const getRoomCenter = (room: Room): NormalizedPoint | null =>
     ? { x: room.bbox.x + room.bbox.w / 2, y: room.bbox.y + room.bbox.h / 2 }
     : null);
 
+/** Room floor shape in plan coordinates; enclosed islands are punched out as holes. */
+const getRoomShape = (room: Room, pw: number, ph: number): THREE.Shape | null => {
+  const polygon = getRoomPolygon(room);
+  if (!polygon || polygon.length < 3) return null;
+  const shape = new THREE.Shape();
+  [polygon, ...(room.holes ?? []).filter((hole) => hole.length >= 3)].forEach((ring, index) => {
+    const points = ring.map((point) => toPlanPoint(point, pw, ph));
+    const target = index ? new THREE.Path() : shape;
+    target.moveTo(points[0][0], points[0][1]);
+    for (const point of points.slice(1)) target.lineTo(point[0], point[1]);
+    target.closePath();
+    if (target !== shape) shape.holes.push(target);
+  });
+  return shape;
+};
+
 // ── Wall thickness helper ─────────────────────────────────────────────────────
 
 // ── Opening width helper ──────────────────────────────────────────────────────
@@ -767,17 +783,8 @@ function RoomPolygonMesh({
   const hoverColorRef = useRef(new THREE.Color(FLOOR_HOVER_COLOR));
 
   const { pw, ph, calibrated } = usePlanScale();
-  const polygon = useMemo(() => getRoomPolygon(room), [room]);
 
-  const shape = useMemo(() => {
-    if (!polygon || polygon.length < 3) return null;
-    const pts = polygon.map((p) => toPlanPoint(p, pw, ph));
-    const s = new THREE.Shape();
-    s.moveTo(pts[0][0], pts[0][1]);
-    for (let i = 1; i < pts.length; i++) s.lineTo(pts[i][0], pts[i][1]);
-    s.closePath();
-    return s;
-  }, [polygon, pw, ph]);
+  const shape = useMemo(() => getRoomShape(room, pw, ph), [room, pw, ph]);
 
   const labelPoint = useMemo(() => {
     const center = getRoomCenter(room);
@@ -1358,14 +1365,8 @@ function DeletePreviewMesh({
 
   if (target.type === "room") {
     const room = rooms.find((item) => item.id === target.id);
-    const polygon = room ? getRoomPolygon(room) : null;
-    if (!polygon || polygon.length < 3) return null;
-
-    const shape = new THREE.Shape();
-    const points = polygon.map((p) => toPlanPoint(p, pw, ph));
-    shape.moveTo(points[0][0], points[0][1]);
-    for (let i = 1; i < points.length; i += 1) shape.lineTo(points[i][0], points[i][1]);
-    shape.closePath();
+    const shape = room ? getRoomShape(room, pw, ph) : null;
+    if (!shape) return null;
 
     return (
       <group>

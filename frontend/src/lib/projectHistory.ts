@@ -1,3 +1,4 @@
+import { deriveRooms } from "./wallTopology";
 import type { ConfirmedDimension } from "./confirmedDimensions";
 import type { Room, DimensionUnit } from "@/types/floorplan";
 import type { DetectedWallSegment, DetectedDoor, DetectedWindow } from "@/types/detection";
@@ -19,7 +20,8 @@ export interface HistoryState {
     pending: { before: ProjectState; info?: ActionInfo } | null;
     notice: (ActionInfo & { direction: "Undid" | "Redid" }) | null;
 }
-export const initialHistory = (present = emptyProject()): HistoryState => ({ present, past: [], future: [], pending: null, notice: null });
+const deriveProjectRooms = (project: ProjectState): ProjectState => ({ ...project, rooms: deriveRooms(project.walls, project.rooms, project.wallHeightMeter) });
+export const initialHistory = (present = emptyProject()): HistoryState => ({ present: deriveProjectRooms(present), past: [], future: [], pending: null, notice: null });
 export type HistoryAction =
     | { type: "edit"; update: (project: ProjectState) => ProjectState; info: ActionInfo }
     | { type: "begin"; info?: ActionInfo }
@@ -42,7 +44,13 @@ export function projectHistoryReducer(state: HistoryState, action: HistoryAction
             return { ...settled, pending: { before: settled.present, info: action.info }, notice: null };
         }
         case "edit": {
-            const present = action.update(state.present);
+            let present = action.update(state.present);
+            const geometry = (p: ProjectState) => p.walls.map(w => [w.id, w.x1, w.y1, w.x2, w.y2]);
+            if (present.rooms !== state.present.rooms || JSON.stringify(geometry(present)) !== JSON.stringify(geometry(state.present))) {
+                // Room metadata may change, but boundaries always come from walls.
+                const metadata = [...present.rooms, ...state.present.rooms.filter(r => !present.rooms.some(next => next.id === r.id))];
+                present = { ...present, rooms: deriveRooms(present.walls, metadata, present.wallHeightMeter) };
+            }
             if (equal(present, state.present)) return state;
             if (state.pending) return { ...state, present, notice: null,
                 pending: { ...state.pending, info: state.pending.info ?? action.info } };

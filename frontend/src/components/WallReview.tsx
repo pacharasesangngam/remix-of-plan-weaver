@@ -16,6 +16,7 @@ import { editWallGeometry, endpointPoint, findWallSnap, geometryChanged, project
 import { DEFAULT_WALL_THICKNESS_M, getWallThicknessM, resolvePlanDimensions, uniformWallThicknessM, wallStrokeWidthNormalized } from "@/lib/wallMetrics";
 import { defaultRenderWallHeight, wallSolidInputs, wallFootprintPaths } from "@/lib/wallRenderGeometry";
 import { proposeWallLength, chooseLengthAnchor, type GeometrySnapshot, type LengthRequest } from "@/lib/wallLengthEdit";
+import { ringsToPathD } from "@/lib/wallTopology";
 import { createOpeningBboxFromWallPoints } from "@/lib/openingPlacement";
 import { advanceOpeningDraft, cancelOpeningDraft, isValidOpeningTarget, type OpeningDraftState } from "@/lib/openingInteraction";
 import { resolveOpeningWall } from "@/lib/openingAttachment";
@@ -1119,10 +1120,13 @@ const WallReview = ({
         if (wall) return selectWall(wall.id);
         const room = layers.has("rooms") && rooms.find(item => {
             const polygon = item.wallPolygon ?? item.polygon;
-            return polygon && polygon.length >= 3 ? inPolygon(polygon) : (() => {
+            if (!polygon || polygon.length < 3) {
                 const bbox = roomBBox(item);
                 return bbox ? inRect(bbox) : false;
-            })();
+            }
+            if (!inPolygon(polygon)) return false;
+            // An enclosure inside a room is its own room, not the parent one.
+            return !(item.holes ?? []).some(hole => hole.length >= 3 && inPolygon(hole));
         });
         if (room) return selectRoom(room.id);
         clearSelection();
@@ -1516,6 +1520,8 @@ const WallReview = ({
                                         const points = polygon && polygon.length >= 3
                                             ? polygon.map((p) => `${p.x},${p.y}`).join(" ")
                                             : `${bbox.x},${bbox.y} ${bbox.x + bbox.w},${bbox.y} ${bbox.x + bbox.w},${bbox.y + bbox.h} ${bbox.x},${bbox.y + bbox.h}`;
+                                        const holes = (room.holes ?? []).filter(hole => hole.length >= 3);
+                                        const facePath = polygon && polygon.length >= 3 && holes.length ? ringsToPathD([polygon, ...holes]) : null;
                                         const cx = room.center?.x ?? (bbox.x + bbox.w / 2);
                                         const cy = room.center?.y ?? (bbox.y + bbox.h / 2);
                                         const { x: rx0, y: ry0, w: rw, h: rh } = bbox;
@@ -1532,9 +1538,14 @@ const WallReview = ({
                                             }).filter((side): side is { x: number; y: number; label: string } => side !== null)
                                             : [] as { x: number; y: number; label: string }[];
                                         return (
-                                            <g key={room.id} style={{ cursor: isSel ? "move" : "pointer", pointerEvents: "all" }}>                                               <polygon points={points} fill={isSel ? pal.fill : `${cs.stroke}18`} />
-                                                <polygon points={points} fill="none" stroke={isSel ? pal.stroke : cs.stroke}
+                                            <g key={room.id} style={{ cursor: isSel ? "move" : "pointer", pointerEvents: "all" }}>                                               {facePath
+                                                ? <path d={facePath} fillRule="evenodd" fill={isSel ? pal.fill : `${cs.stroke}18`} />
+                                                : <polygon points={points} fill={isSel ? pal.fill : `${cs.stroke}18`} />}
+                                                {facePath
+                                                ? <path d={facePath} fillRule="evenodd" fill="none" stroke={isSel ? pal.stroke : cs.stroke}
                                                     strokeWidth={isSel ? 0.004 : 0.002} strokeDasharray={isSel ? "none" : "0.01 0.005"} opacity={isSel ? 1 : 0.6} />
+                                                : <polygon points={points} fill="none" stroke={isSel ? pal.stroke : cs.stroke}
+                                                    strokeWidth={isSel ? 0.004 : 0.002} strokeDasharray={isSel ? "none" : "0.01 0.005"} opacity={isSel ? 1 : 0.6} />}
                                                 {isSel && <circle cx={cx} cy={cy} r={0.008} fill={pal.stroke} opacity={0.85} />}
                                                 {badgeW > 0.01 && <>
                                                     <rect x={cx - badgeW / 2} y={cy - 0.02} width={badgeW} height={0.025} rx={0.005} fill={isSel ? pal.stroke : cs.labelBg} opacity={0.92} />

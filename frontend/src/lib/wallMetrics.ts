@@ -2,6 +2,8 @@ import type { DetectedWallSegment } from "@/types/detection";
 
 import type { Room } from "@/types/floorplan";
 
+import { faceArea } from "./wallTopology";
+
 export type CalibrationStatus = "uncalibrated" | "calibrated";
 export const hasCalibration = (status: unknown, scale: number, width: number, height: number): boolean =>
   status === "calibrated" && [scale, width, height].every(value => Number.isFinite(value) && value > 0);
@@ -11,11 +13,8 @@ export const getMeasuredRoomArea = (room: Room, width: number, height: number, c
   if (!calibrated) return null;
   const polygon = room.polygon?.length >= 3 ? room.polygon : room.wallPolygon;
   if (!polygon || polygon.length < 3) return room.bbox ? room.bbox.w * room.bbox.h * width * height : null;
-  const twiceArea = polygon.reduce((sum, point, index) => {
-    const next = polygon[(index + 1) % polygon.length];
-    return sum + point.x * next.y - next.x * point.y;
-  }, 0);
-  return Math.abs(twiceArea) * 0.5 * width * height;
+  // Islands are their own rooms, so the enclosing room must exclude them.
+  return faceArea(polygon, room.holes) * width * height;
 };
 
 export const APPROXIMATE_PLAN_SIZE_M = 20;
