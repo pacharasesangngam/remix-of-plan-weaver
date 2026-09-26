@@ -249,6 +249,7 @@ const Index = () => {
 
   const floorPlanData: FloorPlanData = { meta: { unit, scale }, rooms };
   const projectData = createFloorPlanProject({
+    furniture: editorHistory.present.furniture,
     confirmedDimensions: editorHistory.present.confirmedDimensions,
     calibrationStatus,
     editorMode: workflow ?? "upload",
@@ -406,6 +407,7 @@ const Index = () => {
             </div>
           ) : (
             <RightPanel
+              furniture={editorHistory.present.furniture}
               calibrationStatus={calibrationStatus}
               scale={scale}
               rooms={rooms}

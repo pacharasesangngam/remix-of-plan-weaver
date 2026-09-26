@@ -37,6 +37,7 @@ import { resolveOpeningWall } from "@/lib/openingAttachment";
 import { getMeasuredRoomArea, hasCalibration, type CalibrationStatus } from "@/lib/wallMetrics";
 
 interface RightPanelProps {
+  furniture?: FurnitureItem[];
   calibrationStatus?: CalibrationStatus;
   scale?: number;
   rooms: Room[];

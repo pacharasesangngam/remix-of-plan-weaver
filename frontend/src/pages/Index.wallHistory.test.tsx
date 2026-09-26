@@ -12,6 +12,7 @@ const project: FloorPlanProject = {
     app: "remix-of-plan-weaver", version: 1,
     meta: { unit: "m", scale: 1, planWidth: 10, planHeight: 10 },
     rooms: [], doors: [], windows: [],
+    furniture: [{ id: "sofa", kind: "sofa", x: 0.3, y: 0.4, width: 2.1, depth: 0.9, height: 0.85, rotation: 0, color: "#888888" }],
     walls: [
         { id: "a", x1: 0.1, y1: 0.2, x2: 0.5, y2: 0.2, type: "interior" },
         { id: "b", x1: 0.5, y1: 0.2, x2: 0.5, y2: 0.8, type: "interior" },
@@ -23,9 +24,10 @@ vi.mock("@/services/floorplanAI", () => ({ detectFloorPlan: vi.fn() }));
 vi.mock("@/components/Sidebar", () => ({ default: (props: ComponentProps<typeof Sidebar>) => <>
     <button onClick={() => props.onProjectImport(project)}>Import</button>
     <output data-testid="json">{JSON.stringify(props.projectData.walls)}</output>
+    <output data-testid="json-furniture">{JSON.stringify(props.projectData.furniture)}</output>
 </> }));
 vi.mock("@/components/RightPanel", () => ({ default: (props: ComponentProps<typeof RightPanel>) =>
-    <output data-testid="3d">{JSON.stringify({ walls: props.walls, doors: props.doors, windows: props.windows })}</output> }));
+    <output data-testid="3d">{JSON.stringify({ walls: props.walls, doors: props.doors, windows: props.windows, furniture: props.furniture })}</output> }));
 vi.mock("@/components/WallReview", () => ({ default: (props: ComponentProps<typeof WallReview>) => <>
     <button onClick={() => {
         const walls = props.walls!;
@@ -61,6 +63,8 @@ it("commits only the edited wall as one action and synchronizes undo, redo, JSON
     expect(screen.getByText("Redo")).toBeDisabled();
     fireEvent.click(screen.getByText("Generate"));
     expect(JSON.parse(screen.getByTestId("3d").textContent!).walls).toEqual(after);
+    expect(JSON.parse(screen.getByTestId("json-furniture").textContent!)).toEqual(project.furniture);
+    expect(JSON.parse(screen.getByTestId("3d").textContent!).furniture).toEqual(project.furniture);
 });
 
 it("persists a wall-attached opening edited in Review into 3D", () => {

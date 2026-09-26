@@ -4,6 +4,11 @@ import { FURNITURE_CATALOG, fitFurniture } from "@/types/furniture";
 import { createFloorPlanProject, parseFloorPlanProject } from "./projectIO";
 import { createFurnitureGroup } from "./furnitureGeometry";
 
+it("creates an empty project without requiring furniture", () => {
+  const project = createFloorPlanProject({ unit: "m", scale: 0, planWidth: 0, planHeight: 0, rooms: [], walls: [], doors: [], windows: [] });
+  expect(project.furniture).toEqual([]);
+});
+
 it("uses exact metre dimensions for every furniture mesh, including rotated models", () => {
   for (const option of FURNITURE_CATALOG) {
     const item = { ...option, id: option.kind, x: 0.5, y: 0.5, width: 2.4, depth: 1.2, height: 0.9, rotation: 0 };

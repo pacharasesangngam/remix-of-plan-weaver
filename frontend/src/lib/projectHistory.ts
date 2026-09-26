@@ -7,6 +7,7 @@ import type { DetectedWallSegment, DetectedDoor, DetectedWindow } from "@/types/
 import type { CalibrationStatus } from "./wallMetrics";
 
 export interface ProjectState {
+    furniture?: FurnitureItem[];
     confirmedDimensions?: ConfirmedDimension[];
     calibrationStatus: CalibrationStatus;
     rooms: Room[]; walls: DetectedWallSegment[]; doors: DetectedDoor[]; windows: DetectedWindow[];

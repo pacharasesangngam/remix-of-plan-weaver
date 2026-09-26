@@ -38,6 +38,7 @@ export interface FloorPlanProject {
 }
 
 export const createFloorPlanProject = ({
+  furniture = [],
   confirmedDimensions,
   calibrationStatus,
   editorMode,
@@ -51,6 +52,7 @@ export const createFloorPlanProject = ({
   windows,
   image,
 }: {
+  furniture?: FurnitureItem[];
   confirmedDimensions?: ConfirmedDimension[];
   calibrationStatus?: CalibrationStatus;
   editorMode?: "upload" | "draw";
