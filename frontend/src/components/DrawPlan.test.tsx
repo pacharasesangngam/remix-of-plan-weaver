@@ -18,6 +18,39 @@ function Editor() {
     canUndo={history.past.length > 0} canRedo={history.future.length > 0} /><output data-testid="project">{JSON.stringify(history.present)}</output></>;
 }
 
+it("pans empty space in select mode and right-drags while drawing without creating geometry", () => {
+  render(<Editor />);
+  const canvas = screen.getByRole("img", { name: "พื้นที่วาดแปลน 2D" });
+  const before = screen.getByTestId("project").textContent;
+  fireEvent.pointerDown(canvas, { clientX: 100, clientY: 100, button: 2 });
+  fireEvent.pointerMove(canvas, { clientX: 150, clientY: 180 });
+  fireEvent.pointerUp(canvas, { button: 2 });
+  expect(canvas).toHaveAttribute("viewBox", "-50 -80 1000 1000");
+  fireEvent.click(screen.getByRole("button", { name: "เลือก" }));
+  fireEvent.pointerDown(canvas, { clientX: 150, clientY: 180, button: 0 });
+  fireEvent.pointerMove(canvas, { clientX: 100, clientY: 100 });
+  fireEvent.pointerUp(canvas);
+  expect(canvas).toHaveAttribute("viewBox", "0 0 1000 1000");
+  fireEvent.pointerMove(canvas, { clientX: 500, clientY: 500 });
+  expect(canvas).toHaveAttribute("viewBox", "0 0 1000 1000");
+  expect(screen.getByTestId("project").textContent).toBe(before);
+});
+
+it("shows contextual rotation when clicking furniture even from the room tool", () => {
+  render(<Editor />);
+  fireEvent.click(screen.getByRole("button", { name: "เฟอร์นิเจอร์" }));
+  const canvas = screen.getByRole("img", { name: "พื้นที่วาดแปลน 2D" });
+  fireEvent.pointerDown(canvas, { clientX: 200, clientY: 200, button: 0 });
+  fireEvent.click(screen.getByRole("button", { name: "วาดห้อง" }));
+  expect(screen.queryByRole("slider", { name: "ลากเพื่อหมุนเฟอร์นิเจอร์" })).not.toBeInTheDocument();
+  fireEvent.pointerDown(screen.getByLabelText("เฟอร์นิเจอร์ โซฟา"), { clientX: 200, clientY: 200, button: 0 });
+  fireEvent.pointerUp(canvas, { clientX: 200, clientY: 200, button: 0 });
+  fireEvent.keyDown(screen.getByRole("slider", { name: "ลากเพื่อหมุนเฟอร์นิเจอร์" }), { key: "ArrowRight", shiftKey: true });
+  expect(JSON.parse(screen.getByTestId("project").textContent!).furniture[0].rotation).toBe(15);
+  fireEvent.click(screen.getByRole("button", { name: "Undo" }));
+  expect(JSON.parse(screen.getByTestId("project").textContent!).furniture[0].rotation).toBe(0);
+});
+
 it("places, rotates, moves and deletes furniture with undo", () => {
   render(<Editor />);
   fireEvent.click(screen.getByRole("button", { name: "เฟอร์นิเจอร์" }));

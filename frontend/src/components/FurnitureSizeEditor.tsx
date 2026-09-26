@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { Input } from "./ui/input";
 import { Button } from "./ui/button";
+import FurnitureModelPreview from "./FurnitureModelPreview";
 import { furnitureHalfSize, type FurnitureItem } from "@/types/furniture";
 
 export default function FurnitureSizeEditor({ item, planW, planH, onApply }: { item: FurnitureItem; planW: number; planH: number; onApply: (size: Pick<FurnitureItem, "width" | "depth" | "height">) => void }) {
@@ -10,6 +11,7 @@ export default function FurnitureSizeEditor({ item, planW, planH, onApply }: { i
   const half = furnitureHalfSize({ ...item, ...size }, planW, planH);
   const valid = Object.values(size).every(n => Number.isFinite(n) && n >= 0.2 && n <= 20) && half.x <= 0.5 && half.y <= 0.5;
   return <div className="space-y-2">
+    <FurnitureModelPreview item={item} />
     <p className="text-xs text-muted-foreground">ขนาดจริง กว้าง × ลึก × สูง · หน่วยเมตร (1 m = 100 cm)</p>
     {([['width', 'ความกว้าง'], ['depth', 'ความลึก'], ['height', 'ความสูง']] as const).map(([key, label]) => <label key={key} className="grid grid-cols-[1fr_100px] items-center gap-2 text-sm">{label} (m)<Input type="number" min="0.2" max="20" step="0.01" value={draft[key]} onChange={e => setDraft(d => ({ ...d, [key]: e.target.value }))} /></label>)}
     {!valid && <p role="alert" className="text-xs text-destructive">ระบุขนาด 0.20–20 เมตร และต้องไม่เกินพื้นที่วาด</p>}

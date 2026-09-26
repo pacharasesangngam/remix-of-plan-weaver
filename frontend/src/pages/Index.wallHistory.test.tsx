@@ -43,6 +43,17 @@ vi.mock("@/components/WallReview", () => ({ default: (props: ComponentProps<type
 </> }));
 afterEach(cleanup);
 
+it("opens the uploaded-plan furniture editor and returns to review", () => {
+    render(<Index />);
+    fireEvent.click(screen.getByText("อัปโหลดแปลน"));
+    fireEvent.click(screen.getByText("Import"));
+    fireEvent.click(screen.getByRole("button", { name: "จัดวางเฟอร์นิเจอร์" }));
+    expect(screen.getByRole("region", { name: "จัดวางเฟอร์นิเจอร์" })).toBeInTheDocument();
+    expect(screen.getByRole("alert")).toHaveTextContent("Calibrate Scale");
+    fireEvent.click(screen.getAllByRole("button", { name: "กลับไปตรวจแปลน" })[0]);
+    expect(screen.getByTestId("2d")).toBeInTheDocument();
+});
+
 it("commits only the edited wall as one action and synchronizes undo, redo, JSON and Generate 3D", () => {
     render(<Index />);
     fireEvent.click(screen.getByText("อัปโหลดแปลน"));

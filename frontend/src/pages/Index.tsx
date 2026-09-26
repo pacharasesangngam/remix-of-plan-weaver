@@ -9,6 +9,7 @@ import WallReview from "@/components/WallReview";
 import SplashScreen from "@/components/SplashScreen";
 import StartScreen from "@/components/StartScreen";
 import DrawPlan from "@/components/DrawPlan";
+import FurniturePlanner from "@/components/FurniturePlanner";
 import { DRAW_PLAN_SIZE } from "@/lib/manualPlan";
 import { detectFloorPlan } from "@/services/floorplanAI";
 import type { FloorPlanProject } from "@/lib/projectIO";
@@ -28,8 +29,10 @@ const Index = () => {
   const [showSplash, setShowSplash]   = useState(true);
   const [workflow, setWorkflow] = useState<"upload" | "draw" | null>(null);
   const [showStart, setShowStart] = useState(true);
+  const [placingFurniture, setPlacingFurniture] = useState(false);
   const [mode, setMode]               = useState<AppMode>("simple");
   const [imageUrl, setImageUrl]       = useState<string | null>(null);
+  useEffect(() => setPlacingFurniture(false), [imageUrl, workflow, showStart]);
   const [imageDataUrl, setImageDataUrl] = useState<string | null>(null);
   const [imageName, setImageName]     = useState<string | null>(null);
   const [originalImageUrl, setOriginalImageUrl] = useState<string | null>(null);
@@ -300,6 +303,7 @@ const Index = () => {
               <h1 className="text-sm font-semibold text-foreground tracking-tight font-sans">Sketch to Spec</h1>
             </div>
             <div className="flex items-center gap-2">
+            {!showStart && workflow === "upload" && detected && <button disabled={detecting} className="rounded-xl border px-3 py-2 text-xs hover:bg-accent disabled:opacity-50" onClick={() => { dispatch({ type: "cancel" }); setGenerated(false); setPlacingFurniture(value => !value); }}>{placingFurniture ? "กลับไปตรวจแปลน" : "จัดวางเฟอร์นิเจอร์"}</button>}
             {workflow && <button className="rounded-xl border px-3 py-2 text-xs hover:bg-accent" onClick={() => downloadProjectJson(projectData)}>บันทึกโปรเจกต์</button>}
             {!showStart && <button disabled={detecting} className="rounded-xl border px-3 py-2 text-xs hover:bg-accent disabled:opacity-50" onClick={() => setShowStart(true)}>เลือกโหมด</button>}
             <button
@@ -318,7 +322,7 @@ const Index = () => {
           if (workflow && (imageUrl || rooms.length || walls.length) && !window.confirm("เปิดโปรเจกต์นี้แทนงานปัจจุบัน? กรุณาบันทึกงานเดิมก่อน")) return;
           handleProjectImport(project);
         }} /> : <div className="flex-1 flex min-h-0">
-          {workflow !== "draw" && <Sidebar
+          {workflow !== "draw" && !placingFurniture && <Sidebar
             mode={mode}
             unit={unit}
             imageUrl={imageUrl}
@@ -359,6 +363,13 @@ const Index = () => {
                 ลองอีกครั้ง
               </button>
             </div>
+          ) : workflow === "upload" && detected && placingFurniture && !generated ? (
+            <FurniturePlanner project={editorHistory.present} imageUrl={wallReviewBackgroundUrl}
+              onEdit={editProject} onBack={() => setPlacingFurniture(false)}
+              onGenerate={() => { setPlacingFurniture(false); handleGenerate(); }}
+              canUndo={editorHistory.past.length > 0 || !!editorHistory.pending}
+              canRedo={editorHistory.future.length > 0 && !editorHistory.pending}
+              onUndo={() => undoEditorAction("review")} onRedo={() => redoEditorAction("review")} />
           ) : detected && !generated ? (
             <WallReview
               rooms={rooms}

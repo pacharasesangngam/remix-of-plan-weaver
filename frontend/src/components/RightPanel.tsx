@@ -10,6 +10,7 @@ import { buildWallSolidGeometries } from "@/lib/wallSolidGeometry";
 import { computeGapIntervals, computeSolidSegments, projectOpeningEdgesOntoWall, defaultRenderWallHeight, wallSolidInputs } from "@/lib/wallRenderGeometry";
 import WallMeshHighlight from "./WallMeshHighlight";
 import { FurnitureMeshes } from "./FurnitureVisual";
+import { PLAN_3D_MOUSE_BUTTONS } from "@/lib/threeNavigation";
 import type { FurnitureItem } from "@/types/furniture";
 import MaterialSwatches from "./MaterialSwatches";
 import { targetPreviewShowsOutline } from "./wallHighlightState";
@@ -1565,6 +1566,7 @@ function WallEditGizmo({
     mode: "start" | "end" | "move" | "height",
     event?: WallGizmoPointerEvent,
   ) => {
+    if (event && event.button !== 0) return;
     event?.stopPropagation();
     if (event && supportsR3FPointerCapture(event.currentTarget)) {
       event.currentTarget.setPointerCapture(event.pointerId);
@@ -1965,6 +1967,8 @@ function Scene({
       ) : (
         <OrbitControls
           ref={orbitControlsRef}
+          mouseButtons={PLAN_3D_MOUSE_BUTTONS}
+          screenSpacePanning
           enablePan={!wallDragging}
           enableZoom={!wallDragging}
           enableRotate={!wallDragging}
@@ -2474,6 +2478,7 @@ const RightPanel = ({
             }}
             style={{ width: "100%", height: "100%", cursor: buildMode === "wall" || hasValidOpeningTarget ? "cell" : "default" }}
             onPointerMissed={clearSelect}
+            onContextMenu={event => event.preventDefault()}
           >
               <FurnitureMeshes items={furniture} planW={pw} planH={ph} />
               <Scene
@@ -2633,7 +2638,7 @@ const RightPanel = ({
               <div className="px-2 py-1 rounded-lg bg-card/80 border border-border backdrop-blur-md text-[10px] text-muted-foreground font-mono">
                 {walkMode
                   ? "Click scene · WASD move · Mouse look · Esc unlock"
-                  : "Drag · Scroll · Right-click pan"}
+                  : "ลากซ้าย/ขวา: เลื่อน · ลากปุ่มกลาง: หมุน · ลูกกลิ้ง: ซูม"}
               </div>
             </div>
           )}

@@ -6,6 +6,7 @@ import WallDimension from "./WallDimension";
 import PlanDimensions from "./PlanDimensions";
 import { FurnitureSymbol } from "./FurnitureVisual";
 import FurnitureSizeEditor from "./FurnitureSizeEditor";
+import FurnitureRotationHandle from "./FurnitureRotationHandle";
 import FurnitureClearances from "./FurnitureClearances";
 import { FURNITURE_CATALOG, fitFurniture, type FurnitureKind } from "@/types/furniture";
 import { moveDrawObject } from "@/lib/moveDrawObject";
@@ -44,6 +45,14 @@ export default function DrawPlan({ project, onEdit, onGenerate, onUndo, onRedo, 
   const [message, setMessage] = useState("");
   const svg = useRef<SVGSVGElement>(null);
   const pan = useRef<{ x: number; y: number; vx: number; vy: number; scaleX: number; scaleY: number; pointerId: number } | null>(null);
+  const [isPanning, setIsPanning] = useState(false);
+  const beginPan = (e: React.PointerEvent<SVGSVGElement>) => {
+    const matrix = svg.current?.getScreenCTM();
+    if (!matrix?.a || !matrix.d || drag.current || pan.current) return;
+    e.preventDefault(); e.stopPropagation();
+    pan.current = { x: e.clientX, y: e.clientY, vx: view.x, vy: view.y, scaleX: matrix.a, scaleY: matrix.d, pointerId: e.pointerId };
+    setIsPanning(true); e.currentTarget.setPointerCapture?.(e.pointerId);
+  };
   useEffect(() => {
     const element = svg.current;
     if (!element || typeof ResizeObserver === "undefined") return;
@@ -84,7 +93,7 @@ export default function DrawPlan({ project, onEdit, onGenerate, onUndo, onRedo, 
   const selectedWall = selection?.type === "wall" ? walls.find(w => w.id === selection.id) : undefined;
   const switchTool = (next: Tool) => { setTool(next); setStart(null); setPath([]); setMessage(""); setSelection(null); if (next === "door" || next === "window") setOpeningWidth(next === "door" ? "0.9" : "1.2"); };
   useEffect(() => {
-    const cancel = (e: KeyboardEvent) => { if (e.key === "Escape") { pan.current = null; drag.current = null; setMovePreview(null); setStart(null); setPath([]); setSelection(null); setMessage(""); } };
+    const cancel = (e: KeyboardEvent) => { if (e.key === "Escape") { pan.current = null; setIsPanning(false); drag.current = null; setMovePreview(null); setStart(null); setPath([]); setSelection(null); setMessage(""); } };
     window.addEventListener("keydown", cancel); return () => window.removeEventListener("keydown", cancel);
   }, []);
   useEffect(() => { setStart(null); setPath([]); drag.current = null; setMovePreview(null); }, [project]);
@@ -105,7 +114,8 @@ export default function DrawPlan({ project, onEdit, onGenerate, onUndo, onRedo, 
   };
   const zoom = (factor: number) => setView(v => { const size = Math.max(20, Math.min(4000, v.size * factor)); return { x: v.x + (v.size - size) * aspect / 2, y: v.y + (v.size - size) / 2, size }; });
   const choose = (e: React.PointerEvent, item: Selection) => {
-    if (tool !== "select" || e.button !== 0) return;
+    if ((tool !== "select" && item.type !== "furniture") || tool === "pan" || tool === "furniture" || e.button !== 0) return;
+    if (item.type === "furniture") { setTool("select"); setStart(null); setPath([]); }
     e.stopPropagation(); e.preventDefault(); setSelection(item); setMessage("");
     drag.current = { selection: item, origin: point(e), base: project, latest: project, pointerId: e.pointerId };
     svg.current?.setPointerCapture?.(e.pointerId);
@@ -216,14 +226,16 @@ export default function DrawPlan({ project, onEdit, onGenerate, onUndo, onRedo, 
     <div className="relative min-h-[360px] min-w-0 flex-1 overflow-hidden bg-white">
       <div className="absolute left-4 right-4 top-4 z-10 flex items-center justify-between gap-2 pointer-events-none"><span className="rounded-full border bg-white/95 px-4 py-2 text-xs text-slate-600">2D · พื้นที่ {planW} × {planH} m</span><Button className="pointer-events-auto rounded-full bg-emerald-600 text-white hover:bg-emerald-700" disabled={!!start || (!walls.length && !rooms.length && !furniture.length)} onClick={onGenerate}><Box className="mr-2 h-4 w-4" />ดู 3D</Button></div>
       <svg ref={svg} role="img" aria-label="พื้นที่วาดแปลน 2D"
-        className={`h-full min-h-[360px] w-full touch-none ${movePreview ? "cursor-grabbing" : tool === "pan" ? "cursor-grab" : tool === "select" ? "cursor-move" : "cursor-crosshair"}`}
+        className={`h-full min-h-[360px] w-full touch-none ${movePreview || isPanning ? "cursor-grabbing" : tool === "pan" || tool === "select" ? "cursor-grab" : "cursor-crosshair"}`}
         viewBox={`${view.x} ${view.y} ${view.size * aspect} ${view.size}`}
         preserveAspectRatio="none"
-        onPointerDown={e => { if (e.button !== 0) return; if (tool === "pan") { e.preventDefault(); const matrix = svg.current!.getScreenCTM(); if (!matrix || !matrix.a || !matrix.d) return; pan.current = { x: e.clientX, y: e.clientY, vx: view.x, vy: view.y, scaleX: matrix.a, scaleY: matrix.d, pointerId: e.pointerId }; e.currentTarget.setPointerCapture?.(e.pointerId); } else draw(point(e)); }}
+        onContextMenu={e => e.preventDefault()}
+        onPointerDownCapture={e => { if (e.button === 2) beginPan(e); }}
+        onPointerDown={e => { if (e.button !== 0 || pan.current) return; if (tool === "pan" || tool === "select") { beginPan(e); if (tool === "select") setSelection(null); } else draw(point(e)); }}
         onPointerMove={e => { if (drag.current) { updateDrag(e); return; } const active = pan.current; if (active) { if (active.pointerId !== e.pointerId) return; const x = active.vx - (e.clientX - active.x) / active.scaleX, y = active.vy - (e.clientY - active.y) / active.scaleY; setView(v => ({ ...v, x, y })); } else setCursor(point(e)); }}
-        onPointerUp={e => { finishDrag(e); if (pan.current?.pointerId === e.pointerId) { pan.current = null; if (e.currentTarget.hasPointerCapture?.(e.pointerId)) e.currentTarget.releasePointerCapture(e.pointerId); } }}
-        onPointerCancel={() => { pan.current = null; drag.current = null; setMovePreview(null); }}
-        onLostPointerCapture={() => { pan.current = null; drag.current = null; setMovePreview(null); }}>
+        onPointerUp={e => { finishDrag(e); if (pan.current?.pointerId === e.pointerId) { pan.current = null; setIsPanning(false); if (e.currentTarget.hasPointerCapture?.(e.pointerId)) e.currentTarget.releasePointerCapture(e.pointerId); } }}
+        onPointerCancel={() => { pan.current = null; setIsPanning(false); drag.current = null; setMovePreview(null); }}
+        onLostPointerCapture={() => { pan.current = null; setIsPanning(false); drag.current = null; setMovePreview(null); }}>
         <defs><pattern id="draw-small-grid" width={1000 / planW / 4} height={1000 / planH / 4} patternUnits="userSpaceOnUse"><path d={`M ${1000 / planW / 4} 0 H 0 V ${1000 / planH / 4}`} fill="none" stroke="#e8edf1" strokeWidth="0.65" /></pattern><pattern id="draw-grid" width={1000 / planW} height={1000 / planH} patternUnits="userSpaceOnUse"><rect width={1000 / planW} height={1000 / planH} fill="url(#draw-small-grid)" /><path d={`M ${1000 / planW} 0 H 0 V ${1000 / planH}`} fill="none" stroke="#cbd5e1" strokeWidth="0.8" /></pattern></defs>
         <rect x={view.x} y={view.y} width={view.size * aspect} height={view.size} fill="white" />
         <rect x={view.x} y={view.y} width={view.size * aspect} height={view.size} fill="url(#draw-grid)" />
@@ -254,6 +266,9 @@ export default function DrawPlan({ project, onEdit, onGenerate, onUndo, onRedo, 
           {selection?.id === item.id && <rect x={-item.width / planW * 500 - 2} y={-item.depth / planH * 500 - 2} width={item.width / planW * 1000 + 4} height={item.depth / planH * 1000 + 4} fill="none" stroke="#10b981" strokeWidth={2 * view.size / viewportHeight} pointerEvents="none" />}
         </g>)}
         {selectedFurniture && <FurnitureClearances item={selectedFurniture} walls={walls} planW={planW} planH={planH} uiScale={view.size / viewportHeight} />}
+        {selectedFurniture && <FurnitureRotationHandle key={selectedFurniture.id} item={selectedFurniture} planW={planW} planH={planH} unitsX={1000} unitsY={1000} uiScale={view.size / viewportHeight}
+          onPreview={item => setMovePreview(item ? { ...project, furniture: project.furniture?.map(f => f.id === item.id ? item : f) } : null)}
+          onCommit={item => onEdit(state => ({ ...state, furniture: state.furniture?.map(f => f.id === item.id ? item : f) }), { label: "furniture rotation" })} />}
         <PlanDimensions project={movePreview ?? project} uiScale={view.size / viewportHeight} />
       </svg>
       {message && <p role="status" className="absolute bottom-20 left-4 right-4 rounded-xl border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900">{message}</p>}
