@@ -9,6 +9,7 @@ import { findScgDoor, findScgPaint, findScgTile, findScgWindow } from "@/types/m
 import { createWallTexture } from "@/lib/wallTextures";
 import { createStoneBlockSpecs, createStoneMaterial } from "@/lib/stoneWallPanels";
 import { getWallThicknessM } from "@/lib/wallMetrics";
+import { resolveOpeningWall } from "@/lib/openingAttachment";
 
 const PLAN_SIZE = 20;
 
@@ -132,6 +133,7 @@ const computeGapIntervals = (
   wallHeightM: number,
   doors: DetectedDoor[],
   windows: DetectedWindow[],
+  allWalls: DetectedWallSegment[],
   pw = PLAN_SIZE,
   ph = PLAN_SIZE,
 ): GapInterval[] => {
@@ -140,6 +142,7 @@ const computeGapIntervals = (
   for (const door of doors) {
     if (!door.bbox) continue;
     if (door.wallId && door.wallId !== wall.id) continue;
+    if (!door.wallId && resolveOpeningWall(door.bbox, allWalls, pw, ph).wall?.id !== wall.id) continue;
     const proj = projectOpeningEdgesOntoWall(door.bbox, wall, wallLengthM, pw, ph);
     if (!proj) continue;
     raw.push({ ...proj, yStart: 0, height: Math.min(wallHeightM * 0.9, 2.2) });
@@ -148,6 +151,7 @@ const computeGapIntervals = (
   for (const win of windows) {
     if (!win.bbox) continue;
     if (win.wallId && win.wallId !== wall.id) continue;
+    if (!win.wallId && resolveOpeningWall(win.bbox, allWalls, pw, ph).wall?.id !== wall.id) continue;
     const proj = projectOpeningEdgesOntoWall(win.bbox, wall, wallLengthM, pw, ph);
     if (!proj) continue;
     raw.push({ ...proj, yStart: wallHeightM * 0.35, height: Math.min(wallHeightM * 0.45, 1.2) });
@@ -205,6 +209,8 @@ const findBestWall = (
   pw = PLAN_SIZE,
   ph = PLAN_SIZE,
 ): DetectedWallSegment | null => {
+  return resolveOpeningWall(bbox, walls, pw, ph).wall;
+  /* Legacy nearest-wall implementation retained below for reference. */
   let best: DetectedWallSegment | null = null;
   let bestPerp = Infinity;
 
@@ -328,7 +334,7 @@ const addWallMeshes = (
     const length = getWallLengthM(wall, pw, ph);
     const height = safeNum(wall.wallHeight, defaultWallHeight);
     return { wall, thickness: getWallThicknessM(wall, pw, ph),
-      solids: computeSolidSegments(length, height, computeGapIntervals(wall, length, height, doors, windows, pw, ph)) };
+      solids: computeSolidSegments(length, height, computeGapIntervals(wall, length, height, doors, windows, walls, pw, ph)) };
   }), pw, ph);
 
   walls.forEach((wall, index) => {
@@ -372,7 +378,7 @@ const addWallMeshes = (
     mesh.userData = { ...wallGroup.userData };
     wallGroup.add(mesh);
 
-    const gaps = computeGapIntervals(wall, wallLengthM, wallHeight, doors, windows, pw, ph);
+    const gaps = computeGapIntervals(wall, wallLengthM, wallHeight, doors, windows, walls, pw, ph);
     const solids = computeSolidSegments(wallLengthM, wallHeight, gaps);
     solids.forEach((seg, segIndex) => {
       const tStart = seg.tStart, tEnd = seg.tEnd;

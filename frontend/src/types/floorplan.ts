@@ -22,6 +22,8 @@ export interface Room {
   confidence: "high" | "low" | "manual";
   polygon?: NormalizedPoint[];
   wallPolygon?: NormalizedPoint[];
+  holes?: NormalizedPoint[][];
+  topologyWallIds?: string[];
   center?: NormalizedPoint;
   bbox?: BBox;     // normalized bbox derived from polygon
   areaSqm?: number;

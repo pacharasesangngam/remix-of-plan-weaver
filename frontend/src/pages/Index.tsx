@@ -1,3 +1,5 @@
+import { preservesConfirmedDimensions, rebindConfirmedDimensions, type ConfirmedDimension } from "@/lib/confirmedDimensions";
+import { proposeWallLength, type LengthRequest, type GeometrySnapshot } from "@/lib/wallLengthEdit";
 import { useState, useCallback, useEffect, useReducer, useMemo } from "react";
 import { ChevronLeft, Loader2, Moon, Sun } from "lucide-react";
 import { useTheme } from "next-themes";
@@ -10,12 +12,12 @@ import DrawPlan from "@/components/DrawPlan";
 import { DRAW_PLAN_SIZE } from "@/lib/manualPlan";
 import { detectFloorPlan } from "@/services/floorplanAI";
 import type { FloorPlanProject } from "@/lib/projectIO";
-import { createFloorPlanProject, downloadProjectJson } from "@/lib/projectIO";
+import { createFloorPlanProject, downloadProjectJson, savedCalibrationStatus } from "@/lib/projectIO";
 import { initialHistory, projectHistoryReducer, emptyProject, type ProjectState, type ActionInfo } from "@/lib/projectHistory";
 import { ProjectActionContext, ProjectInputActions, isNativeUndoTarget } from "@/components/ProjectActionContext";
 import { toast } from "@/hooks/use-toast";
 import { geometryChanged, validWall } from "@/lib/wallGeometry";
-import { rescalePlanDimensions } from "@/lib/wallMetrics";
+import { hasCalibration, rescalePlanDimensions } from "@/lib/wallMetrics";
 import { initializeDetectedWalls } from "@/lib/wallMetrics";
 import type { DetectedWallSegment, DetectedDoor, DetectedWindow } from "@/types/detection";
 import type { Room, FloorPlanData, AppMode, DimensionUnit } from "@/types/floorplan";
@@ -43,7 +45,7 @@ const Index = () => {
   const [debugImages, setDebugImages] = useState<Record<string, string> | null>(null);
   const [cleanImageUrl, setCleanImageUrl] = useState<string | null>(null);
   const [editorHistory, dispatch] = useReducer(projectHistoryReducer, undefined, () => initialHistory());
-  const { rooms, walls, doors, windows, scale, unit, planW, planH, screenPpm, wallHeightMeter } = editorHistory.present;
+  const { rooms, walls, doors, windows, calibrationStatus, scale, unit, planW, planH, screenPpm, wallHeightMeter } = editorHistory.present;
   const editProject = useCallback((update: (project: ProjectState) => ProjectState, info: ActionInfo) => dispatch({ type: "edit", update, info }), []);
   const actions = useMemo(() => ({
     active: !!editorHistory.pending,
@@ -66,13 +68,13 @@ const Index = () => {
     if (source === "review" && entry?.threeOnly) toast({ description: `Redid ${entry.label}` });
     dispatch({ type: "redo" });
   }, [editorHistory.future]);
-  const setScale = useCallback((nextScale: number) => editProject(p => ({
-    ...p,
-    scale: nextScale,
-    ...rescalePlanDimensions(p.planW, p.planH, p.scale, nextScale),
-  }), { label: "calibration change" }), [editProject]);
+  const setScale = useCallback((nextScale: number) => editProject(p => {
+    const dimensions = rescalePlanDimensions(p.planW, p.planH, p.scale, nextScale);
+    return { ...p, confirmedDimensions: [], calibrationStatus: hasCalibration(p.calibrationStatus, nextScale, dimensions.planWidth, dimensions.planHeight) ? "calibrated" : "uncalibrated", scale: nextScale, planW: dimensions.planWidth, planH: dimensions.planHeight };
+  }, { label: "calibration change" }), [editProject]);
   const setUnit = useCallback((unit: DimensionUnit) => editProject(p => ({ ...p, unit }), { label: "unit change" }), [editProject]);
-  const setPlanSize = useCallback((planW: number, planH: number) => editProject(p => ({ ...p, planW, planH }), { label: "calibration change" }), [editProject]);
+  const setConfirmedCalibration = useCallback((confirmedDimensions: ConfirmedDimension[]) => editProject(p => ({ ...p, confirmedDimensions }), { label: "calibration change" }), [editProject]);
+  const setPlanSize = useCallback((planW: number, planH: number) => editProject(p => ({ ...p, planW, planH, calibrationStatus: hasCalibration("calibrated", p.scale, planW, planH) ? "calibrated" : "uncalibrated" }), { label: "calibration change" }), [editProject]);
   const setScreenPpm = useCallback((screenPpm: number) => editProject(p => ({ ...p, screenPpm }), { label: "calibration change" }), [editProject]);
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -142,7 +144,7 @@ const Index = () => {
       if (result.cleanImage) {
         setCleanImageUrl(result.cleanImage);
       }
-      dispatch({ type: "reset", project: { ...editorHistory.present, rooms: result.rooms,
+      dispatch({ type: "reset", project: { ...editorHistory.present, confirmedDimensions: [], rooms: result.rooms,
         walls: initializeDetectedWalls(result.walls),
         doors: result.doors, windows: result.windows } });
       setDebugImages(result.debugImages ?? null);
@@ -169,14 +171,27 @@ const Index = () => {
   const handleRoomPatch = useCallback((id: string, patch: Partial<Room>) => {
     editProject(p => ({ ...p, rooms: p.rooms.map(r => r.id === id ? { ...r, ...patch } : r) }), { label: "room material change", threeOnly: true });
   }, [editProject]);
+  const handleWallLengthCommit = useCallback((request: LengthRequest, base: GeometrySnapshot, width: number, height: number) => {
+    editProject(p => {
+      if (!hasCalibration(p.calibrationStatus, p.scale, p.planW, p.planH) || p.planW !== width || p.planH !== height
+        || p.walls !== base.walls || p.doors !== base.doors || p.windows !== base.windows || p.rooms !== base.rooms
+        || p.confirmedDimensions !== base.confirmedDimensions) return p;
+      const candidate = proposeWallLength(p, request, p.planW, p.planH);
+      return candidate.ok ? { ...p, ...candidate.geometry } : p;
+    }, { label: "wall length change" });
+  }, [editProject]);
   const handleWallGeometryCommit = useCallback((updatedWalls: DetectedWallSegment[]) => {
     editProject(p => {
       if (updatedWalls.length !== p.walls.length || updatedWalls.some((wall, index) => wall.id !== p.walls[index].id || (geometryChanged(p.walls[index], wall) && !validWall(wall)))) return p;
+      if (!preservesConfirmedDimensions(updatedWalls, p.confirmedDimensions, p.planW, p.planH)) return p;
       return { ...p, walls: updatedWalls };
     }, { label: "wall geometry change" });
   }, [editProject]);
   const handleWallUpdate = useCallback((id: string, field: keyof DetectedWallSegment, value: number | string) => {
-    editProject(p => ({ ...p, walls: p.walls.map(item => item.id === id ? { ...item, [field]: value } : item) }), fieldInfo("wall", field));
+    editProject(p => {
+      const walls = p.walls.map(item => item.id === id ? { ...item, [field]: value } : item);
+      return preservesConfirmedDimensions(walls, p.confirmedDimensions, p.planW, p.planH) ? { ...p, walls } : p;
+    }, fieldInfo("wall", field));
   }, [editProject]);
   const handleWallAdd = useCallback((item: DetectedWallSegment) => {
     editProject(p => ({ ...p, walls: [...p.walls, item] }), { label: "wall creation" });
@@ -197,7 +212,10 @@ const Index = () => {
     editProject(p => ({ ...p, rooms: p.rooms.filter(item => item.id !== id) }), { label: "room deletion" });
   }, [editProject]);
   const handleWallDelete = useCallback((id: string) => {
-    editProject(p => ({ ...p, walls: p.walls.filter(item => item.id !== id) }), { label: "wall deletion" });
+    editProject(p => {
+      const walls = p.walls.filter(item => item.id !== id);
+      return { ...p, walls, confirmedDimensions: rebindConfirmedDimensions(p.confirmedDimensions, walls) };
+    }, { label: "wall deletion" });
   }, [editProject]);
   const handleDoorDelete = useCallback((id: string) => {
     editProject(p => ({ ...p, doors: p.doors.filter(item => item.id !== id) }), { label: "door deletion" });
@@ -220,7 +238,7 @@ const Index = () => {
     setImageFile(null);
     dispatch({ type: "reset", project: { ...emptyProject(), furniture: project.furniture ?? [], rooms: project.rooms, walls: project.walls,
       doors: project.doors, windows: project.windows, unit: project.meta.unit, scale: project.meta.scale,
-      planW: project.meta.planWidth, planH: project.meta.planHeight } });
+      confirmedDimensions: project.meta.confirmedDimensions ?? [], calibrationStatus: savedCalibrationStatus(project.meta), planW: project.meta.planWidth, planH: project.meta.planHeight } });
     setDetected(true);
     setDetecting(false);
     setDetectError(null);
@@ -231,7 +249,8 @@ const Index = () => {
 
   const floorPlanData: FloorPlanData = { meta: { unit, scale }, rooms };
   const projectData = createFloorPlanProject({
-    furniture: editorHistory.present.furniture,
+    confirmedDimensions: editorHistory.present.confirmedDimensions,
+    calibrationStatus,
     editorMode: workflow ?? "upload",
     unit,
     scale,
@@ -259,7 +278,7 @@ const Index = () => {
     handleClear();
     setWorkflow(next);
     setShowStart(false);
-    if (next === "draw") dispatch({ type: "reset", project: { ...emptyProject(), planW: DRAW_PLAN_SIZE, planH: DRAW_PLAN_SIZE, scale: DRAW_PLAN_SIZE / 1000, screenPpm: 1000 / DRAW_PLAN_SIZE } });
+    if (next === "draw") dispatch({ type: "reset", project: { ...emptyProject(), calibrationStatus: "calibrated", planW: DRAW_PLAN_SIZE, planH: DRAW_PLAN_SIZE, scale: DRAW_PLAN_SIZE / 1000, screenPpm: 1000 / DRAW_PLAN_SIZE } });
   };
   return (
     <ProjectActionContext.Provider value={actions}><ProjectInputActions>
@@ -348,18 +367,22 @@ const Index = () => {
               walls={walls}
               doors={doors}
               windows={windows}
+              calibrationStatus={calibrationStatus}
               scale={scale}
               planWidth={planW}
               planHeight={planH}
               onScaleChange={setScale}
               onPlanSizeChange={setPlanSize}
               onPpmChange={setScreenPpm}
+              confirmedDimensions={editorHistory.present.confirmedDimensions}
+              onConfirmedCalibration={setConfirmedCalibration}
               wallHeightMeter={wallHeightMeter}
               onWallHeightChange={handleWallHeightChange}
               onRoomUpdate={handleRoomUpdate}
               onRoomDelete={handleRoomDelete}
               onWallUpdate={handleWallUpdate}
               onWallGeometryCommit={handleWallGeometryCommit}
+              onWallLengthCommit={handleWallLengthCommit}
               onWallAdd={handleWallAdd}
               onWallDelete={handleWallDelete}
               onDoorDelete={handleDoorDelete}
@@ -383,7 +406,8 @@ const Index = () => {
             </div>
           ) : (
             <RightPanel
-              furniture={editorHistory.present.furniture}
+              calibrationStatus={calibrationStatus}
+              scale={scale}
               rooms={rooms}
               generated={generated}
               walls={walls}

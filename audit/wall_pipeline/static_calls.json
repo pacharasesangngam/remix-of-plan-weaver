@@ -1,0 +1,1494 @@
+[
+  {
+    "function": "get_model",
+    "line": 59,
+    "calls": []
+  },
+  {
+    "function": "health",
+    "line": 67,
+    "calls": []
+  },
+  {
+    "function": "run_pipeline",
+    "line": 93,
+    "calls": [
+      {
+        "name": "_resolve_ppm",
+        "line": 107
+      },
+      {
+        "name": "_estimate_widths",
+        "line": 129
+      }
+    ]
+  },
+  {
+    "function": "_resolve_ppm",
+    "line": 159,
+    "calls": []
+  },
+  {
+    "function": "decode_image",
+    "line": 176,
+    "calls": [
+      {
+        "name": "_decode_raster",
+        "line": 179
+      },
+      {
+        "name": "_decode_pdf",
+        "line": 178
+      }
+    ]
+  },
+  {
+    "function": "_decode_pdf",
+    "line": 182,
+    "calls": []
+  },
+  {
+    "function": "_decode_raster",
+    "line": 194,
+    "calls": []
+  },
+  {
+    "function": "encode_preview",
+    "line": 202,
+    "calls": []
+  },
+  {
+    "function": "_debug_wall_image",
+    "line": 209,
+    "calls": []
+  },
+  {
+    "function": "_dark_line_mask",
+    "line": 220,
+    "calls": []
+  },
+  {
+    "function": "preprocess",
+    "line": 227,
+    "calls": [
+      {
+        "name": "_resize",
+        "line": 228
+      },
+      {
+        "name": "_crop_content",
+        "line": 230
+      },
+      {
+        "name": "_estimate_skew",
+        "line": 231
+      },
+      {
+        "name": "_rotate",
+        "line": 232
+      }
+    ]
+  },
+  {
+    "function": "_resize",
+    "line": 236,
+    "calls": []
+  },
+  {
+    "function": "_crop_content",
+    "line": 245,
+    "calls": []
+  },
+  {
+    "function": "_estimate_skew",
+    "line": 276,
+    "calls": []
+  },
+  {
+    "function": "_rotate",
+    "line": 302,
+    "calls": []
+  },
+  {
+    "function": "_classify_structural_walls",
+    "line": 450,
+    "calls": []
+  },
+  {
+    "function": "_seal_wall_gaps",
+    "line": 505,
+    "calls": [
+      {
+        "name": "_snap_merge",
+        "line": 630
+      },
+      {
+        "name": "_dark_ratio",
+        "line": 572
+      },
+      {
+        "name": "_dark_ratio",
+        "line": 612
+      }
+    ]
+  },
+  {
+    "function": "_close_all_gaps",
+    "line": 635,
+    "calls": [
+      {
+        "name": "_snap_merge",
+        "line": 864
+      },
+      {
+        "name": "_crosses_opening",
+        "line": 763
+      },
+      {
+        "name": "_crosses_opening",
+        "line": 779
+      },
+      {
+        "name": "_crosses_opening",
+        "line": 829
+      },
+      {
+        "name": "_crosses_opening",
+        "line": 843
+      },
+      {
+        "name": "_has_dark_connection",
+        "line": 766
+      },
+      {
+        "name": "_inside_room",
+        "line": 777
+      },
+      {
+        "name": "_has_dark_connection",
+        "line": 781
+      },
+      {
+        "name": "_has_dark_connection",
+        "line": 831
+      },
+      {
+        "name": "_inside_room",
+        "line": 841
+      },
+      {
+        "name": "_has_dark_connection",
+        "line": 845
+      }
+    ]
+  },
+  {
+    "function": "_graceful_fallback",
+    "line": 867,
+    "calls": [
+      {
+        "name": "_make_room",
+        "line": 945
+      },
+      {
+        "name": "_seg_line",
+        "line": 873
+      },
+      {
+        "name": "_seg_line",
+        "line": 874
+      },
+      {
+        "name": "_largest_poly",
+        "line": 881
+      },
+      {
+        "name": "_largest_poly",
+        "line": 908
+      },
+      {
+        "name": "_largest_poly",
+        "line": 912
+      },
+      {
+        "name": "_largest_poly",
+        "line": 919
+      },
+      {
+        "name": "_largest_poly",
+        "line": 923
+      },
+      {
+        "name": "_deoverlap",
+        "line": 940
+      },
+      {
+        "name": "_name_room_heuristic",
+        "line": 890
+      },
+      {
+        "name": "_make_room",
+        "line": 893
+      },
+      {
+        "name": "_deoverlap",
+        "line": 898
+      },
+      {
+        "name": "_name_room_heuristic",
+        "line": 933
+      },
+      {
+        "name": "_make_room",
+        "line": 936
+      }
+    ]
+  },
+  {
+    "function": "_is_ghost_room",
+    "line": 949,
+    "calls": []
+  },
+  {
+    "function": "_find_unclosed_rooms",
+    "line": 1036,
+    "calls": []
+  },
+  {
+    "function": "build_geometry",
+    "line": 1084,
+    "calls": [
+      {
+        "name": "_extract_room_masks",
+        "line": 1088
+      },
+      {
+        "name": "_extract_walls_yolo",
+        "line": 1090
+      },
+      {
+        "name": "_extract_openings",
+        "line": 1126
+      },
+      {
+        "name": "_extract_openings",
+        "line": 1127
+      },
+      {
+        "name": "_extract_walls_yolo",
+        "line": 1167
+      },
+      {
+        "name": "_wall_config",
+        "line": 1177
+      },
+      {
+        "name": "_classify_structural_walls",
+        "line": 1178
+      },
+      {
+        "name": "_wall_config",
+        "line": 1179
+      },
+      {
+        "name": "_opening_requires_wall",
+        "line": 1196
+      },
+      {
+        "name": "_classify_structural_walls",
+        "line": 1202
+      },
+      {
+        "name": "_build_boundary",
+        "line": 1204
+      },
+      {
+        "name": "_close_all_gaps",
+        "line": 1210
+      },
+      {
+        "name": "_seal_wall_gaps",
+        "line": 1220
+      },
+      {
+        "name": "_merge_collinear_walls",
+        "line": 1222
+      },
+      {
+        "name": "_patch_wall_holes",
+        "line": 1225
+      },
+      {
+        "name": "_close_topology_gaps",
+        "line": 1226
+      },
+      {
+        "name": "_process_wall_graph",
+        "line": 1227
+      },
+      {
+        "name": "_filter_walls_by_rooms",
+        "line": 1234
+      },
+      {
+        "name": "_heal_wall_corners",
+        "line": 1236
+      },
+      {
+        "name": "_connect_openings_to_walls",
+        "line": 1238
+      },
+      {
+        "name": "_force_connect_broken",
+        "line": 1239
+      },
+      {
+        "name": "_extend_walls_at_junctions",
+        "line": 1241
+      },
+      {
+        "name": "_heal_wall_corners",
+        "line": 1243
+      },
+      {
+        "name": "_restore_verified_yolo_walls",
+        "line": 1245
+      },
+      {
+        "name": "_fill_boundary_gaps",
+        "line": 1251
+      },
+      {
+        "name": "_merge_collinear_walls",
+        "line": 1254
+      },
+      {
+        "name": "_split_at_junctions",
+        "line": 1257
+      },
+      {
+        "name": "_weld_near_endpoints",
+        "line": 1260
+      },
+      {
+        "name": "_bridge_small_wall_gaps",
+        "line": 1267
+      },
+      {
+        "name": "_merge_collinear_walls",
+        "line": 1274
+      },
+      {
+        "name": "_quantize_wall_graph",
+        "line": 1281
+      },
+      {
+        "name": "_find_unclosed_rooms",
+        "line": 1287
+      },
+      {
+        "name": "_debug_wall_connectivity",
+        "line": 1294
+      },
+      {
+        "name": "_wall_output",
+        "line": 1378
+      },
+      {
+        "name": "_wall_config",
+        "line": 1093
+      },
+      {
+        "name": "_graceful_fallback",
+        "line": 1375
+      },
+      {
+        "name": "_debug_wall_image",
+        "line": 1304
+      },
+      {
+        "name": "_debug_wall_image",
+        "line": 1307
+      },
+      {
+        "name": "_polygonize_cells",
+        "line": 1320
+      },
+      {
+        "name": "_cleanup_cells",
+        "line": 1321
+      },
+      {
+        "name": "_merge_fragmented_cells",
+        "line": 1322
+      },
+      {
+        "name": "_rooms_from_masks",
+        "line": 1365
+      },
+      {
+        "name": "_largest_poly",
+        "line": 1113
+      },
+      {
+        "name": "_cells_valid",
+        "line": 1324
+      },
+      {
+        "name": "_assign_rooms",
+        "line": 1325
+      },
+      {
+        "name": "_filter_room_area_outliers",
+        "line": 1327
+      },
+      {
+        "name": "_filter_room_area_outliers",
+        "line": 1328
+      },
+      {
+        "name": "_ensure_full_coverage",
+        "line": 1330
+      },
+      {
+        "name": "_is_ghost_room",
+        "line": 1097
+      }
+    ]
+  },
+  {
+    "function": "_filter_walls_by_rooms",
+    "line": 1429,
+    "calls": []
+  },
+  {
+    "function": "_clip",
+    "line": 1475,
+    "calls": []
+  },
+  {
+    "function": "_extract_room_masks",
+    "line": 1478,
+    "calls": [
+      {
+        "name": "_clean_poly",
+        "line": 1544
+      },
+      {
+        "name": "_largest_poly",
+        "line": 1573
+      },
+      {
+        "name": "_clip",
+        "line": 1540
+      },
+      {
+        "name": "_clip",
+        "line": 1540
+      }
+    ]
+  },
+  {
+    "function": "_extract_openings",
+    "line": 1596,
+    "calls": [
+      {
+        "name": "_clip",
+        "line": 1610
+      },
+      {
+        "name": "_clip",
+        "line": 1610
+      },
+      {
+        "name": "_clip",
+        "line": 1618
+      },
+      {
+        "name": "_clip",
+        "line": 1619
+      },
+      {
+        "name": "_clip",
+        "line": 1620
+      },
+      {
+        "name": "_clip",
+        "line": 1621
+      },
+      {
+        "name": "_clip",
+        "line": 1615
+      },
+      {
+        "name": "_clip",
+        "line": 1615
+      }
+    ]
+  },
+  {
+    "function": "_extract_walls_yolo",
+    "line": 1627,
+    "calls": [
+      {
+        "name": "_clip",
+        "line": 1651
+      },
+      {
+        "name": "_clip",
+        "line": 1652
+      },
+      {
+        "name": "_clip",
+        "line": 1653
+      },
+      {
+        "name": "_clip",
+        "line": 1660
+      },
+      {
+        "name": "_clip",
+        "line": 1661
+      },
+      {
+        "name": "_clip",
+        "line": 1662
+      }
+    ]
+  },
+  {
+    "function": "_filter_staircase_walls",
+    "line": 1675,
+    "calls": []
+  },
+  {
+    "function": "_wall_config",
+    "line": 1708,
+    "calls": []
+  },
+  {
+    "function": "_debug_wall_connectivity",
+    "line": 1734,
+    "calls": []
+  },
+  {
+    "function": "_quantize_wall_graph",
+    "line": 1809,
+    "calls": []
+  },
+  {
+    "function": "_process_wall_graph",
+    "line": 1821,
+    "calls": [
+      {
+        "name": "_snap_merge",
+        "line": 1823
+      },
+      {
+        "name": "_filter_staircase_walls",
+        "line": 1824
+      },
+      {
+        "name": "_heal",
+        "line": 1825
+      },
+      {
+        "name": "_snap_to_structural",
+        "line": 1826
+      },
+      {
+        "name": "_infer_walls_from_openings",
+        "line": 1827
+      },
+      {
+        "name": "_bridge_openings",
+        "line": 1833
+      },
+      {
+        "name": "_snap_anchors",
+        "line": 1834
+      },
+      {
+        "name": "_snap_merge",
+        "line": 1835
+      },
+      {
+        "name": "_debug_wall_connectivity",
+        "line": 1836
+      },
+      {
+        "name": "_clip_to_boundary",
+        "line": 1841
+      },
+      {
+        "name": "_filter_structural",
+        "line": 1842
+      },
+      {
+        "name": "_snap_anchors",
+        "line": 1843
+      },
+      {
+        "name": "_split_at_junctions",
+        "line": 1844
+      }
+    ]
+  },
+  {
+    "function": "_cluster",
+    "line": 1854,
+    "calls": []
+  },
+  {
+    "function": "_nearest",
+    "line": 1865,
+    "calls": []
+  },
+  {
+    "function": "_merge_collinear_walls",
+    "line": 1869,
+    "calls": [
+      {
+        "name": "_dd",
+        "line": 1926
+      },
+      {
+        "name": "_dd",
+        "line": 1936
+      },
+      {
+        "name": "_merge_group_h",
+        "line": 1933
+      },
+      {
+        "name": "_merge_group_v",
+        "line": 1943
+      }
+    ]
+  },
+  {
+    "function": "_split_walls_at_junctions",
+    "line": 1953,
+    "calls": [
+      {
+        "name": "_split_h",
+        "line": 2020
+      },
+      {
+        "name": "_split_v",
+        "line": 2021
+      }
+    ]
+  },
+  {
+    "function": "_snap_merge",
+    "line": 2031,
+    "calls": [
+      {
+        "name": "_cluster",
+        "line": 2033
+      },
+      {
+        "name": "_cluster",
+        "line": 2034
+      },
+      {
+        "name": "_nearest",
+        "line": 2038
+      },
+      {
+        "name": "_nearest",
+        "line": 2054
+      }
+    ]
+  },
+  {
+    "function": "_h_anchored",
+    "line": 2123,
+    "calls": []
+  },
+  {
+    "function": "_v_anchored",
+    "line": 2127,
+    "calls": []
+  },
+  {
+    "function": "_heal",
+    "line": 2131,
+    "calls": [
+      {
+        "name": "_h_anchored",
+        "line": 2158
+      },
+      {
+        "name": "_h_anchored",
+        "line": 2171
+      },
+      {
+        "name": "_v_anchored",
+        "line": 2189
+      },
+      {
+        "name": "_v_anchored",
+        "line": 2202
+      },
+      {
+        "name": "_pull_v_endpoint",
+        "line": 2168
+      },
+      {
+        "name": "_pull_v_endpoint",
+        "line": 2181
+      },
+      {
+        "name": "_pull_h_endpoint",
+        "line": 2199
+      },
+      {
+        "name": "_pull_h_endpoint",
+        "line": 2212
+      }
+    ]
+  },
+  {
+    "function": "_snap_to_structural",
+    "line": 2214,
+    "calls": []
+  },
+  {
+    "function": "_bridge_openings",
+    "line": 2294,
+    "calls": []
+  },
+  {
+    "function": "_opening_requires_wall",
+    "line": 2486,
+    "calls": []
+  },
+  {
+    "function": "_infer_walls_from_openings",
+    "line": 2557,
+    "calls": []
+  },
+  {
+    "function": "_snap_anchors",
+    "line": 2619,
+    "calls": []
+  },
+  {
+    "function": "_seg_line",
+    "line": 2645,
+    "calls": []
+  },
+  {
+    "function": "_line_parts",
+    "line": 2651,
+    "calls": []
+  },
+  {
+    "function": "_clip_to_boundary",
+    "line": 2659,
+    "calls": [
+      {
+        "name": "_line_parts",
+        "line": 2673
+      },
+      {
+        "name": "_line_parts",
+        "line": 2694
+      },
+      {
+        "name": "_seg_line",
+        "line": 2668
+      },
+      {
+        "name": "_seg_line",
+        "line": 2689
+      }
+    ]
+  },
+  {
+    "function": "_filter_structural",
+    "line": 2716,
+    "calls": []
+  },
+  {
+    "function": "_split_at_junctions",
+    "line": 2814,
+    "calls": []
+  },
+  {
+    "function": "_weld_near_endpoints",
+    "line": 2864,
+    "calls": []
+  },
+  {
+    "function": "_build_boundary",
+    "line": 2911,
+    "calls": [
+      {
+        "name": "_largest_poly",
+        "line": 2919
+      },
+      {
+        "name": "_largest_poly",
+        "line": 2946
+      },
+      {
+        "name": "_largest_poly",
+        "line": 2938
+      }
+    ]
+  },
+  {
+    "function": "_patch_wall_holes",
+    "line": 2954,
+    "calls": [
+      {
+        "name": "_largest_poly",
+        "line": 2969
+      }
+    ]
+  },
+  {
+    "function": "_close_topology_gaps",
+    "line": 3056,
+    "calls": [
+      {
+        "name": "_snap_merge",
+        "line": 3146
+      }
+    ]
+  },
+  {
+    "function": "_polygonize_cells",
+    "line": 3149,
+    "calls": [
+      {
+        "name": "_seg_line",
+        "line": 3151
+      },
+      {
+        "name": "_seg_line",
+        "line": 3153
+      },
+      {
+        "name": "_largest_poly",
+        "line": 3180
+      },
+      {
+        "name": "_largest_poly",
+        "line": 3212
+      },
+      {
+        "name": "_largest_poly",
+        "line": 3202
+      }
+    ]
+  },
+  {
+    "function": "_cleanup_cells",
+    "line": 3227,
+    "calls": [
+      {
+        "name": "_largest_poly",
+        "line": 3258
+      }
+    ]
+  },
+  {
+    "function": "_filter_room_area_outliers",
+    "line": 3305,
+    "calls": []
+  },
+  {
+    "function": "_merge_fragmented_cells",
+    "line": 3344,
+    "calls": [
+      {
+        "name": "_masks_in_cell",
+        "line": 3372
+      },
+      {
+        "name": "_masks_in_cell",
+        "line": 3383
+      }
+    ]
+  },
+  {
+    "function": "_cells_valid",
+    "line": 3408,
+    "calls": []
+  },
+  {
+    "function": "_name_room_heuristic",
+    "line": 3479,
+    "calls": []
+  },
+  {
+    "function": "_assign_rooms",
+    "line": 3491,
+    "calls": [
+      {
+        "name": "_deoverlap",
+        "line": 3654
+      },
+      {
+        "name": "_name_room_heuristic",
+        "line": 3559
+      },
+      {
+        "name": "_make_room",
+        "line": 3561
+      },
+      {
+        "name": "_name_room_heuristic",
+        "line": 3590
+      },
+      {
+        "name": "_make_room",
+        "line": 3598
+      }
+    ]
+  },
+  {
+    "function": "_ensure_full_coverage",
+    "line": 3656,
+    "calls": [
+      {
+        "name": "_largest_poly",
+        "line": 3670
+      },
+      {
+        "name": "_name_room_heuristic",
+        "line": 3693
+      },
+      {
+        "name": "_make_room",
+        "line": 3694
+      }
+    ]
+  },
+  {
+    "function": "_restore_verified_yolo_walls",
+    "line": 3701,
+    "calls": [
+      {
+        "name": "_coverage_h",
+        "line": 3791
+      },
+      {
+        "name": "_hit_ratio_h",
+        "line": 3794
+      },
+      {
+        "name": "_coverage_v",
+        "line": 3803
+      },
+      {
+        "name": "_hit_ratio_v",
+        "line": 3806
+      }
+    ]
+  },
+  {
+    "function": "_fill_boundary_gaps",
+    "line": 3820,
+    "calls": [
+      {
+        "name": "_h_coverage",
+        "line": 3891
+      },
+      {
+        "name": "_dark_frac",
+        "line": 3893
+      },
+      {
+        "name": "_v_coverage",
+        "line": 3908
+      },
+      {
+        "name": "_dark_frac",
+        "line": 3910
+      }
+    ]
+  },
+  {
+    "function": "_heal_wall_corners",
+    "line": 3928,
+    "calls": [
+      {
+        "name": "_pixel_dark",
+        "line": 3961
+      },
+      {
+        "name": "_snap_v_endpoint",
+        "line": 4009
+      },
+      {
+        "name": "_snap_v_endpoint",
+        "line": 4029
+      },
+      {
+        "name": "_snap_h_endpoint",
+        "line": 4053
+      },
+      {
+        "name": "_snap_h_endpoint",
+        "line": 4073
+      },
+      {
+        "name": "_ok_to_snap",
+        "line": 4005
+      },
+      {
+        "name": "_ok_to_snap",
+        "line": 4025
+      },
+      {
+        "name": "_ok_to_snap",
+        "line": 4049
+      },
+      {
+        "name": "_ok_to_snap",
+        "line": 4069
+      }
+    ]
+  },
+  {
+    "function": "_connect_openings_to_walls",
+    "line": 4081,
+    "calls": [
+      {
+        "name": "_h_present",
+        "line": 4146
+      },
+      {
+        "name": "_h_present",
+        "line": 4178
+      },
+      {
+        "name": "_v_present",
+        "line": 4208
+      },
+      {
+        "name": "_v_present",
+        "line": 4238
+      },
+      {
+        "name": "_dark",
+        "line": 4154
+      },
+      {
+        "name": "_dark",
+        "line": 4159
+      },
+      {
+        "name": "_segment_overlaps_opening",
+        "line": 4165
+      },
+      {
+        "name": "_segment_crosses_opening_interior",
+        "line": 4165
+      },
+      {
+        "name": "_segment_overlaps_opening",
+        "line": 4171
+      },
+      {
+        "name": "_segment_crosses_opening_interior",
+        "line": 4171
+      },
+      {
+        "name": "_dark",
+        "line": 4185
+      },
+      {
+        "name": "_dark",
+        "line": 4189
+      },
+      {
+        "name": "_segment_overlaps_opening",
+        "line": 4195
+      },
+      {
+        "name": "_segment_crosses_opening_interior",
+        "line": 4195
+      },
+      {
+        "name": "_segment_overlaps_opening",
+        "line": 4201
+      },
+      {
+        "name": "_segment_crosses_opening_interior",
+        "line": 4201
+      },
+      {
+        "name": "_dark",
+        "line": 4215
+      },
+      {
+        "name": "_dark",
+        "line": 4219
+      },
+      {
+        "name": "_segment_overlaps_opening",
+        "line": 4225
+      },
+      {
+        "name": "_segment_crosses_opening_interior",
+        "line": 4225
+      },
+      {
+        "name": "_segment_overlaps_opening",
+        "line": 4231
+      },
+      {
+        "name": "_segment_crosses_opening_interior",
+        "line": 4231
+      },
+      {
+        "name": "_dark",
+        "line": 4245
+      },
+      {
+        "name": "_dark",
+        "line": 4249
+      },
+      {
+        "name": "_segment_overlaps_opening",
+        "line": 4255
+      },
+      {
+        "name": "_segment_crosses_opening_interior",
+        "line": 4255
+      },
+      {
+        "name": "_segment_overlaps_opening",
+        "line": 4261
+      },
+      {
+        "name": "_segment_crosses_opening_interior",
+        "line": 4261
+      }
+    ]
+  },
+  {
+    "function": "_bridge_small_wall_gaps",
+    "line": 4269,
+    "calls": []
+  },
+  {
+    "function": "_force_connect_broken",
+    "line": 4404,
+    "calls": [
+      {
+        "name": "_snap_merge",
+        "line": 4652
+      },
+      {
+        "name": "_v_anchored",
+        "line": 4560
+      },
+      {
+        "name": "_v_anchored",
+        "line": 4581
+      },
+      {
+        "name": "_h_anchored",
+        "line": 4605
+      },
+      {
+        "name": "_h_anchored",
+        "line": 4626
+      },
+      {
+        "name": "_h_anchored",
+        "line": 4453
+      },
+      {
+        "name": "_h_anchored",
+        "line": 4478
+      },
+      {
+        "name": "_v_anchored",
+        "line": 4506
+      },
+      {
+        "name": "_v_anchored",
+        "line": 4531
+      },
+      {
+        "name": "_gap_has_dark",
+        "line": 4571
+      },
+      {
+        "name": "_gap_has_dark",
+        "line": 4592
+      },
+      {
+        "name": "_gap_has_dark",
+        "line": 4616
+      },
+      {
+        "name": "_gap_has_dark",
+        "line": 4637
+      },
+      {
+        "name": "_gap_has_dark",
+        "line": 4470
+      },
+      {
+        "name": "_gap_has_dark",
+        "line": 4495
+      },
+      {
+        "name": "_gap_has_dark",
+        "line": 4523
+      },
+      {
+        "name": "_gap_has_dark",
+        "line": 4548
+      }
+    ]
+  },
+  {
+    "function": "_extend_walls_at_junctions",
+    "line": 4659,
+    "calls": [
+      {
+        "name": "_v_anchored",
+        "line": 4711
+      },
+      {
+        "name": "_h_anchored",
+        "line": 4750
+      },
+      {
+        "name": "_line_dark",
+        "line": 4723
+      },
+      {
+        "name": "_line_dark",
+        "line": 4761
+      },
+      {
+        "name": "_line_dark",
+        "line": 4735
+      },
+      {
+        "name": "_line_dark",
+        "line": 4773
+      }
+    ]
+  },
+  {
+    "function": "_rooms_by_raster_cut",
+    "line": 4789,
+    "calls": [
+      {
+        "name": "_clean_poly",
+        "line": 4907
+      },
+      {
+        "name": "_largest_poly",
+        "line": 4912
+      },
+      {
+        "name": "_name_room_heuristic",
+        "line": 4969
+      },
+      {
+        "name": "_make_room",
+        "line": 4971
+      },
+      {
+        "name": "_largest_poly",
+        "line": 4923
+      },
+      {
+        "name": "_clip",
+        "line": 4906
+      },
+      {
+        "name": "_clip",
+        "line": 4906
+      },
+      {
+        "name": "_largest_poly",
+        "line": 4949
+      }
+    ]
+  },
+  {
+    "function": "_raster_rooms_valid",
+    "line": 4978,
+    "calls": []
+  },
+  {
+    "function": "_rooms_from_masks",
+    "line": 5004,
+    "calls": [
+      {
+        "name": "_largest_poly",
+        "line": 5038
+      },
+      {
+        "name": "_make_room",
+        "line": 5083
+      },
+      {
+        "name": "_largest_poly",
+        "line": 5061
+      }
+    ]
+  },
+  {
+    "function": "_make_room",
+    "line": 5105,
+    "calls": [
+      {
+        "name": "_poly_pts",
+        "line": 5114
+      },
+      {
+        "name": "_poly_pts",
+        "line": 5130
+      },
+      {
+        "name": "_bbox",
+        "line": 5147
+      },
+      {
+        "name": "_largest_poly",
+        "line": 5123
+      }
+    ]
+  },
+  {
+    "function": "_segment_overlaps_opening",
+    "line": 5151,
+    "calls": []
+  },
+  {
+    "function": "_segment_crosses_opening_interior",
+    "line": 5179,
+    "calls": []
+  },
+  {
+    "function": "_deoverlap",
+    "line": 5207,
+    "calls": [
+      {
+        "name": "_largest_poly",
+        "line": 5211
+      },
+      {
+        "name": "_poly_pts",
+        "line": 5220
+      },
+      {
+        "name": "_largest_poly",
+        "line": 5217
+      },
+      {
+        "name": "_largest_poly",
+        "line": 5230
+      },
+      {
+        "name": "_bbox",
+        "line": 5242
+      },
+      {
+        "name": "_poly_pts",
+        "line": 5232
+      }
+    ]
+  },
+  {
+    "function": "_wall_output",
+    "line": 5250,
+    "calls": []
+  },
+  {
+    "function": "_clean_poly",
+    "line": 5293,
+    "calls": []
+  },
+  {
+    "function": "_largest_poly",
+    "line": 5303,
+    "calls": [
+      {
+        "name": "_clean_poly",
+        "line": 5304
+      }
+    ]
+  },
+  {
+    "function": "_poly_pts",
+    "line": 5317,
+    "calls": [
+      {
+        "name": "_largest_poly",
+        "line": 5318
+      }
+    ]
+  },
+  {
+    "function": "_bbox",
+    "line": 5325,
+    "calls": []
+  },
+  {
+    "function": "_estimate_widths",
+    "line": 5330,
+    "calls": []
+  },
+  {
+    "function": "draw_preview",
+    "line": 5350,
+    "calls": [
+      {
+        "name": "_draw_legend",
+        "line": 5387
+      },
+      {
+        "name": "_put_label",
+        "line": 5374
+      },
+      {
+        "name": "_draw_box",
+        "line": 5384
+      },
+      {
+        "name": "_draw_box",
+        "line": 5386
+      },
+      {
+        "name": "_room_color",
+        "line": 5365
+      }
+    ]
+  },
+  {
+    "function": "_room_color",
+    "line": 5391,
+    "calls": []
+  },
+  {
+    "function": "_put_label",
+    "line": 5397,
+    "calls": []
+  },
+  {
+    "function": "_draw_box",
+    "line": 5407,
+    "calls": []
+  },
+  {
+    "function": "_draw_legend",
+    "line": 5417,
+    "calls": []
+  }
+]

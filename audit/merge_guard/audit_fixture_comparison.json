@@ -1,0 +1,300 @@
+[
+  {
+    "name": "weld_self_candidate",
+    "baseline": [
+      [
+        {
+          "x1": 0.1,
+          "x2": 0.49,
+          "y": 0.3
+        }
+      ],
+      [
+        {
+          "x": 0.5,
+          "y1": 0.31,
+          "y2": 0.7
+        }
+      ]
+    ],
+    "proposed": [
+      [
+        {
+          "x1": 0.1,
+          "x2": 0.49,
+          "y": 0.3
+        }
+      ],
+      [
+        {
+          "x": 0.5,
+          "y1": 0.31,
+          "y2": 0.7
+        }
+      ]
+    ],
+    "delta": {
+      "exact_segments_removed_or_changed": 0,
+      "exact_segments_added_or_changed": 0,
+      "merge_candidates": {},
+      "split_candidates": {},
+      "unmatched_before": [],
+      "unmatched_after": [],
+      "matched_endpoint_changes": [],
+      "max_matched_endpoint_displacement_px": 0,
+      "added_coverage_outside_1px_px": 0.0,
+      "removed_coverage_outside_1px_px": 0.0,
+      "hausdorff_px": 0.0,
+      "added_parts": []
+    }
+  },
+  {
+    "name": "parallel_merge",
+    "baseline": [
+      [
+        {
+          "x1": 0.1,
+          "x2": 0.6,
+          "y": 0.301,
+          "t": 0.012,
+          "conf": 0
+        }
+      ],
+      []
+    ],
+    "proposed": [
+      [
+        {
+          "x1": 0.1,
+          "x2": 0.4,
+          "y": 0.301
+        },
+        {
+          "x1": 0.3,
+          "x2": 0.6,
+          "y": 0.309
+        }
+      ],
+      []
+    ],
+    "delta": {
+      "exact_segments_removed_or_changed": 1,
+      "exact_segments_added_or_changed": 2,
+      "merge_candidates": {},
+      "split_candidates": {},
+      "unmatched_before": [],
+      "unmatched_after": [
+        "h1"
+      ],
+      "matched_endpoint_changes": [
+        {
+          "before": "h0",
+          "after": "h0",
+          "p_displacement_px": 0.0,
+          "q_displacement_px": 102.39999999999998,
+          "span_delta_px": -102.39999999999998
+        }
+      ],
+      "max_matched_endpoint_displacement_px": 102.39999999999998,
+      "added_coverage_outside_1px_px": 153.6,
+      "removed_coverage_outside_1px_px": 101.39999999999998,
+      "hausdorff_px": 5.888000000000005,
+      "added_parts": [
+        {
+          "coords_px": [
+            [
+              153.6,
+              227.424
+            ],
+            [
+              307.2,
+              227.424
+            ]
+          ],
+          "length_px": 153.6,
+          "dark_support_fraction_3x3": 0.0
+        }
+      ]
+    }
+  },
+  {
+    "name": "true_collinear_overlap",
+    "baseline": [
+      [
+        {
+          "x1": 0.1,
+          "x2": 0.6,
+          "y": 0.3,
+          "t": 0.012,
+          "conf": 0
+        }
+      ],
+      []
+    ],
+    "proposed": [
+      [
+        {
+          "x1": 0.1,
+          "x2": 0.6,
+          "y": 0.3,
+          "t": 0.012,
+          "conf": 0
+        }
+      ],
+      []
+    ],
+    "delta": {
+      "exact_segments_removed_or_changed": 0,
+      "exact_segments_added_or_changed": 0,
+      "merge_candidates": {},
+      "split_candidates": {},
+      "unmatched_before": [],
+      "unmatched_after": [],
+      "matched_endpoint_changes": [],
+      "max_matched_endpoint_displacement_px": 0,
+      "added_coverage_outside_1px_px": 0.0,
+      "removed_coverage_outside_1px_px": 0.0,
+      "hausdorff_px": 0.0,
+      "added_parts": []
+    }
+  },
+  {
+    "name": "short_valid_wall_removed",
+    "baseline": [
+      [],
+      []
+    ],
+    "proposed": [
+      [],
+      []
+    ],
+    "delta": {
+      "exact_segments_removed_or_changed": 0,
+      "exact_segments_added_or_changed": 0,
+      "merge_candidates": {},
+      "split_candidates": {},
+      "unmatched_before": [],
+      "unmatched_after": [],
+      "matched_endpoint_changes": [],
+      "max_matched_endpoint_displacement_px": 0,
+      "added_coverage_outside_1px_px": 0.0,
+      "removed_coverage_outside_1px_px": 0.0,
+      "hausdorff_px": 0.0,
+      "added_parts": []
+    }
+  },
+  {
+    "name": "blank_corner_false_connection",
+    "baseline": [
+      [
+        {
+          "x1": 0.1,
+          "x2": 0.5,
+          "y": 0.3
+        }
+      ],
+      [
+        {
+          "x": 0.5,
+          "y1": 0.3,
+          "y2": 0.7
+        }
+      ]
+    ],
+    "proposed": [
+      [
+        {
+          "x1": 0.1,
+          "x2": 0.5,
+          "y": 0.3
+        }
+      ],
+      [
+        {
+          "x": 0.5,
+          "y1": 0.3,
+          "y2": 0.7
+        }
+      ]
+    ],
+    "delta": {
+      "exact_segments_removed_or_changed": 0,
+      "exact_segments_added_or_changed": 0,
+      "merge_candidates": {},
+      "split_candidates": {},
+      "unmatched_before": [],
+      "unmatched_after": [],
+      "matched_endpoint_changes": [],
+      "max_matched_endpoint_displacement_px": 0,
+      "added_coverage_outside_1px_px": 0.0,
+      "removed_coverage_outside_1px_px": 0.0,
+      "hausdorff_px": 0.0,
+      "added_parts": []
+    }
+  },
+  {
+    "name": "small_vertical_opening",
+    "baseline": [
+      [],
+      [
+        {
+          "x": 0.4,
+          "y1": 0.1,
+          "y2": 0.4
+        },
+        {
+          "x": 0.4,
+          "y1": 0.42,
+          "y2": 0.7
+        },
+        {
+          "x": 0.4,
+          "y1": 0.4,
+          "y2": 0.42,
+          "t": 0.012,
+          "conf": 0.5,
+          "is_structural": true,
+          "source": "gap_bridge"
+        }
+      ]
+    ],
+    "proposed": [
+      [],
+      [
+        {
+          "x": 0.4,
+          "y1": 0.1,
+          "y2": 0.4
+        },
+        {
+          "x": 0.4,
+          "y1": 0.42,
+          "y2": 0.7
+        },
+        {
+          "x": 0.4,
+          "y1": 0.4,
+          "y2": 0.42,
+          "t": 0.012,
+          "conf": 0.5,
+          "is_structural": true,
+          "source": "gap_bridge"
+        }
+      ]
+    ],
+    "delta": {
+      "exact_segments_removed_or_changed": 0,
+      "exact_segments_added_or_changed": 0,
+      "merge_candidates": {},
+      "split_candidates": {},
+      "unmatched_before": [],
+      "unmatched_after": [],
+      "matched_endpoint_changes": [],
+      "max_matched_endpoint_displacement_px": 0,
+      "added_coverage_outside_1px_px": 0.0,
+      "removed_coverage_outside_1px_px": 0.0,
+      "hausdorff_px": 0.0,
+      "added_parts": []
+    }
+  }
+]

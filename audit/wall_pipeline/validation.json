@@ -1,0 +1,5 @@
+{
+  "instrumented_equals_uninstrumented": true,
+  "weld_random_finite_fixtures_unchanged": 100,
+  "synthetic_assertions_passed": true
+}

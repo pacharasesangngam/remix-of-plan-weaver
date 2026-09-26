@@ -19,12 +19,12 @@ beforeEach(() => {
 });
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
 
-function setup(initialWalls = [wall, neighbor]) {
+function setup(initialWalls = [wall, neighbor], calibrated = true) {
     const commit = vi.fn();
     function Editor() {
         const [walls, setWalls] = useState(initialWalls);
-        return <WallReview rooms={[]} walls={walls} unit="m" imageUrl="plan.png"
-            scale={1} onScaleChange={vi.fn()} onRoomUpdate={vi.fn()} onGenerate={vi.fn()} onWallGeometryCommit={updated => {
+        return <WallReview calibrationStatus={calibrated ? "calibrated" : "uncalibrated"} rooms={[]} walls={walls} unit="m" imageUrl="plan.png"
+            scale={1} planWidth={20} planHeight={20} onScaleChange={vi.fn()} onRoomUpdate={vi.fn()} onGenerate={vi.fn()} onWallGeometryCommit={updated => {
                 commit(updated);
                 setWalls(updated);
             }} />;
@@ -49,6 +49,142 @@ function setup(initialWalls = [wall, neighbor]) {
 }
 
 describe("wall endpoint dragging", () => {
+    it("highlights another stored endpoint in screen-space range, clears on exit, and commits its exact coordinates", () => {
+        const target = { ...wall, id: "target", x1: 0.75, y1: 0.6, x2: 0.9, y2: 0.6 };
+        const { svg, begin, move, end, commit } = setup([wall, target]);
+        begin(1);
+        move(0.744, 0.592); // 6 px horizontally and 4 px vertically on transformed bounds.
+        const marker = () => svg.querySelector('[data-wall-snap-target="target:start"]');
+        expect(marker()).toHaveAttribute("cx", "0.75");
+        expect(marker()).toHaveAttribute("cy", "0.6");
+        expect(marker()).toHaveAttribute("stroke", "#22c55e");
+        expect(marker()).toHaveAttribute("fill", "none");
+        expect(marker()?.parentElement?.querySelector('circle[stroke="#f59e0b"]')).toHaveAttribute("fill", "#fff");
+        expect(commit).not.toHaveBeenCalled();
+        move(0.73, 0.56);
+        expect(marker()).toBeNull();
+        move(0.745, 0.59);
+        expect(marker()).not.toBeNull();
+        end(0.745, 0.59);
+        expect(commit).toHaveBeenCalledOnce();
+        expect(commit).toHaveBeenCalledWith([{ ...wall, x2: target.x1, y2: target.y1 }, target]);
+        expect(marker()).toBeNull();
+    });
+
+    it.each([false, true])("shows every preview connection during endpoint dragging, reversed=%s", reversed => {
+        const moving = reversed ? { ...wall, x1: wall.x2, y1: wall.y2, x2: wall.x1, y2: wall.y1 } : wall;
+        const interior = [
+            { ...wall, id: "interior-a", x1: 0.4, y1: 0.5, x2: 0.4, y2: 0.8 },
+            { ...wall, id: "interior-b", x1: 0.6, y1: 0.7, x2: 0.6, y2: 0.95 },
+        ];
+        const target = { ...wall, id: "target", x1: 0.8, y1: 0.9, x2: 0.95, y2: 0.9 };
+        const { svg, begin, move, end, commit } = setup([moving, ...interior, target]);
+        begin(reversed ? 0 : 1);
+        move(0.795, 0.892);
+        expect(svg.querySelectorAll('[data-wall-snap-target]')).toHaveLength(3);
+        for (const key of ["interior-a:start", "interior-b:start", "target:start"]) {
+            const marker = svg.querySelector(`[data-wall-snap-target="${key}"]`);
+            expect(marker).toHaveAttribute("stroke", "#22c55e");
+            expect(marker?.parentElement?.querySelector('circle[stroke="#f59e0b"]')).toHaveAttribute("fill", "#fff");
+        }
+        expect(commit).not.toHaveBeenCalled();
+        move(0.75, 0.5);
+        expect(svg.querySelectorAll('[data-wall-snap-target]')).toHaveLength(0);
+        move(0.795, 0.892);
+        end(0.795, 0.892);
+        expect(commit).toHaveBeenCalledOnce();
+        expect(commit.mock.calls[0][0]).toEqual([
+            { ...moving, ...(reversed ? { x1: 0.8, y1: 0.9 } : { x2: 0.8, y2: 0.9 }) }, ...interior, target,
+        ]);
+        expect(svg.querySelectorAll('[data-wall-snap-target]')).toHaveLength(0);
+    });
+
+    it("shows interior connections without snapping or changing the dragged endpoint", () => {
+        const target = { ...wall, id: "target", x1: 0.4, y1: 0.5, x2: 0.4, y2: 0.8 };
+        const { svg, begin, move, end, commit } = setup([wall, target]);
+        begin(1);
+        move(0.8, 0.9);
+        expect(svg.querySelectorAll('[data-wall-snap-target]')).toHaveLength(1);
+        expect(svg.querySelector('[data-wall-snap-target="target:start"]')).not.toBeNull();
+        end(0.8, 0.9);
+        expect(commit).toHaveBeenCalledWith([{ ...wall, x2: 0.8, y2: 0.9 }, target]);
+    });
+
+    it("shows all connections from pointer-down and restores their feedback when a collapsed preview is rejected", () => {
+        const branch = { ...wall, id: "branch", x1: 0.35, y1: 0.3, x2: 0.35, y2: 0.6 };
+        const { svg, begin, move, end, commit } = setup([wall, neighbor, branch]);
+        const markers = () => svg.querySelectorAll('[data-wall-snap-target]');
+        begin(1);
+        expect(markers()).toHaveLength(2);
+        expect(svg.querySelector('[data-wall-snap-target="branch:start"]')).not.toBeNull();
+        move(0.75, 0.5);
+        expect(markers()).toHaveLength(0);
+        move(0.2, 0.3); // Invalid zero-length draft restores the original preview.
+        expect(markers()).toHaveLength(2);
+        for (const marker of markers()) {
+            expect(marker).toHaveAttribute("stroke", "#22c55e");
+            expect(marker.parentElement?.querySelector('circle[stroke="#f59e0b"]')).toHaveAttribute("fill", "#fff");
+        }
+        end(0.2, 0.3);
+        expect(commit).not.toHaveBeenCalled();
+        expect(markers()).toHaveLength(0);
+    });
+
+    it("only highlights actual interior contacts, clears on cancellation, and never pulls nearby endpoints onto the wall", () => {
+        const touching = { ...wall, id: "touching", x1: 0.4, y1: 0.5, x2: 0.4, y2: 0.8 };
+        const nearby = { ...wall, id: "nearby", x1: 0.6, y1: 0.705, x2: 0.6, y2: 0.95 };
+        const { svg, at, begin, move, commit } = setup([wall, touching, nearby]);
+        begin(1);
+        move(0.8, 0.9);
+        expect(svg.querySelectorAll('[data-wall-snap-target]')).toHaveLength(1);
+        expect(svg.querySelector('[data-wall-snap-target="touching:start"]')).not.toBeNull();
+        expect(svg.querySelector('[data-wall-snap-target="nearby:start"]')).toBeNull();
+        fireEvent.pointerCancel(svg, at(0.8, 0.9));
+        expect(svg.querySelectorAll('[data-wall-snap-target]')).toHaveLength(0);
+        expect(commit).not.toHaveBeenCalled();
+    });
+
+    it("uses release coordinates rather than a stale snap preview", () => {
+        const target = { ...wall, id: "target", x1: 0.75, y1: 0.6, x2: 0.9, y2: 0.6 };
+        const { begin, move, end, commit } = setup([wall, target]);
+        begin(1);
+        move(0.744, 0.592);
+        end(0.7, 0.5);
+        expect(commit).toHaveBeenCalledWith([{ ...wall, x2: 0.7, y2: 0.5 }, target]);
+    });
+    it("renders a physical footprint and a separate exact endpoint span without a selection stroke", () => {
+        const isolated = { ...wall, thickness: 0.2 };
+        const { svg, container } = setup([isolated]);
+        expect(svg).toHaveStyle({ overflow: "visible" });
+        const footprint = svg.querySelector('[data-wall-footprint="wall-a"]')!;
+        const originalPath = footprint.getAttribute("d");
+        expect(footprint).toHaveAttribute("stroke", "none");
+        const points = [...originalPath!.matchAll(/[ML]([^, ]+),([^ ]+)/g)].map(m => [Number(m[1]), Number(m[2])]);
+        expect(Math.min(...points.map(p => p[0]))).toBeCloseTo(0.2);
+        expect(Math.max(...points.map(p => p[0]))).toBeCloseTo(0.6);
+        expect(Math.min(...points.map(p => p[1]))).toBeCloseTo(0.295);
+        expect(Math.max(...points.map(p => p[1]))).toBeCloseTo(0.305);
+        const span = svg.querySelector('[data-measurement-span]')!;
+        expect(span).toHaveAttribute("x1", "0.2");
+        expect(span).toHaveAttribute("x2", "0.6");
+        expect(span).toHaveAttribute("y1", "0.3");
+        expect(span).toHaveAttribute("y2", "0.3");
+        expect(svg.querySelectorAll('[data-measurement-endpoint]')).toHaveLength(2);
+        expect(svg.textContent).toContain("8.00m");
+        fireEvent.click([...container.querySelectorAll("button")].find(b => b.textContent?.includes("m/px"))!);
+        expect(footprint.getAttribute("d")).toBe(originalPath);
+        expect(footprint).toHaveAttribute("stroke", "none");
+        expect(svg.querySelector('[data-measurement-span]')).toHaveAttribute("x2", "0.6");
+    });
+    it("keeps geometry editing available before calibration without displaying provisional lengths", () => {
+        const { begin, move, end, commit, svg } = setup([wall, neighbor], false);
+        expect(svg.textContent).not.toContain("8.00m");
+        begin(1);
+        move(0.7, 0.5);
+        end(0.7, 0.5);
+        expect(commit).toHaveBeenCalledWith([{ ...wall, x2: 0.7, y2: 0.5 }, neighbor]);
+        expect(svg.textContent).toContain("—");
+    });
     it("freely leaves an existing T-junction without a modifier or host movement", () => {
         const host = { ...wall, id: "host", x1: 0.6, y1: 0.1, x2: 0.6, y2: 0.8 };
         const { begin, move, end, handles, commit } = setup([wall, host]);
@@ -87,6 +223,111 @@ describe("wall endpoint dragging", () => {
         expect(updated[0].x2).toBeCloseTo(0.7);
         expect(updated[0].y1).toBeCloseTo(0.4);
         expect(updated[1]).toBe(neighbor);
+    });
+
+    it("highlights both compatible body-drag targets, clears on exit, and connects exactly once", () => {
+        const left = { ...wall, id: "left", x1: 0.3, y1: 0.6, x2: 0.3, y2: 0.8 };
+        const right = { ...left, id: "right", x1: 0.7, x2: 0.7 };
+        const { svg, at, move, end, commit } = setup([wall, left, right]);
+        fireEvent.pointerDown(svg, at(0.4, 0.3));
+        move(0.494, 0.592);
+        expect(svg.querySelectorAll('[data-wall-snap-target]')).toHaveLength(2);
+        expect(svg.querySelector('[data-wall-snap-target="left:start"]')).toHaveAttribute("stroke", "#22c55e");
+        expect(svg.querySelector('[data-wall-snap-target="right:start"]')).not.toBeNull();
+        expect(commit).not.toHaveBeenCalled();
+        move(0.46, 0.55);
+        expect(svg.querySelectorAll('[data-wall-snap-target]')).toHaveLength(0);
+        move(0.494, 0.592);
+        end(0.494, 0.592);
+        expect(commit).toHaveBeenCalledOnce();
+        expect(commit.mock.calls[0][0]).toEqual([{ ...wall, x1: 0.3, y1: 0.6, x2: 0.7, y2: 0.6 }, left, right]);
+        expect(svg.querySelectorAll('[data-wall-snap-target]')).toHaveLength(0);
+    });
+
+    it("chooses one incompatible body-drag target without stretching and updates snapping on release", () => {
+        const left = { ...wall, id: "left", x1: 0.3, y1: 0.6, x2: 0.3, y2: 0.8 };
+        const right = { ...left, id: "right", x1: 0.71, x2: 0.71 };
+        const { svg, at, move, end, commit } = setup([wall, left, right]);
+        fireEvent.pointerDown(svg, at(0.4, 0.3));
+        move(0.502, 0.596);
+        expect(svg.querySelectorAll('[data-wall-snap-target]')).toHaveLength(1);
+        expect(svg.querySelector('[data-wall-snap-target="left:start"]')).not.toBeNull();
+        end(0.509, 0.596); // The end target is nearer at release.
+        const updated = commit.mock.calls[0][0][0];
+        expect(updated.x2).toBe(right.x1);
+        expect(updated.y2).toBe(right.y1);
+        expect(updated.x2 - updated.x1).toBeCloseTo(wall.x2 - wall.x1, 12);
+        expect(updated.y2 - updated.y1).toBe(0);
+    });
+
+    it("cancels a snapped body drag without committing", () => {
+        const target = { ...wall, id: "target", x1: 0.7, y1: 0.6, x2: 0.9, y2: 0.6 };
+        const { svg, at, move, commit } = setup([wall, target]);
+        fireEvent.pointerDown(svg, at(0.4, 0.3));
+        move(0.494, 0.592);
+        expect(svg.querySelectorAll('[data-wall-snap-target]')).toHaveLength(1);
+        fireEvent.pointerCancel(svg, at(0.494, 0.592));
+        expect(commit).not.toHaveBeenCalled();
+        expect(svg.querySelectorAll('[data-wall-snap-target]')).toHaveLength(0);
+    });
+
+    it("snaps a whole wall to a T junction with the endpoint highlight and clears on exit", () => {
+        const host = { ...wall, id: "host", x1: 0.75, y1: 0.1, x2: 0.75, y2: 0.9 };
+        const { svg, at, move, end, commit } = setup([wall, host]);
+        fireEvent.pointerDown(svg, at(0.4, 0.3));
+        move(0.544, 0.4);
+        const marker = () => svg.querySelector('[data-wall-snap-target="wall-a:end"]');
+        expect(marker()?.tagName).toBe("circle");
+        expect(marker()).toHaveAttribute("cx", "0.75");
+        expect(marker()).toHaveAttribute("fill", "none");
+        expect(marker()?.parentElement?.querySelector('circle[stroke="#f59e0b"]')).toHaveAttribute("fill", "#fff");
+        expect(svg.querySelector('[data-measurement-endpoint="end"]')).toBeNull();
+        expect(svg.querySelectorAll('circle[stroke="#f59e0b"]')).toHaveLength(2);
+        expect(svg.querySelectorAll('[data-wall-endpoint]')).toHaveLength(2); // Hit areas remain available.
+        expect(commit).not.toHaveBeenCalled();
+        move(0.52, 0.4);
+        expect(marker()).toBeNull();
+        expect(svg.querySelector('[data-measurement-endpoint="end"]')).not.toBeNull();
+        expect(svg.querySelectorAll('circle[stroke="#f59e0b"]')).toHaveLength(2);
+        move(0.544, 0.4);
+        end(0.544, 0.45);
+        expect(commit).toHaveBeenCalledOnce();
+        const updated = commit.mock.calls[0][0];
+        expect(updated[0].x2).toBe(host.x1);
+        expect(updated[0].y2).toBeCloseTo(0.45);
+        expect(updated[0].x2 - updated[0].x1).toBeCloseTo(wall.x2 - wall.x1, 12);
+        expect(updated[0].y2 - updated[0].y1).toBe(0);
+        expect(updated[1]).toBe(host);
+        expect(marker()).toBeNull();
+    });
+
+    it("highlights stationary endpoints at the moving wall interior and commits every highlighted connection", () => {
+        const targets = [0.35, 0.55].map((x, i) => ({ ...wall, id: `target${i}`, x1: x, y1: 0.6, x2: x, y2: 0.9 }));
+        const { svg, at, move, end, commit } = setup([wall, ...targets]);
+        fireEvent.pointerDown(svg, at(0.4, 0.3));
+        move(0.4, 0.59);
+        const markers = () => svg.querySelectorAll('[data-wall-snap-target]');
+        expect(markers()).toHaveLength(2);
+        for (const marker of markers()) {
+            expect(marker.tagName).toBe("circle");
+            expect(marker).toHaveAttribute("cy", "0.6");
+            expect(marker).toHaveAttribute("fill", "none");
+            expect(marker.parentElement?.querySelector('circle[stroke="#f59e0b"]')).toHaveAttribute("fill", "#fff");
+            expect(marker).toHaveAttribute("stroke", "#22c55e");
+        }
+        move(0.4, 0.55);
+        expect(markers()).toHaveLength(0);
+        move(0.4, 0.59);
+        end(0.4, 0.59);
+        expect(commit).toHaveBeenCalledOnce();
+        const updated = commit.mock.calls[0][0];
+        expect(updated[0].y1).toBe(0.6);
+        expect(updated[0].y2).toBe(0.6);
+        expect(updated[0].x1).toBeCloseTo(wall.x1, 12);
+        expect(updated[0].x2).toBeCloseTo(wall.x2, 12);
+        expect(updated[1]).toBe(targets[0]);
+        expect(updated[2]).toBe(targets[1]);
+        expect(markers()).toHaveLength(0);
     });
 
     it("snaps to a segment without coupling future host edits", () => {
@@ -211,7 +452,7 @@ describe("wall selection", () => {
 describe("opening placement", () => {
     it("adds a door from two points on one wall with its shared wall attachment", () => {
         const onDoorAdd = vi.fn();
-        const { container, getByText } = render(<WallReview rooms={[]} walls={[wall]} unit="m" imageUrl="plan.png"
+        const { container, getByText } = render(<WallReview calibrationStatus="calibrated" rooms={[]} walls={[wall]} unit="m" imageUrl="plan.png"
             scale={1} planWidth={10} planHeight={10} onScaleChange={vi.fn()} onRoomUpdate={vi.fn()} onGenerate={vi.fn()} onDoorAdd={onDoorAdd} />);
         const svg = container.querySelector('svg[viewBox="0 0 100 100"]') as SVGSVGElement;
         vi.spyOn(svg, "getBoundingClientRect").mockReturnValue({ left: 0, top: 0, width: 1000, height: 500 } as DOMRect);
@@ -240,7 +481,7 @@ describe("opening placement", () => {
 
     it("cancels an opening preview with Escape without creating an opening", () => {
         const onWindowAdd = vi.fn();
-        const { container, getByText } = render(<WallReview rooms={[]} walls={[wall]} unit="m" imageUrl="plan.png"
+        const { container, getByText } = render(<WallReview calibrationStatus="calibrated" rooms={[]} walls={[wall]} unit="m" imageUrl="plan.png"
             scale={1} planWidth={10} planHeight={10} onScaleChange={vi.fn()} onRoomUpdate={vi.fn()} onGenerate={vi.fn()} onWindowAdd={onWindowAdd} />);
         const svg = container.querySelector('svg[viewBox="0 0 100 100"]') as SVGSVGElement;
         vi.spyOn(svg, "getBoundingClientRect").mockReturnValue({ left: 0, top: 0, width: 1000, height: 500 } as DOMRect);
@@ -258,7 +499,7 @@ describe("opening placement", () => {
 
     it("keeps the original wall draft when the second point is on another wall", () => {
         const onDoorAdd = vi.fn();
-        const { container, getByText } = render(<WallReview rooms={[]} walls={[wall, neighbor]} unit="m" imageUrl="plan.png"
+        const { container, getByText } = render(<WallReview calibrationStatus="calibrated" rooms={[]} walls={[wall, neighbor]} unit="m" imageUrl="plan.png"
             scale={1} planWidth={10} planHeight={10} onScaleChange={vi.fn()} onRoomUpdate={vi.fn()} onGenerate={vi.fn()} onDoorAdd={onDoorAdd} />);
         const svg = container.querySelector('svg[viewBox="0 0 100 100"]') as SVGSVGElement;
         vi.spyOn(svg, "getBoundingClientRect").mockReturnValue({ left: 0, top: 0, width: 1000, height: 500 } as DOMRect);
@@ -300,7 +541,7 @@ describe("opening dimensions", () => {
     };
 
     const renderOpeningInspector = (scale: number, planWidth: number) => render(
-        <WallReview
+        <WallReview calibrationStatus="calibrated"
             rooms={[reviewRoom]}
             walls={[wall]}
             doors={[attachedDoor]}
@@ -337,7 +578,7 @@ describe("opening dimensions", () => {
         expect(view.getByText("1.00 m")).toBeInTheDocument();
 
         view.rerender(
-            <WallReview
+            <WallReview calibrationStatus="calibrated"
                 rooms={[reviewRoom]}
                 walls={[wall]}
                 doors={[attachedDoor]}
@@ -360,7 +601,7 @@ describe("opening dimensions", () => {
 
     it("uses the same calibrated wall span for a selected window", () => {
         const view = render(
-            <WallReview rooms={[reviewRoom]} walls={[wall]} windows={[attachedWindow]} unit="m" imageUrl="plan.png"
+            <WallReview calibrationStatus="calibrated" rooms={[reviewRoom]} walls={[wall]} windows={[attachedWindow]} unit="m" imageUrl="plan.png"
                 scale={1} planWidth={10} planHeight={10} onScaleChange={vi.fn()} onRoomUpdate={vi.fn()} onGenerate={vi.fn()} />,
         );
         const svg = view.container.querySelector('svg[viewBox="0 0 100 100"]') as SVGSVGElement;
@@ -381,7 +622,7 @@ describe("opening dimensions", () => {
         expect(view.getByText("Calibrate scale to view dimensions")).toBeInTheDocument();
 
         view.rerender(
-            <WallReview
+            <WallReview calibrationStatus="calibrated"
                 rooms={[reviewRoom]}
                 walls={[wall]}
                 doors={[attachedDoor]}
@@ -398,5 +639,49 @@ describe("opening dimensions", () => {
         expect(view.getByDisplayValue("8.00")).toBeInTheDocument();
         const refreshedWallRow = view.getAllByText("Wall 1").find(element => element.closest("button"));
         expect(refreshedWallRow?.closest("button")).toHaveTextContent("8.00 m");
+    });
+});
+
+
+describe("drawing walls from existing endpoints", () => {
+    it.each([false, true])("highlights endpoints like calibration and keeps free end placement available (%s)", freeEnd => {
+        const width = vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockReturnValue(1032);
+        const height = vi.spyOn(HTMLElement.prototype, "clientHeight", "get").mockReturnValue(532);
+        try {
+            const onWallAdd = vi.fn();
+            const target = { ...wall, id: "target", x1: 0.8, y1: 0.6, x2: 0.9, y2: 0.6 };
+            const { container, getByText, getByAltText } = render(<WallReview rooms={[]} walls={[wall, target]} unit="m" imageUrl="plan.png"
+                scale={1} onScaleChange={vi.fn()} onRoomUpdate={vi.fn()} onGenerate={vi.fn()} onWallAdd={onWallAdd} />);
+            const image = getByAltText("Floor plan");
+            Object.defineProperties(image, { naturalWidth: { value: 1000 }, naturalHeight: { value: 500 } });
+            fireEvent.load(image);
+            fireEvent.click(getByText("Add Element"));
+            fireEvent.click(getByText("Wall"));
+            const overlay = container.querySelector('div.absolute.inset-0.z-20')!;
+            vi.spyOn(overlay, "getBoundingClientRect").mockReturnValue({ left: -100, top: 80, width: 1000, height: 500 } as DOMRect);
+            const at = (x: number, y: number) => ({ clientX: -100 + x * 1000, clientY: 80 + y * 500 });
+            const marker = () => container.querySelector('[data-wall-draw-snap-endpoint]');
+            fireEvent.pointerMove(overlay, at(0.206, 0.308));
+            expect(marker()).toHaveAttribute("cx", "0.2");
+            expect(marker()).toHaveAttribute("cy", "0.3");
+            expect(marker()).toHaveAttribute("fill", "#fff");
+            expect(marker()).toHaveAttribute("stroke", "#22c55e");
+            expect(onWallAdd).not.toHaveBeenCalled();
+            fireEvent.pointerMove(overlay, at(0.23, 0.3));
+            expect(marker()).toBeNull();
+            fireEvent.pointerMove(overlay, at(0.206, 0.308));
+            fireEvent.pointerLeave(overlay);
+            expect(marker()).toBeNull();
+            fireEvent.pointerDown(overlay, at(0.206, 0.308));
+            const end = freeEnd ? { x: 0.85, y: 0.7 } : { x: 0.806, y: 0.608 };
+            fireEvent.pointerMove(overlay, at(end.x, end.y));
+            if (freeEnd) expect(marker()).toBeNull();
+            else expect(marker()).toHaveAttribute("cx", "0.8");
+            fireEvent.pointerDown(overlay, at(end.x, end.y));
+            expect(onWallAdd).toHaveBeenCalledOnce();
+            expect(onWallAdd.mock.calls[0][0]).toMatchObject({ x1: 0.2, y1: 0.3,
+                x2: freeEnd ? end.x : 0.8, y2: freeEnd ? end.y : 0.6 });
+            expect(marker()).toBeNull();
+        } finally { width.mockRestore(); height.mockRestore(); }
     });
 });

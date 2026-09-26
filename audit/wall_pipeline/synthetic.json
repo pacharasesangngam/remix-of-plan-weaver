@@ -1,0 +1,701 @@
+[
+  {
+    "name": "weld_self_candidate",
+    "fixture_truth": "Two endpoints 8.97 px apart intended to meet; own values are in snap pools.",
+    "before": [
+      [
+        {
+          "x1": 0.1,
+          "x2": 0.49,
+          "y": 0.3
+        }
+      ],
+      [
+        {
+          "x": 0.5,
+          "y1": 0.31,
+          "y2": 0.7
+        }
+      ]
+    ],
+    "after": [
+      [
+        {
+          "x1": 0.1,
+          "x2": 0.49,
+          "y": 0.3
+        }
+      ],
+      [
+        {
+          "x": 0.5,
+          "y1": 0.31,
+          "y2": 0.7
+        }
+      ]
+    ],
+    "metrics_before": {
+      "walls": 2,
+      "sum_span_px": 486.71999999999997,
+      "union_span_px": 486.71999999999997,
+      "components": 2,
+      "dangling_count": 4,
+      "junction_count": 0,
+      "cells": 0,
+      "closed_area_px2": 0,
+      "dangling": [
+        [
+          51.2,
+          220.8
+        ],
+        [
+          250.88,
+          220.8
+        ],
+        [
+          256.0,
+          228.16
+        ],
+        [
+          256.0,
+          515.2
+        ]
+      ],
+      "junctions": [],
+      "cell_areas_px2": [],
+      "room_mask_best_cell_iou": [],
+      "openings": []
+    },
+    "metrics_after": {
+      "walls": 2,
+      "sum_span_px": 486.71999999999997,
+      "union_span_px": 486.71999999999997,
+      "components": 2,
+      "dangling_count": 4,
+      "junction_count": 0,
+      "cells": 0,
+      "closed_area_px2": 0,
+      "dangling": [
+        [
+          51.2,
+          220.8
+        ],
+        [
+          250.88,
+          220.8
+        ],
+        [
+          256.0,
+          228.16
+        ],
+        [
+          256.0,
+          515.2
+        ]
+      ],
+      "junctions": [],
+      "cell_areas_px2": [],
+      "room_mask_best_cell_iou": [],
+      "openings": []
+    },
+    "change": {
+      "exact_segments_removed_or_changed": 0,
+      "exact_segments_added_or_changed": 0,
+      "merge_candidates": {},
+      "split_candidates": {},
+      "unmatched_before": [],
+      "unmatched_after": [],
+      "matched_endpoint_changes": [],
+      "max_matched_endpoint_displacement_px": 0,
+      "added_coverage_outside_1px_px": 0.0,
+      "removed_coverage_outside_1px_px": 0.0,
+      "hausdorff_px": 0.0,
+      "added_parts": []
+    }
+  },
+  {
+    "name": "parallel_merge",
+    "fixture_truth": "Two distinct parallel segments separated by 5.888 px; not duplicates and must remain separate.",
+    "before": [
+      [
+        {
+          "x1": 0.1,
+          "x2": 0.4,
+          "y": 0.301
+        },
+        {
+          "x1": 0.3,
+          "x2": 0.6,
+          "y": 0.309
+        }
+      ],
+      []
+    ],
+    "after": [
+      [
+        {
+          "x1": 0.1,
+          "x2": 0.6,
+          "y": 0.301,
+          "t": 0.012,
+          "conf": 0
+        }
+      ],
+      []
+    ],
+    "metrics_before": {
+      "walls": 2,
+      "sum_span_px": 307.20000000000005,
+      "union_span_px": 307.20000000000005,
+      "components": 2,
+      "dangling_count": 4,
+      "junction_count": 0,
+      "cells": 0,
+      "closed_area_px2": 0,
+      "dangling": [
+        [
+          51.2,
+          221.536
+        ],
+        [
+          204.8,
+          221.536
+        ],
+        [
+          153.6,
+          227.424
+        ],
+        [
+          307.2,
+          227.424
+        ]
+      ],
+      "junctions": [],
+      "cell_areas_px2": [],
+      "room_mask_best_cell_iou": [],
+      "openings": []
+    },
+    "metrics_after": {
+      "walls": 1,
+      "sum_span_px": 256.0,
+      "union_span_px": 256.0,
+      "components": 1,
+      "dangling_count": 2,
+      "junction_count": 0,
+      "cells": 0,
+      "closed_area_px2": 0,
+      "dangling": [
+        [
+          51.2,
+          221.536
+        ],
+        [
+          307.2,
+          221.536
+        ]
+      ],
+      "junctions": [],
+      "cell_areas_px2": [],
+      "room_mask_best_cell_iou": [],
+      "openings": []
+    },
+    "change": {
+      "exact_segments_removed_or_changed": 2,
+      "exact_segments_added_or_changed": 1,
+      "merge_candidates": {},
+      "split_candidates": {},
+      "unmatched_before": [
+        "h1"
+      ],
+      "unmatched_after": [],
+      "matched_endpoint_changes": [
+        {
+          "before": "h0",
+          "after": "h0",
+          "p_displacement_px": 0.0,
+          "q_displacement_px": 102.39999999999998,
+          "span_delta_px": 102.39999999999998
+        }
+      ],
+      "max_matched_endpoint_displacement_px": 102.39999999999998,
+      "added_coverage_outside_1px_px": 101.39999999999998,
+      "removed_coverage_outside_1px_px": 153.6,
+      "hausdorff_px": 5.888000000000005,
+      "added_parts": [
+        {
+          "coords_px": [
+            [
+              205.8,
+              221.536
+            ],
+            [
+              307.2,
+              221.536
+            ]
+          ],
+          "length_px": 101.39999999999998,
+          "dark_support_fraction_3x3": 0.0
+        }
+      ]
+    }
+  },
+  {
+    "name": "true_collinear_overlap",
+    "fixture_truth": "Overlapping segments on exactly the same axis; union should be preserved and duplication removed.",
+    "before": [
+      [
+        {
+          "x1": 0.1,
+          "x2": 0.4,
+          "y": 0.3
+        },
+        {
+          "x1": 0.3,
+          "x2": 0.6,
+          "y": 0.3
+        }
+      ],
+      []
+    ],
+    "after": [
+      [
+        {
+          "x1": 0.1,
+          "x2": 0.6,
+          "y": 0.3,
+          "t": 0.012,
+          "conf": 0
+        }
+      ],
+      []
+    ],
+    "metrics_before": {
+      "walls": 2,
+      "sum_span_px": 307.20000000000005,
+      "union_span_px": 256.0,
+      "components": 1,
+      "dangling_count": 2,
+      "junction_count": 0,
+      "cells": 0,
+      "closed_area_px2": 0,
+      "dangling": [
+        [
+          51.2,
+          220.8
+        ],
+        [
+          307.2,
+          220.8
+        ]
+      ],
+      "junctions": [],
+      "cell_areas_px2": [],
+      "room_mask_best_cell_iou": [],
+      "openings": []
+    },
+    "metrics_after": {
+      "walls": 1,
+      "sum_span_px": 256.0,
+      "union_span_px": 256.0,
+      "components": 1,
+      "dangling_count": 2,
+      "junction_count": 0,
+      "cells": 0,
+      "closed_area_px2": 0,
+      "dangling": [
+        [
+          51.2,
+          220.8
+        ],
+        [
+          307.2,
+          220.8
+        ]
+      ],
+      "junctions": [],
+      "cell_areas_px2": [],
+      "room_mask_best_cell_iou": [],
+      "openings": []
+    },
+    "change": {
+      "exact_segments_removed_or_changed": 2,
+      "exact_segments_added_or_changed": 1,
+      "merge_candidates": {
+        "h0": [
+          "h0",
+          "h1"
+        ]
+      },
+      "split_candidates": {},
+      "unmatched_before": [],
+      "unmatched_after": [],
+      "matched_endpoint_changes": [
+        {
+          "before": "h0",
+          "after": "h0",
+          "p_displacement_px": 0.0,
+          "q_displacement_px": 102.39999999999998,
+          "span_delta_px": 102.39999999999998
+        }
+      ],
+      "max_matched_endpoint_displacement_px": 102.39999999999998,
+      "added_coverage_outside_1px_px": 0.0,
+      "removed_coverage_outside_1px_px": 0.0,
+      "hausdorff_px": 0.0,
+      "added_parts": []
+    }
+  },
+  {
+    "name": "short_valid_wall_removed",
+    "fixture_truth": "Explicit valid 4.096 px wall; merge function's MIN_SEG/2 filter drops it even without a merge partner.",
+    "before": [
+      [
+        {
+          "x1": 0.1,
+          "x2": 0.108,
+          "y": 0.3
+        }
+      ],
+      []
+    ],
+    "after": [
+      [],
+      []
+    ],
+    "metrics_before": {
+      "walls": 1,
+      "sum_span_px": 4.0959999999999965,
+      "union_span_px": 4.0959999999999965,
+      "components": 1,
+      "dangling_count": 2,
+      "junction_count": 0,
+      "cells": 0,
+      "closed_area_px2": 0,
+      "dangling": [
+        [
+          51.2,
+          220.8
+        ],
+        [
+          55.296,
+          220.8
+        ]
+      ],
+      "junctions": [],
+      "cell_areas_px2": [],
+      "room_mask_best_cell_iou": [],
+      "openings": []
+    },
+    "metrics_after": {
+      "walls": 0,
+      "sum_span_px": 0,
+      "union_span_px": 0.0,
+      "components": 0,
+      "dangling_count": 0,
+      "junction_count": 0,
+      "cells": 0,
+      "closed_area_px2": 0,
+      "dangling": [],
+      "junctions": [],
+      "cell_areas_px2": [],
+      "room_mask_best_cell_iou": [],
+      "openings": []
+    },
+    "change": {
+      "exact_segments_removed_or_changed": 1,
+      "exact_segments_added_or_changed": 0,
+      "merge_candidates": {},
+      "split_candidates": {},
+      "unmatched_before": [
+        "h0"
+      ],
+      "unmatched_after": [],
+      "matched_endpoint_changes": [],
+      "max_matched_endpoint_displacement_px": 0,
+      "added_coverage_outside_1px_px": 0.0,
+      "removed_coverage_outside_1px_px": 4.0959999999999965,
+      "hausdorff_px": null,
+      "added_parts": []
+    }
+  },
+  {
+    "name": "blank_corner_false_connection",
+    "fixture_truth": "Explicitly separate objects on blank evidence image; joining them is false in this fixture.",
+    "before": [
+      [
+        {
+          "x1": 0.1,
+          "x2": 0.49,
+          "y": 0.3
+        }
+      ],
+      [
+        {
+          "x": 0.5,
+          "y1": 0.31,
+          "y2": 0.7
+        }
+      ]
+    ],
+    "after": [
+      [
+        {
+          "x1": 0.1,
+          "x2": 0.5,
+          "y": 0.3
+        }
+      ],
+      [
+        {
+          "x": 0.5,
+          "y1": 0.3,
+          "y2": 0.7
+        }
+      ]
+    ],
+    "metrics_before": {
+      "walls": 2,
+      "sum_span_px": 486.71999999999997,
+      "union_span_px": 486.71999999999997,
+      "components": 2,
+      "dangling_count": 4,
+      "junction_count": 0,
+      "cells": 0,
+      "closed_area_px2": 0,
+      "dangling": [
+        [
+          51.2,
+          220.8
+        ],
+        [
+          250.88,
+          220.8
+        ],
+        [
+          256.0,
+          228.16
+        ],
+        [
+          256.0,
+          515.2
+        ]
+      ],
+      "junctions": [],
+      "cell_areas_px2": [],
+      "room_mask_best_cell_iou": [],
+      "openings": []
+    },
+    "metrics_after": {
+      "walls": 2,
+      "sum_span_px": 499.2,
+      "union_span_px": 499.2,
+      "components": 1,
+      "dangling_count": 2,
+      "junction_count": 0,
+      "cells": 0,
+      "closed_area_px2": 0,
+      "dangling": [
+        [
+          51.2,
+          220.8
+        ],
+        [
+          256.0,
+          515.2
+        ]
+      ],
+      "junctions": [],
+      "cell_areas_px2": [],
+      "room_mask_best_cell_iou": [],
+      "openings": []
+    },
+    "change": {
+      "exact_segments_removed_or_changed": 2,
+      "exact_segments_added_or_changed": 2,
+      "merge_candidates": {},
+      "split_candidates": {},
+      "unmatched_before": [],
+      "unmatched_after": [],
+      "matched_endpoint_changes": [
+        {
+          "before": "h0",
+          "after": "h0",
+          "p_displacement_px": 0.0,
+          "q_displacement_px": 5.1200000000000045,
+          "span_delta_px": 5.1200000000000045
+        },
+        {
+          "before": "v0",
+          "after": "v0",
+          "p_displacement_px": 7.360000000000014,
+          "q_displacement_px": 0.0,
+          "span_delta_px": 7.360000000000014
+        }
+      ],
+      "max_matched_endpoint_displacement_px": 7.360000000000014,
+      "added_coverage_outside_1px_px": 10.480000000000018,
+      "removed_coverage_outside_1px_px": 0.0,
+      "hausdorff_px": 5.364067796610186,
+      "added_parts": [
+        {
+          "coords_px": [
+            [
+              251.88,
+              220.79999999999998
+            ],
+            [
+              256.0,
+              220.79999999999998
+            ]
+          ],
+          "length_px": 4.1200000000000045,
+          "dark_support_fraction_3x3": 0.0
+        },
+        {
+          "coords_px": [
+            [
+              256.0,
+              220.79999999999998
+            ],
+            [
+              256.0,
+              227.16
+            ]
+          ],
+          "length_px": 6.360000000000014,
+          "dark_support_fraction_3x3": 0.0
+        }
+      ]
+    }
+  },
+  {
+    "name": "small_vertical_opening",
+    "fixture_truth": "Intentional 14.72 px opening between separate segments. Function receives neither image nor opening metadata.",
+    "before": [
+      [],
+      [
+        {
+          "x": 0.4,
+          "y1": 0.1,
+          "y2": 0.4
+        },
+        {
+          "x": 0.4,
+          "y1": 0.42,
+          "y2": 0.7
+        }
+      ]
+    ],
+    "after": [
+      [],
+      [
+        {
+          "x": 0.4,
+          "y1": 0.1,
+          "y2": 0.4
+        },
+        {
+          "x": 0.4,
+          "y1": 0.42,
+          "y2": 0.7
+        },
+        {
+          "x": 0.4,
+          "y1": 0.4,
+          "y2": 0.42,
+          "t": 0.012,
+          "conf": 0.5,
+          "is_structural": true,
+          "source": "gap_bridge"
+        }
+      ]
+    ],
+    "metrics_before": {
+      "walls": 2,
+      "sum_span_px": 426.87999999999994,
+      "union_span_px": 426.87999999999994,
+      "components": 2,
+      "dangling_count": 4,
+      "junction_count": 0,
+      "cells": 0,
+      "closed_area_px2": 0,
+      "dangling": [
+        [
+          204.8,
+          73.6
+        ],
+        [
+          204.8,
+          294.4
+        ],
+        [
+          204.8,
+          309.12
+        ],
+        [
+          204.8,
+          515.2
+        ]
+      ],
+      "junctions": [],
+      "cell_areas_px2": [],
+      "room_mask_best_cell_iou": [],
+      "openings": []
+    },
+    "metrics_after": {
+      "walls": 3,
+      "sum_span_px": 441.5999999999999,
+      "union_span_px": 441.5999999999999,
+      "components": 1,
+      "dangling_count": 2,
+      "junction_count": 0,
+      "cells": 0,
+      "closed_area_px2": 0,
+      "dangling": [
+        [
+          204.8,
+          73.6
+        ],
+        [
+          204.8,
+          515.2
+        ]
+      ],
+      "junctions": [],
+      "cell_areas_px2": [],
+      "room_mask_best_cell_iou": [],
+      "openings": []
+    },
+    "change": {
+      "exact_segments_removed_or_changed": 0,
+      "exact_segments_added_or_changed": 1,
+      "merge_candidates": {},
+      "split_candidates": {},
+      "unmatched_before": [],
+      "unmatched_after": [
+        "v2"
+      ],
+      "matched_endpoint_changes": [],
+      "max_matched_endpoint_displacement_px": 0,
+      "added_coverage_outside_1px_px": 12.71999999999997,
+      "removed_coverage_outside_1px_px": 0.0,
+      "hausdorff_px": 6.869333333333316,
+      "added_parts": [
+        {
+          "coords_px": [
+            [
+              204.8,
+              295.40000000000003
+            ],
+            [
+              204.8,
+              308.12
+            ]
+          ],
+          "length_px": 12.71999999999997,
+          "dark_support_fraction_3x3": 0.0
+        }
+      ]
+    }
+  }
+]
