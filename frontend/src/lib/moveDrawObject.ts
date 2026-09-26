@@ -1,12 +1,14 @@
 import type { ProjectState } from "./projectHistory";
 import type { NormalizedPoint } from "@/types/floorplan";
+import { fitFurniture } from "@/types/furniture";
 
-export type DrawSelection = { type: "room" | "wall" | "door" | "window"; id: string };
+export type DrawSelection = { type: "room" | "wall" | "door" | "window" | "furniture"; id: string };
 
 /** Move from an immutable drag-start snapshot; openings remain attached to their wall. */
 export function moveDrawObject(project: ProjectState, selection: DrawSelection, delta: NormalizedPoint): ProjectState {
   if (![delta.x, delta.y].every(Number.isFinite)) return project;
   let dx = delta.x, dy = delta.y;
+  if (selection.type === "furniture") return { ...project, furniture: project.furniture?.map(f => f.id === selection.id ? fitFurniture({ ...f, x: f.x + dx, y: f.y + dy, roomId: undefined }, project.planW, project.planH) : f) };
   if (selection.type === "door" || selection.type === "window") {
     const opening = (selection.type === "door" ? project.doors : project.windows).find(o => o.id === selection.id);
     const wall = project.walls.find(w => w.id === opening?.wallId);
@@ -38,6 +40,7 @@ export function moveDrawObject(project: ProjectState, selection: DrawSelection, 
   const ids = new Set(movedWalls.map(w => w.id));
   const translateOpening = <T extends ProjectState["doors"][number]>(o: T): T => ids.has(o.wallId ?? "") ? { ...o, bbox: { ...o.bbox, x: o.bbox.x + dx, y: o.bbox.y + dy }, ...(o.polygon ? { polygon: o.polygon.map(translate) } : {}) } : o;
   return { ...project,
+    furniture: project.furniture?.map(f => f.roomId === room?.id && room ? { ...f, x: f.x + dx, y: f.y + dy } : f),
     rooms: project.rooms.map(r => r.id !== room?.id ? r : { ...r, ...(r.bbox ? { bbox: { ...r.bbox, x: r.bbox.x + dx, y: r.bbox.y + dy } } : {}),
       ...(r.polygon ? { polygon: r.polygon.map(translate) } : {}), ...(r.wallPolygon ? { wallPolygon: r.wallPolygon.map(translate) } : {}), ...(r.center ? { center: translate(r.center) } : {}) }),
     walls: project.walls.map(w => ids.has(w.id) ? { ...w, x1: w.x1 + dx, y1: w.y1 + dy, x2: w.x2 + dx, y2: w.y2 + dy } : w),

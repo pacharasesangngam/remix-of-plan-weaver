@@ -8,6 +8,8 @@ import type { BBox, NormalizedPoint, Room } from "@/types/floorplan";
 import type { DetectedWallSegment, DetectedDoor, DetectedWindow } from "@/types/detection";
 import { buildWallSolidGeometries } from "@/lib/wallSolidGeometry";
 import WallMeshHighlight from "./WallMeshHighlight";
+import { FurnitureMeshes } from "./FurnitureVisual";
+import type { FurnitureItem } from "@/types/furniture";
 import MaterialSwatches from "./MaterialSwatches";
 import { targetPreviewShowsOutline } from "./wallHighlightState";
 import { exportFloorPlanGlb } from "@/lib/blenderExport";
@@ -31,6 +33,7 @@ import { advanceOpeningDraft, cancelOpeningDraft, isValidOpeningTarget, openingP
 import { capturesThreeTargetPointer, nextThreeSelection, nextThreeToolAfterCreation, type ThreeToolMode } from "@/lib/threeInteraction";
 
 interface RightPanelProps {
+  furniture?: FurnitureItem[];
   rooms: Room[];
   generated: boolean;
   walls?: DetectedWallSegment[];
@@ -2140,6 +2143,7 @@ function Scene({
 // ── Main component ────────────────────────────────────────────────────────────
 
 const RightPanel = ({
+  furniture = [],
   rooms,
   generated,
   walls = [],
@@ -2519,6 +2523,7 @@ const RightPanel = ({
 
   const handleExportGlb = async () => {
     await exportFloorPlanGlb({
+      furniture,
       rooms,
       walls,
       doors,
@@ -2628,6 +2633,7 @@ const RightPanel = ({
             style={{ width: "100%", height: "100%", cursor: buildMode === "wall" || hasValidOpeningTarget ? "cell" : "default" }}
             onPointerMissed={clearSelect}
           >
+              <FurnitureMeshes items={furniture} planW={pw} planH={ph} />
               <Scene
                 rooms={rooms}
                 walls={walls}

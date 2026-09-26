@@ -1,4 +1,6 @@
 import * as THREE from "three";
+import { createFurnitureGroup } from "./furnitureGeometry";
+import type { FurnitureItem } from "@/types/furniture";
 import { buildWallSolidGeometries } from "@/lib/wallSolidGeometry";
 import { GLTFExporter } from "three/examples/jsm/exporters/GLTFExporter.js";
 import type { BBox, NormalizedPoint, Room } from "@/types/floorplan";
@@ -11,6 +13,7 @@ import { getWallThicknessM } from "@/lib/wallMetrics";
 const PLAN_SIZE = 20;
 
 interface ExportFloorPlanGlbOptions {
+  furniture?: FurnitureItem[];
   rooms: Room[];
   walls: DetectedWallSegment[];
   doors: DetectedDoor[];
@@ -555,6 +558,7 @@ const exportSceneToGlb = (scene: THREE.Scene): Promise<ArrayBuffer> =>
   });
 
 export const exportFloorPlanGlb = async ({
+  furniture = [],
   rooms,
   walls,
   doors,
@@ -583,6 +587,7 @@ export const exportFloorPlanGlb = async ({
   const exportWalls = walls;
 
   addFloorMeshes(scene, rooms, pw, ph);
+  furniture.forEach(item => scene.add(createFurnitureGroup(item, pw, ph)));
   addWallMeshes(scene, exportWalls, doors, windows, defaultWallHeight, pw, ph);
   addDoorMeshes(scene, doors, exportWalls, defaultWallHeight, pw, ph);
   addWindowMeshes(scene, windows, exportWalls, defaultWallHeight, pw, ph);

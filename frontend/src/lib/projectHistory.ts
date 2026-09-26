@@ -1,7 +1,9 @@
 import type { Room, DimensionUnit } from "@/types/floorplan";
+import type { FurnitureItem } from "@/types/furniture";
 import type { DetectedWallSegment, DetectedDoor, DetectedWindow } from "@/types/detection";
 
 export interface ProjectState {
+    furniture?: FurnitureItem[];
     rooms: Room[]; walls: DetectedWallSegment[]; doors: DetectedDoor[]; windows: DetectedWindow[];
     scale: number; planW: number; planH: number; screenPpm: number; unit: DimensionUnit; wallHeightMeter: number;
 }

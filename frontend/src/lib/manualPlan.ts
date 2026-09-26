@@ -10,6 +10,7 @@ export function expandDrawingSheet(project: ProjectState): ProjectState {
   const point = (p: NormalizedPoint) => ({ x: p.x / 2, y: p.y / 2 });
   const bbox = (b: NonNullable<Room["bbox"]>) => ({ x: b.x / 2, y: b.y / 2, w: b.w / 2, h: b.h / 2 });
   return { ...project, planW: width, planH: height, scale: project.scale * 2, screenPpm: project.screenPpm / 2,
+    furniture: project.furniture?.map(f => ({ ...f, x: f.x / 2, y: f.y / 2 })),
     rooms: project.rooms.map(r => ({ ...r, width: r.width / 2, height: r.height / 2,
       ...(r.bbox ? { bbox: bbox(r.bbox) } : {}), ...(r.center ? { center: point(r.center) } : {}),
       ...(r.polygon ? { polygon: r.polygon.map(point) } : {}), ...(r.wallPolygon ? { wallPolygon: r.wallPolygon.map(point) } : {}) })),
@@ -53,9 +54,10 @@ export function rectangleRoom(a: NormalizedPoint, b: NormalizedPoint, id: string
   return { room, walls };
 }
 
-export function removeDrawObject(project: ProjectState, selection: { type: "room" | "wall" | "door" | "window"; id: string }): ProjectState {
+export function removeDrawObject(project: ProjectState, selection: { type: "room" | "wall" | "door" | "window" | "furniture"; id: string }): ProjectState {
   const removed = new Set(project.walls.filter(w => selection.type === "wall" ? w.id === selection.id : selection.type === "room" && w.id.startsWith(`${selection.id}-wall-`)).map(w => w.id));
   return { ...project, rooms: project.rooms.filter(r => selection.type !== "room" || r.id !== selection.id),
+    furniture: project.furniture?.filter(f => selection.type !== "furniture" || f.id !== selection.id).map(f => selection.type === "room" && f.roomId === selection.id ? { ...f, roomId: undefined } : f),
     walls: project.walls.filter(w => !removed.has(w.id)),
     doors: project.doors.filter(d => !(selection.type === "door" && d.id === selection.id) && !removed.has(d.wallId ?? "")),
     windows: project.windows.filter(w => !(selection.type === "window" && w.id === selection.id) && !removed.has(w.wallId ?? "")) };

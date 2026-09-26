@@ -218,7 +218,7 @@ const Index = () => {
     setOriginalImageUrl(importedImageUrl);
     setFileType(project.image?.fileType ?? null);
     setImageFile(null);
-    dispatch({ type: "reset", project: { ...emptyProject(), rooms: project.rooms, walls: project.walls,
+    dispatch({ type: "reset", project: { ...emptyProject(), furniture: project.furniture ?? [], rooms: project.rooms, walls: project.walls,
       doors: project.doors, windows: project.windows, unit: project.meta.unit, scale: project.meta.scale,
       planW: project.meta.planWidth, planH: project.meta.planHeight } });
     setDetected(true);
@@ -231,6 +231,7 @@ const Index = () => {
 
   const floorPlanData: FloorPlanData = { meta: { unit, scale }, rooms };
   const projectData = createFloorPlanProject({
+    furniture: editorHistory.present.furniture,
     editorMode: workflow ?? "upload",
     unit,
     scale,
@@ -382,6 +383,7 @@ const Index = () => {
             </div>
           ) : (
             <RightPanel
+              furniture={editorHistory.present.furniture}
               rooms={rooms}
               generated={generated}
               walls={walls}

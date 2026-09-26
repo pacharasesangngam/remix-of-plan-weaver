@@ -18,6 +18,51 @@ function Editor() {
     canUndo={history.past.length > 0} canRedo={history.future.length > 0} /><output data-testid="project">{JSON.stringify(history.present)}</output></>;
 }
 
+it("places, rotates, moves and deletes furniture with undo", () => {
+  render(<Editor />);
+  fireEvent.click(screen.getByRole("button", { name: "เฟอร์นิเจอร์" }));
+  const canvas = screen.getByRole("img", { name: "พื้นที่วาดแปลน 2D" });
+  fireEvent.pointerDown(canvas, { clientX: 200, clientY: 200, button: 0 });
+  const read = () => JSON.parse(screen.getByTestId("project").textContent!);
+  expect(read().furniture[0].kind).toBe("sofa");
+  fireEvent.change(screen.getByLabelText("ความกว้าง (m)"), { target: { value: "2.5" } });
+  fireEvent.click(screen.getByRole("button", { name: "ใช้ขนาดนี้" }));
+  expect(read().furniture[0].width).toBe(2.5);
+  expect(screen.getByLabelText("ความกว้างเฟอร์นิเจอร์ 2.50 เมตร")).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "หมุน 90°" }));
+  expect(read().furniture[0].rotation).toBe(90);
+  fireEvent.pointerDown(screen.getByLabelText("เฟอร์นิเจอร์ โซฟา"), { clientX: 200, clientY: 200, button: 0 });
+  fireEvent.pointerMove(canvas, { clientX: 300, clientY: 300 });
+  fireEvent.pointerUp(canvas, { clientX: 300, clientY: 300, button: 0 });
+  expect(read().furniture[0].x).toBeCloseTo(0.3);
+  fireEvent.click(screen.getByRole("button", { name: "ลบที่เลือก" }));
+  expect(read().furniture).toHaveLength(0);
+  fireEvent.click(screen.getByRole("button", { name: "Undo" }));
+  expect(read().furniture).toHaveLength(1);
+});
+
+it("shows total dimensions and pans without changing geometry or sticking after release", () => {
+  render(<Editor />);
+  const canvas = screen.getByRole("img", { name: "พื้นที่วาดแปลน 2D" });
+  fireEvent.pointerDown(canvas, { clientX: 100, clientY: 100, button: 0 });
+  fireEvent.pointerDown(canvas, { clientX: 300, clientY: 400, button: 0 });
+  expect(screen.getByLabelText("ความกว้างรวม 6.00 เมตร")).toBeInTheDocument();
+  expect(screen.getByLabelText("ความลึกรวม 9.00 เมตร")).toBeInTheDocument();
+  const before = screen.getByTestId("project").textContent;
+  fireEvent.click(screen.getByRole("button", { name: "เลื่อนแปลน" }));
+  fireEvent.pointerDown(canvas, { clientX: 200, clientY: 200, button: 0 });
+  fireEvent.pointerMove(canvas, { clientX: 250, clientY: 280 });
+  expect(canvas.getAttribute("viewBox")).toBe("-50 -80 1000 1000");
+  fireEvent.pointerUp(canvas, { clientX: 250, clientY: 280, button: 0 });
+  fireEvent.pointerMove(canvas, { clientX: 400, clientY: 400 });
+  expect(canvas.getAttribute("viewBox")).toBe("-50 -80 1000 1000");
+  expect(screen.getByTestId("project").textContent).toBe(before);
+  fireEvent.pointerDown(canvas, { clientX: 250, clientY: 280, button: 0 });
+  fireEvent.pointerMove(canvas, { clientX: 200, clientY: 200 });
+  fireEvent.pointerUp(canvas, { clientX: 200, clientY: 200, button: 0 });
+  expect(canvas.getAttribute("viewBox")).toBe("0 0 1000 1000");
+});
+
 it("zooms with the wheel while keeping the pointer's anchor in place", () => {
   render(<Editor />);
   const canvas = screen.getByRole("img", { name: "พื้นที่วาดแปลน 2D" });

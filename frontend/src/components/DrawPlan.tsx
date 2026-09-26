@@ -3,14 +3,19 @@ import { MousePointer2, Pencil, Square, DoorOpen, AppWindow, Hand, RotateCcw, Ro
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import WallDimension from "./WallDimension";
+import PlanDimensions from "./PlanDimensions";
+import { FurnitureSymbol } from "./FurnitureVisual";
+import FurnitureSizeEditor from "./FurnitureSizeEditor";
+import FurnitureClearances from "./FurnitureClearances";
+import { FURNITURE_CATALOG, fitFurniture, type FurnitureKind } from "@/types/furniture";
 import { moveDrawObject } from "@/lib/moveDrawObject";
 import type { ProjectState, ActionInfo } from "@/lib/projectHistory";
 import type { NormalizedPoint } from "@/types/floorplan";
 import { rectangleRoom, polygonRoom, removeDrawObject, expandDrawingSheet } from "@/lib/manualPlan";
 import { createOpeningBboxFromWallPoints } from "@/lib/openingPlacement";
 
-type Tool = "select" | "room" | "wall" | "door" | "window" | "pan";
-type Selection = { type: "room" | "wall" | "door" | "window"; id: string };
+type Tool = "select" | "room" | "wall" | "door" | "window" | "pan" | "furniture";
+type Selection = { type: "room" | "wall" | "door" | "window" | "furniture"; id: string };
 interface Props { project: ProjectState; onEdit: (update: (p: ProjectState) => ProjectState, info: ActionInfo) => void; onGenerate: () => void; onUndo: () => void; onRedo: () => void; canUndo: boolean; canRedo: boolean }
 
 export default function DrawPlan({ project, onEdit, onGenerate, onUndo, onRedo, canUndo, canRedo }: Props) {
@@ -23,17 +28,21 @@ export default function DrawPlan({ project, onEdit, onGenerate, onUndo, onRedo, 
   const [showHelp, setShowHelp] = useState(() => { try { return localStorage.getItem("draw-wall-help-hidden") !== "true"; } catch { return true; } });
   const [cursor, setCursor] = useState<NormalizedPoint | null>(null);
   const [selection, setSelection] = useState<Selection | null>(null);
+  const [furnitureKind, setFurnitureKind] = useState<FurnitureKind>("sofa");
+  const furniture = (movePreview ?? project).furniture ?? [];
+  const selectedFurniture = selection?.type === "furniture" ? furniture.find(f => f.id === selection.id) : undefined;
   const [view, setView] = useState(() => {
     const size = Math.min(1000, 30000 / project.planW);
     return { x: (1000 - size) / 2, y: (1000 - size) / 2, size };
   });
   const [aspect, setAspect] = useState(1);
+  const [viewportHeight, setViewportHeight] = useState(1000);
   const aspectRef = useRef(1);
   const [height, setHeight] = useState("2.8");
   const [openingWidth, setOpeningWidth] = useState("0.9");
   const [message, setMessage] = useState("");
   const svg = useRef<SVGSVGElement>(null);
-  const pan = useRef<{ x: number; y: number; vx: number; vy: number } | null>(null);
+  const pan = useRef<{ x: number; y: number; vx: number; vy: number; scaleX: number; scaleY: number; pointerId: number } | null>(null);
   useEffect(() => {
     const element = svg.current;
     if (!element || typeof ResizeObserver === "undefined") return;
@@ -43,6 +52,7 @@ export default function DrawPlan({ project, onEdit, onGenerate, onUndo, onRedo, 
       const next = width / height, previous = aspectRef.current;
       aspectRef.current = next;
       setAspect(next);
+      setViewportHeight(height);
       setView(v => ({ ...v, x: v.x + v.size * (previous - next) / 2 }));
     });
     observer.observe(element);
@@ -73,7 +83,7 @@ export default function DrawPlan({ project, onEdit, onGenerate, onUndo, onRedo, 
   const selectedWall = selection?.type === "wall" ? walls.find(w => w.id === selection.id) : undefined;
   const switchTool = (next: Tool) => { setTool(next); setStart(null); setPath([]); setMessage(""); setSelection(null); if (next === "door" || next === "window") setOpeningWidth(next === "door" ? "0.9" : "1.2"); };
   useEffect(() => {
-    const cancel = (e: KeyboardEvent) => { if (e.key === "Escape") { drag.current = null; setMovePreview(null); setStart(null); setPath([]); setSelection(null); setMessage(""); } };
+    const cancel = (e: KeyboardEvent) => { if (e.key === "Escape") { pan.current = null; drag.current = null; setMovePreview(null); setStart(null); setPath([]); setSelection(null); setMessage(""); } };
     window.addEventListener("keydown", cancel); return () => window.removeEventListener("keydown", cancel);
   }, []);
   useEffect(() => { setStart(null); setPath([]); drag.current = null; setMovePreview(null); }, [project]);
@@ -117,6 +127,12 @@ export default function DrawPlan({ project, onEdit, onGenerate, onUndo, onRedo, 
     if (tool === "select") { setSelection(null); return; }
     if (tool === "pan") return;
     setMessage("");
+    if (tool === "furniture") {
+      const option = FURNITURE_CATALOG.find(f => f.kind === furnitureKind)!;
+      const item = fitFurniture({ id: crypto.randomUUID(), kind: option.kind, x: p.x, y: p.y, width: option.width, depth: option.depth, height: option.height, rotation: 0, color: option.color }, planW, planH);
+      onEdit(state => ({ ...state, furniture: [...(state.furniture ?? []), item] }), { label: "furniture creation" });
+      setTool("select"); setSelection({ type: "furniture", id: item.id }); return;
+    }
     if (tool === "door" || tool === "window") {
       const width = Number(openingWidth);
       if (!Number.isFinite(width) || width < 0.3 || width > 5) { setMessage("ระบุความกว้างช่องเปิด 0.3–5 เมตร"); return; }
@@ -156,7 +172,7 @@ export default function DrawPlan({ project, onEdit, onGenerate, onUndo, onRedo, 
     }
     setStart(null);
   };
-  const tools = [{ id: "select", label: "เลือก", Icon: MousePointer2 }, { id: "room", label: "วาดห้อง", Icon: Square }, { id: "wall", label: "วาดผนัง", Icon: Pencil }, { id: "door", label: "ประตู", Icon: DoorOpen }, { id: "window", label: "หน้าต่าง", Icon: AppWindow }, { id: "pan", label: "เลื่อนแปลน", Icon: Hand }] as const;
+  const tools = [{ id: "select", label: "เลือก", Icon: MousePointer2 }, { id: "room", label: "วาดห้อง", Icon: Square }, { id: "wall", label: "วาดผนัง", Icon: Pencil }, { id: "door", label: "ประตู", Icon: DoorOpen }, { id: "window", label: "หน้าต่าง", Icon: AppWindow }, { id: "pan", label: "เลื่อนแปลน", Icon: Hand }, { id: "furniture", label: "เฟอร์นิเจอร์", Icon: Box }] as const;
   const preview = start && cursor ? { x: Math.min(start.x, cursor.x), y: Math.min(start.y, cursor.y), w: Math.abs(cursor.x - start.x), h: Math.abs(cursor.y - start.y) } : null;
   const textStyle = { paintOrder: "stroke" as const, stroke: "white", strokeWidth: 3, fill: "#334155" };
   return <div className="flex min-h-0 min-w-0 flex-1 flex-col md:flex-row">
@@ -164,6 +180,16 @@ export default function DrawPlan({ project, onEdit, onGenerate, onUndo, onRedo, 
       <h2 className="text-lg font-semibold">สร้างแปลน</h2><p className="mb-4 mt-1 text-xs text-muted-foreground">ชั้น 1 · หน่วยเมตร · กริด 0.25 m</p>
       <div className="grid grid-cols-3 gap-2 md:grid-cols-2">{tools.map(({ id, label, Icon }) => <button key={id} onClick={() => switchTool(id)} aria-pressed={tool === id} className={`flex flex-col items-center gap-2 rounded-xl border p-3 text-xs transition ${tool === id ? "border-emerald-500 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400" : "hover:bg-accent"}`}><Icon className="h-5 w-5" />{label}</button>)}</div>
       <div className="mt-4 space-y-3">
+        {tool === "furniture" && <section className="space-y-2 rounded-xl border p-3"><h3 className="text-sm font-semibold">เลือกเฟอร์นิเจอร์</h3>
+          {FURNITURE_CATALOG.map(item => <button key={item.kind} aria-pressed={item.kind === furnitureKind} onClick={() => setFurnitureKind(item.kind)} className={`flex w-full items-center gap-3 rounded-lg border p-2 text-left text-sm ${item.kind === furnitureKind ? "border-emerald-500 bg-emerald-500/10" : "hover:bg-accent"}`}><svg viewBox="-25 -25 50 50" className="h-12 w-12 shrink-0" aria-hidden="true"><FurnitureSymbol item={{ ...item, id: "preview", x: 0, y: 0, rotation: 0 }} planW={50} planH={50} /></svg><span>{item.name}<span className="block text-xs text-muted-foreground">{item.width} × {item.depth} m</span></span></button>)}
+          <p className="text-xs text-muted-foreground">คลิกในแปลนเพื่อวาง แล้วลากย้ายได้ โมเดลเป็นรูปทรงตัวอย่าง ไม่ใช่สินค้าจริง</p>
+        </section>}
+        {selectedFurniture && <section className="space-y-3 rounded-xl border p-3"><h3 className="text-sm font-semibold">{FURNITURE_CATALOG.find(f => f.kind === selectedFurniture.kind)?.name}</h3><p className="text-xs text-muted-foreground">{selectedFurniture.width} × {selectedFurniture.depth} × {selectedFurniture.height} m · {selectedFurniture.rotation}°</p>
+          <FurnitureSizeEditor item={selectedFurniture} planW={planW} planH={planH} onApply={size => onEdit(state => ({ ...state, furniture: state.furniture?.map(f => f.id === selectedFurniture.id ? fitFurniture({ ...f, ...size }, planW, planH) : f) }), { label: "furniture dimensions" })} />
+          <p className="text-xs leading-5 text-muted-foreground">เส้นเขียววัดจากขอบวัตถุถึงผิวผนังตามแนวนอน/ตั้งผ่านกลางวัตถุ ไม่หักช่องประตูหน้าต่าง และไม่แสดงด้านที่ไม่พบผนังหรือทับผนัง</p>
+          <Button variant="outline" className="w-full" onClick={() => onEdit(state => ({ ...state, furniture: state.furniture?.map(f => f.id === selectedFurniture.id ? fitFurniture({ ...f, rotation: (f.rotation + 90) % 360 }, planW, planH) : f) }), { label: "furniture rotation" })}>หมุน 90°</Button>
+          <label className="flex items-center justify-between text-sm">สี<input type="color" aria-label="สีเฟอร์นิเจอร์" value={selectedFurniture.color} onChange={e => onEdit(state => ({ ...state, furniture: state.furniture?.map(f => f.id === selectedFurniture.id ? { ...f, color: e.target.value } : f) }), { label: "furniture color" })} /></label>
+        </section>}
         <div className="space-y-2 rounded-xl border p-3"><p className="text-xs text-muted-foreground">ลูกกลิ้ง: ซูมเข้า–ออกตามตำแหน่งเมาส์ · เครื่องมือมือ: เลื่อนแปลน</p>
           <Button variant="outline" className="w-full" disabled={!!start || !!movePreview || planW >= 1000 || planH >= 1000} onClick={() => { onEdit(expandDrawingSheet, { label: "expand drawing sheet" }); setView(v => ({ x: v.x / 2, y: v.y / 2, size: v.size / 2 })); }}>ขยายพื้นที่วาด 2 เท่า</Button>
           <p className="text-xs text-muted-foreground">ขนาดวัตถุจริงคงเดิม · Undo ได้</p>
@@ -178,7 +204,7 @@ export default function DrawPlan({ project, onEdit, onGenerate, onUndo, onRedo, 
         {tool === "wall" && path.length > 0 && <div className="space-y-2 rounded-xl border border-emerald-500/40 p-3"><p className="text-xs">กำลังร่าง {Math.max(0, path.length - 1)} ช่วง · ปิดห้องหรือกดจบแนวก่อนบันทึกงาน</p><Button variant="outline" className="w-full" disabled={path.length < 2} onClick={finishOpenWalls}>จบแนวผนัง (ไม่สร้างพื้น)</Button><Button variant="ghost" className="w-full" onClick={() => { const next = path.slice(0, -1); setPath(next); setStart(next.at(-1) ?? null); }}>ย้อนจุดล่าสุด</Button></div>}
         {(tool === "room" || tool === "wall") && <label className="grid gap-1 text-sm">ความสูงผนังใหม่ (m)<Input type="number" min="1" max="10" step="0.1" value={height} onChange={e => setHeight(e.target.value)} /></label>}
         {(tool === "door" || tool === "window") && <label className="grid gap-1 text-sm">ความกว้างช่องเปิด (m)<Input type="number" min="0.3" max="5" step="0.1" value={openingWidth} onChange={e => setOpeningWidth(e.target.value)} /></label>}
-        <p className="text-xs leading-5 text-muted-foreground">{tool === "room" ? "คลิกมุมแรก แล้วคลิกมุมตรงข้ามเพื่อสร้างห้องสี่เหลี่ยมพร้อมพื้นและผนัง" : tool === "wall" ? "คลิกต่อแนวผนังทีละมุม แล้วคลิกจุดเริ่มสีเขียวเพื่อปิดห้อง หรือกดจบแนวเพื่อสร้างเฉพาะผนัง" : tool === "pan" ? "ลากพื้นที่วาดเพื่อเลื่อนแปลน" : tool === "select" ? "ลากพื้นห้องเพื่อย้ายทั้งห้อง หรือลากผนังแยกแต่ละชิ้น ประตู/หน้าต่างเลื่อนไปตามผนัง ปล่อยเมาส์เพื่อยืนยัน" : "คลิกบนผนังเพื่อวางช่องเปิด"} กด Esc เพื่อยกเลิก</p>
+        <p className="text-xs leading-5 text-muted-foreground">{tool === "furniture" ? "เลือกชนิดแล้วคลิกวางเฟอร์นิเจอร์ในแปลน" : tool === "room" ? "คลิกมุมแรก แล้วคลิกมุมตรงข้ามเพื่อสร้างห้องสี่เหลี่ยมพร้อมพื้นและผนัง" : tool === "wall" ? "คลิกต่อแนวผนังทีละมุม แล้วคลิกจุดเริ่มสีเขียวเพื่อปิดห้อง หรือกดจบแนวเพื่อสร้างเฉพาะผนัง" : tool === "pan" ? "ลากพื้นที่วาดเพื่อเลื่อนแปลน" : tool === "select" ? "ลากวัตถุเพื่อย้าย ปล่อยเมาส์เพื่อยืนยัน ประตู/หน้าต่างเลื่อนไปตามผนัง" : "คลิกบนผนังเพื่อวางช่องเปิด"} กด Esc เพื่อยกเลิก</p>
         {selection && <div className="space-y-2 rounded-xl border p-3"><p className="break-words text-xs font-semibold">{selectedRoom?.name ?? selectedWall?.id ?? selection.id}</p>
           {selectedRoom && <label className="grid gap-1 text-xs">ชื่อห้อง<Input value={selectedRoom.name} onChange={e => onEdit(p => ({ ...p, rooms: p.rooms.map(r => r.id === selectedRoom.id ? { ...r, name: e.target.value } : r) }), { label: "room name change" })} /></label>}
           {selectedWall && <p className="text-xs">ยาว {Math.hypot((selectedWall.x2 - selectedWall.x1) * planW, (selectedWall.y2 - selectedWall.y1) * planH).toFixed(2)} m</p>}
@@ -187,21 +213,21 @@ export default function DrawPlan({ project, onEdit, onGenerate, onUndo, onRedo, 
       </div>
     </aside>
     <div className="relative min-h-[360px] min-w-0 flex-1 overflow-hidden bg-white">
-      <div className="absolute left-4 right-4 top-4 z-10 flex items-center justify-between gap-2 pointer-events-none"><span className="rounded-full border bg-white/95 px-4 py-2 text-xs text-slate-600">2D · พื้นที่ {planW} × {planH} m</span><Button className="pointer-events-auto rounded-full bg-emerald-600 text-white hover:bg-emerald-700" disabled={!!start || (!walls.length && !rooms.length)} onClick={onGenerate}><Box className="mr-2 h-4 w-4" />ดู 3D</Button></div>
+      <div className="absolute left-4 right-4 top-4 z-10 flex items-center justify-between gap-2 pointer-events-none"><span className="rounded-full border bg-white/95 px-4 py-2 text-xs text-slate-600">2D · พื้นที่ {planW} × {planH} m</span><Button className="pointer-events-auto rounded-full bg-emerald-600 text-white hover:bg-emerald-700" disabled={!!start || (!walls.length && !rooms.length && !furniture.length)} onClick={onGenerate}><Box className="mr-2 h-4 w-4" />ดู 3D</Button></div>
       <svg ref={svg} role="img" aria-label="พื้นที่วาดแปลน 2D"
         className={`h-full min-h-[360px] w-full touch-none ${movePreview ? "cursor-grabbing" : tool === "pan" ? "cursor-grab" : tool === "select" ? "cursor-move" : "cursor-crosshair"}`}
         viewBox={`${view.x} ${view.y} ${view.size * aspect} ${view.size}`}
         preserveAspectRatio="none"
-        onPointerDown={e => { if (e.button !== 0) return; if (tool === "pan") { const matrix = svg.current!.getScreenCTM()!; pan.current = { x: e.clientX / matrix.a, y: e.clientY / matrix.d, vx: view.x, vy: view.y }; e.currentTarget.setPointerCapture(e.pointerId); } else draw(point(e)); }}
-        onPointerMove={e => { if (drag.current) { updateDrag(e); return; } if (pan.current) { const matrix = svg.current!.getScreenCTM()!; setView(v => ({ ...v, x: pan.current!.vx - (e.clientX / matrix.a - pan.current!.x), y: pan.current!.vy - (e.clientY / matrix.d - pan.current!.y) })); } else setCursor(point(e)); }}
-        onPointerUp={e => { finishDrag(e); pan.current = null; }}
+        onPointerDown={e => { if (e.button !== 0) return; if (tool === "pan") { e.preventDefault(); const matrix = svg.current!.getScreenCTM(); if (!matrix || !matrix.a || !matrix.d) return; pan.current = { x: e.clientX, y: e.clientY, vx: view.x, vy: view.y, scaleX: matrix.a, scaleY: matrix.d, pointerId: e.pointerId }; e.currentTarget.setPointerCapture?.(e.pointerId); } else draw(point(e)); }}
+        onPointerMove={e => { if (drag.current) { updateDrag(e); return; } const active = pan.current; if (active) { if (active.pointerId !== e.pointerId) return; const x = active.vx - (e.clientX - active.x) / active.scaleX, y = active.vy - (e.clientY - active.y) / active.scaleY; setView(v => ({ ...v, x, y })); } else setCursor(point(e)); }}
+        onPointerUp={e => { finishDrag(e); if (pan.current?.pointerId === e.pointerId) { pan.current = null; if (e.currentTarget.hasPointerCapture?.(e.pointerId)) e.currentTarget.releasePointerCapture(e.pointerId); } }}
         onPointerCancel={() => { pan.current = null; drag.current = null; setMovePreview(null); }}
         onLostPointerCapture={() => { pan.current = null; drag.current = null; setMovePreview(null); }}>
         <defs><pattern id="draw-small-grid" width={1000 / planW / 4} height={1000 / planH / 4} patternUnits="userSpaceOnUse"><path d={`M ${1000 / planW / 4} 0 H 0 V ${1000 / planH / 4}`} fill="none" stroke="#e8edf1" strokeWidth="0.65" /></pattern><pattern id="draw-grid" width={1000 / planW} height={1000 / planH} patternUnits="userSpaceOnUse"><rect width={1000 / planW} height={1000 / planH} fill="url(#draw-small-grid)" /><path d={`M ${1000 / planW} 0 H 0 V ${1000 / planH}`} fill="none" stroke="#cbd5e1" strokeWidth="0.8" /></pattern></defs>
         <rect x={view.x} y={view.y} width={view.size * aspect} height={view.size} fill="white" />
         <rect x={view.x} y={view.y} width={view.size * aspect} height={view.size} fill="url(#draw-grid)" />
         <rect width="1000" height="1000" fill="none" stroke="#94a3b8" strokeDasharray="4 4" strokeWidth={view.size / 1000} pointerEvents="none" />
-        {rooms.map(room => { const points = room.wallPolygon ?? room.polygon ?? []; const b = room.bbox; return <g key={room.id} onPointerDown={e => choose(e, { type: "room", id: room.id })}><polygon points={points.map(p => `${p.x * 1000},${p.y * 1000}`).join(" ")} fill={room.floorColor ?? "#d9bc91"} fillOpacity={0.55} stroke={selection?.id === room.id ? "#059669" : "none"} strokeWidth={3} />{b && <g pointerEvents="none" fontSize={10} textAnchor="middle"><text x={(b.x + b.w / 2) * 1000} y={(b.y + b.h / 2) * 1000} style={textStyle}>{room.name}</text><text x={(b.x + b.w / 2) * 1000} y={b.y * 1000 - 10} style={textStyle}>{(b.w * planW).toFixed(2)} m</text><text x={(b.x + b.w) * 1000 + 10} y={(b.y + b.h / 2) * 1000} textAnchor="start" style={textStyle}>{(b.h * planH).toFixed(2)} m</text></g>}</g>; })}
+        {rooms.map(room => { const points = room.wallPolygon ?? room.polygon ?? []; const b = room.bbox; return <g key={room.id} onPointerDown={e => choose(e, { type: "room", id: room.id })}><polygon points={points.map(p => `${p.x * 1000},${p.y * 1000}`).join(" ")} fill={room.floorColor ?? "#d9bc91"} fillOpacity={0.55} stroke={selection?.id === room.id ? "#059669" : "none"} strokeWidth={3} />{b && <text pointerEvents="none" fontSize={14 * view.size / viewportHeight} textAnchor="middle" x={(b.x + b.w / 2) * 1000} y={(b.y + b.h / 2) * 1000} style={{ ...textStyle, strokeWidth: 3 * view.size / viewportHeight }}>{room.name}</text>}</g>; })}
         {walls.map(w => <g key={w.id} onPointerDown={e => choose(e, { type: "wall", id: w.id })}><line x1={w.x1 * 1000} y1={w.y1 * 1000} x2={w.x2 * 1000} y2={w.y2 * 1000} stroke="transparent" strokeWidth={12} /><line x1={w.x1 * 1000} y1={w.y1 * 1000} x2={w.x2 * 1000} y2={w.y2 * 1000} stroke={selection?.id === w.id ? "#10b981" : "#64748b"} strokeWidth={(w.thickness ?? 0.15) / planW * 1000} pointerEvents="none" /></g>)}
         {[...doors.map(d => ({ ...d, type: "door" as const })), ...windows.map(w => ({ ...w, type: "window" as const }))].map(o => <rect key={o.id} x={o.bbox.x * 1000} y={o.bbox.y * 1000} width={o.bbox.w * 1000} height={o.bbox.h * 1000} fill={o.type === "door" ? "#fbbf24" : "#7dd3fc"} stroke={selection?.id === o.id ? "#059669" : "#334155"} strokeWidth={1.5} onPointerDown={e => choose(e, { type: o.type, id: o.id })} />)}
         {preview && start && cursor && tool === "room" && <g pointerEvents="none"><rect x={preview.x * 1000} y={preview.y * 1000} width={preview.w * 1000} height={preview.h * 1000} fill="#10b98122" stroke="#059669" strokeDasharray="5 3" /><text x={cursor.x * 1000 + 8} y={cursor.y * 1000 - 10} fontSize={12} style={textStyle}>{`${(preview.w * planW).toFixed(2)} × ${(preview.h * planH).toFixed(2)} m`}</text></g>}
@@ -215,9 +241,19 @@ export default function DrawPlan({ project, onEdit, onGenerate, onUndo, onRedo, 
           <line x1={start.x * 1000} y1={start.y * 1000} x2={cursor.x * 1000} y2={cursor.y * 1000} stroke="#65c98d" strokeWidth={5} />
           <circle cx={start.x * 1000} cy={start.y * 1000} r={4} fill="#4ade80" stroke="#16a34a" />
           <circle cx={cursor.x * 1000} cy={cursor.y * 1000} r={3} fill="#4ade80" stroke="#16a34a" />
-          <WallDimension from={start} to={cursor} planW={planW} planH={planH} uiScale={view.size / 1000} />
+          <WallDimension from={start} to={cursor} planW={planW} planH={planH} uiScale={view.size / viewportHeight} />
           <g transform={`translate(${cursor.x * 1000 + 3} ${cursor.y * 1000 - 15 * view.size / 1000}) scale(${view.size / 1000})`}><Pencil width={16} height={16} color="#334155" fill="white" /></g>
         </g>}
+        {furniture.map(item => <g key={item.id} aria-label={`เฟอร์นิเจอร์ ${FURNITURE_CATALOG.find(f => f.kind === item.kind)?.name}`} transform={`translate(${item.x * 1000} ${item.y * 1000}) rotate(${item.rotation})`} onPointerDown={e => choose(e, { type: "furniture", id: item.id })}>
+          <FurnitureSymbol item={item} planW={planW} planH={planH} />
+          {selection?.id === item.id && <g pointerEvents="none">
+            <WallDimension from={{ x: -item.width / planW / 2, y: -item.depth / planH / 2 }} to={{ x: item.width / planW / 2, y: -item.depth / planH / 2 }} planW={planW} planH={planH} uiScale={view.size / viewportHeight} offsetPixels={18} label="ความกว้างเฟอร์นิเจอร์" />
+            <WallDimension from={{ x: item.width / planW / 2, y: -item.depth / planH / 2 }} to={{ x: item.width / planW / 2, y: item.depth / planH / 2 }} planW={planW} planH={planH} uiScale={view.size / viewportHeight} offsetPixels={-18} label="ความลึกเฟอร์นิเจอร์" />
+          </g>}
+          {selection?.id === item.id && <rect x={-item.width / planW * 500 - 2} y={-item.depth / planH * 500 - 2} width={item.width / planW * 1000 + 4} height={item.depth / planH * 1000 + 4} fill="none" stroke="#10b981" strokeWidth={2 * view.size / viewportHeight} pointerEvents="none" />}
+        </g>)}
+        {selectedFurniture && <FurnitureClearances item={selectedFurniture} walls={walls} planW={planW} planH={planH} uiScale={view.size / viewportHeight} />}
+        <PlanDimensions project={movePreview ?? project} uiScale={view.size / viewportHeight} />
       </svg>
       {message && <p role="status" className="absolute bottom-20 left-4 right-4 rounded-xl border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900">{message}</p>}
       <div className="absolute bottom-4 left-4 flex gap-1 rounded-full border bg-white p-1 text-slate-600 shadow-sm"><Button variant="ghost" size="icon" aria-label="Undo" disabled={!canUndo} onClick={onUndo}><RotateCcw className="h-4 w-4" /></Button><Button variant="ghost" size="icon" aria-label="Redo" disabled={!canRedo} onClick={onRedo}><RotateCw className="h-4 w-4" /></Button><span className="self-center px-3 text-xs">{rooms.length} ห้อง · {walls.length} ผนัง</span></div>

@@ -1,7 +1,9 @@
 import type { DimensionUnit, Room } from "@/types/floorplan";
+import { FURNITURE_CATALOG, type FurnitureItem } from "@/types/furniture";
 import type { DetectedDoor, DetectedWallSegment, DetectedWindow } from "@/types/detection";
 
 export interface FloorPlanProject {
+  furniture?: FurnitureItem[];
   app: "remix-of-plan-weaver";
   version: 1;
   meta: {
@@ -24,6 +26,7 @@ export interface FloorPlanProject {
 }
 
 export const createFloorPlanProject = ({
+  furniture = [],
   editorMode,
   unit,
   scale,
@@ -35,6 +38,7 @@ export const createFloorPlanProject = ({
   windows,
   image,
 }: {
+  furniture?: FurnitureItem[];
   editorMode?: "upload" | "draw";
   unit: DimensionUnit;
   scale: number;
@@ -46,6 +50,7 @@ export const createFloorPlanProject = ({
   windows: DetectedWindow[];
   image?: FloorPlanProject["image"];
 }): FloorPlanProject => ({
+  furniture,
   app: "remix-of-plan-weaver",
   version: 1,
   meta: {
@@ -82,6 +87,7 @@ export const parseFloorPlanProject = (value: unknown): FloorPlanProject => {
   }
 
   return {
+    furniture: Array.isArray(value.furniture) ? value.furniture.filter((item): item is FurnitureItem => isObject(item) && typeof item.id === "string" && FURNITURE_CATALOG.some(p => p.kind === item.kind) && [item.x, item.y, item.width, item.depth, item.height, item.rotation].every(n => typeof n === "number" && Number.isFinite(n)) && Number(item.width) > 0 && Number(item.depth) > 0 && Number(item.height) > 0 && typeof item.color === "string") : [],
     app: "remix-of-plan-weaver",
     version: 1,
     meta: {
