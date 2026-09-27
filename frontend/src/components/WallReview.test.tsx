@@ -2,7 +2,7 @@ import { cleanup, fireEvent, render } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import WallReview from "./WallReview";
 import type { DetectedDoor, DetectedWallSegment, DetectedWindow } from "@/types/detection";
-import { useState } from "react";
+import { useState, type ComponentProps } from "react";
 
 const wall: DetectedWallSegment = { id: "wall-a", x1: 0.2, y1: 0.3, x2: 0.6, y2: 0.3, type: "interior" };
 const neighbor: DetectedWallSegment = { ...wall, id: "wall-b", x1: 0.6, y1: 0.3, x2: 0.8, y2: 0.7 };
@@ -19,7 +19,7 @@ beforeEach(() => {
 });
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
 
-function setup(initialWalls = [wall, neighbor], calibrated = true) {
+function setup(initialWalls = [wall, neighbor], calibrated = true, extra: Partial<ComponentProps<typeof WallReview>> = {}) {
     const commit = vi.fn();
     function Editor() {
         const [walls, setWalls] = useState(initialWalls);
@@ -27,7 +27,7 @@ function setup(initialWalls = [wall, neighbor], calibrated = true) {
             scale={1} planWidth={20} planHeight={20} onScaleChange={vi.fn()} onRoomUpdate={vi.fn()} onGenerate={vi.fn()} onWallGeometryCommit={updated => {
                 commit(updated);
                 setWalls(updated);
-            }} />;
+            }} {...extra} />;
     }
     const { container } = render(<Editor />);
     const svg = container.querySelector('svg[viewBox="0 0 100 100"]') as SVGSVGElement;
@@ -431,6 +431,35 @@ describe("wall endpoint dragging", () => {
         expect(svg.setPointerCapture).not.toHaveBeenCalled();
         expect(commit).not.toHaveBeenCalled();
     });
+
+    // A door whose end sits exactly under the wall's end handle.
+    const overlappingDoor: DetectedDoor = { id: "door-a", wallId: "wall-a", bbox: { x: 0.56, y: 0.2925, w: 0.04, h: 0.015 } };
+
+    it("edits the selected wall when its endpoint handle overlaps a door", () => {
+        const onDoorUpdate = vi.fn();
+        const { svg, at, handles, move, end, commit } = setup([wall], true, { doors: [overlappingDoor], onDoorUpdate });
+        expect(handles()).toHaveLength(2);
+        fireEvent.pointerDown(handles()[1], at(0.6, 0.3)); // The handle sits on the door.
+        move(0.9, 0.3);
+        end(0.9, 0.3);
+        expect(commit).toHaveBeenCalledExactlyOnceWith([{ ...wall, x2: 0.9, y2: 0.3 }]);
+        expect(onDoorUpdate).not.toHaveBeenCalled();
+        expect(svg.querySelector("[data-opening-handle]")).toBeNull(); // The door never took the selection.
+    });
+
+    it("still grabs an overlapping door outside the wall endpoint handle radius", () => {
+        const onDoorUpdate = vi.fn();
+        const { svg, at, move, end, commit } = setup([wall], true, { doors: [overlappingDoor], onDoorUpdate });
+        fireEvent.pointerDown(svg, at(0.57, 0.3)); // 30 px inside the door, outside the 12 px handle.
+        move(0.47, 0.3);
+        end(0.47, 0.3);
+        expect(commit).not.toHaveBeenCalled();
+        expect(onDoorUpdate).toHaveBeenCalledOnce();
+        const [id, field, span] = onDoorUpdate.mock.calls[0] as [string, string, { start: number; end: number }];
+        expect([id, field]).toEqual(["door-a", "wallSpan"]);
+        expect(span.start).toBeCloseTo(0.65, 5);
+        expect(span.end).toBeCloseTo(0.75, 5);
+    });
 });
 
 describe("wall selection", () => {
@@ -594,9 +623,9 @@ describe("opening dimensions", () => {
         );
         expect(view.getByText("2.00 m")).toBeInTheDocument();
 
-        fireEvent.click(view.getByText("Advanced Geometry"));
-        expect(view.getByText("Normalized Plan Width")).toBeInTheDocument();
-        expect(view.getByText(/not meters or physical element height/i)).toBeInTheDocument();
+        expect(view.getByLabelText("Opening width (m)")).toHaveValue(2);
+        expect(view.getByLabelText("Opening height (m)")).toBeInTheDocument();
+        expect(view.queryByText("Advanced Geometry")).toBeNull();
     });
 
     it("uses the same calibrated wall span for a selected window", () => {
@@ -683,5 +712,102 @@ describe("drawing walls from existing endpoints", () => {
                 x2: freeEnd ? end.x : 0.8, y2: freeEnd ? end.y : 0.6 });
             expect(marker()).toBeNull();
         } finally { width.mockRestore(); height.mockRestore(); }
+    });
+
+    it("previews a T-junction highlight on a wall interior and snaps the committed wall exactly onto its centerline", () => {
+        const width = vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockReturnValue(1032);
+        const height = vi.spyOn(HTMLElement.prototype, "clientHeight", "get").mockReturnValue(532);
+        try {
+            const onWallAdd = vi.fn();
+            const { container, getByText, getByAltText } = render(<WallReview rooms={[]} walls={[wall]} unit="m" imageUrl="plan.png"
+                scale={1} onScaleChange={vi.fn()} onRoomUpdate={vi.fn()} onGenerate={vi.fn()} onWallAdd={onWallAdd} />);
+            const image = getByAltText("Floor plan");
+            Object.defineProperties(image, { naturalWidth: { value: 1000 }, naturalHeight: { value: 500 } });
+            fireEvent.load(image);
+            fireEvent.click(getByText("Add Element"));
+            fireEvent.click(getByText("Wall"));
+            const overlay = container.querySelector("div.absolute.inset-0.z-20")!;
+            vi.spyOn(overlay, "getBoundingClientRect").mockReturnValue({ left: -100, top: 80, width: 1000, height: 500 } as DOMRect);
+            const at = (x: number, y: number) => ({ clientX: -100 + x * 1000, clientY: 80 + y * 500 });
+            const endpointMarker = () => container.querySelector("[data-wall-draw-snap-endpoint]");
+            const junctionMarker = () => container.querySelector("[data-wall-draw-junction-highlight]");
+
+            // Hover near the interior of wall (midpoint x=0.4, y=0.3), offset slightly in Y
+            fireEvent.pointerMove(overlay, at(0.404, 0.312));
+            expect(endpointMarker()).toBeNull();
+            expect(junctionMarker()).not.toBeNull();
+            // The outer/inner ring is rendered at the exact projection on wall's centerline (y=0.3)
+            const outer = container.querySelector("[data-wall-draw-junction-outer]");
+            expect(outer).toHaveAttribute("cy", "0.3");
+
+            // Click start at this T-junction
+            fireEvent.pointerDown(overlay, at(0.404, 0.312));
+
+            // Drag down to free space (x=0.404, y=0.65)
+            fireEvent.pointerMove(overlay, at(0.404, 0.65));
+            expect(junctionMarker()).toBeNull();
+
+            expect(container.querySelector('[data-wall-draw-connection="junction"]')).toHaveAttribute("cy", "0.3");
+            // Click end to finish
+            fireEvent.pointerDown(overlay, at(0.404, 0.65));
+            expect(onWallAdd).toHaveBeenCalledOnce();
+            const committed = onWallAdd.mock.calls[0][0];
+            // Exactly on the host's centerline, no gap
+            expect(committed.y1).toBe(0.3);
+            expect(committed.x1).toBeCloseTo(0.404, 6);
+            expect(committed.y2).toBe(0.65);
+            expect(junctionMarker()).toBeNull();
+        } finally { width.mockRestore(); height.mockRestore(); }
+    });
+});
+
+
+describe("Review room selection and naming", () => {
+    it("keeps one violet selection per room while the name alone renames inline", () => {
+        const update = vi.fn();
+        function Editor() {
+            const [rooms, setRooms] = useState([0, 1].map(i => ({
+                id: `room-${i}`, name: `Room ${i + 1}`, confidence: "high" as const,
+                width: 0.3, height: 0.3, bbox: { x: 0.1 + i * 0.4, y: 0.2, w: 0.3, h: 0.3 },
+            })));
+            return <WallReview rooms={rooms} unit="m" imageUrl="plan.png" scale={1}
+                onScaleChange={vi.fn()} onGenerate={vi.fn()} onRoomUpdate={(id, field, value) => {
+                    update(id, field, value);
+                    setRooms(previous => previous.map(room => room.id === id ? { ...room, [field]: value } : room));
+                }} />;
+        }
+        const view = render(<Editor />);
+        for (const id of ["room-0", "room-1"]) {
+            const row = view.container.querySelector(`[data-plan-selection="room:${id}"]`)!;
+            fireEvent.click(row);
+            expect(row.querySelector(".rounded-sm")).toBeNull();
+            expect(view.container.querySelector(`[data-room-geometry="${id}"] polygon`)).toHaveAttribute("fill", "rgba(139,92,246,0.10)");
+            // Room area click only selects: no icon chrome and no inline field appear.
+            expect(row.querySelector("svg")).toBeNull();
+            expect(row.querySelector("button.cursor-pointer")).not.toBeNull();
+            expect(view.queryByRole("textbox", { name: "Room name" })).toBeNull();
+        }
+        fireEvent.click(view.getByRole("button", { name: "Rename Room 2" }));
+        const input = view.getByRole("textbox", { name: "Room name" });
+        expect(input).toHaveFocus();
+        fireEvent.change(input, { target: { value: "  Kitchen  " } });
+        fireEvent.keyDown(input, { key: "Enter" });
+        expect(update).toHaveBeenCalledExactlyOnceWith("room-1", "name", "Kitchen");
+        expect(view.container.querySelector('[data-room-geometry="room-1"]')).toHaveTextContent("Kitchen");
+        fireEvent.click(view.getByRole("button", { name: "Rename Kitchen" }));
+        fireEvent.change(view.getByRole("textbox", { name: "Room name" }), { target: { value: "Discard" } });
+        fireEvent.keyDown(view.getByRole("textbox", { name: "Room name" }), { key: "Escape" });
+        expect(update).toHaveBeenCalledTimes(1);
+        expect(view.getByRole("button", { name: "Rename Kitchen" })).toBeInTheDocument();
+        fireEvent.click(view.getByRole("button", { name: "Rename Kitchen" }));
+        fireEvent.change(view.getByRole("textbox", { name: "Room name" }), { target: { value: "  " } });
+        fireEvent.blur(view.getByRole("textbox", { name: "Room name" }));
+        expect(update).toHaveBeenCalledTimes(1);
+        fireEvent.click(view.getByRole("button", { name: "Rename Kitchen" }));
+        fireEvent.change(view.getByRole("textbox", { name: "Room name" }), { target: { value: "Balcony" } });
+        fireEvent.blur(view.getByRole("textbox", { name: "Room name" }));
+        expect(update).toHaveBeenCalledTimes(2);
+        expect(update).toHaveBeenLastCalledWith("room-1", "name", "Balcony");
+        expect(view.getByRole("button", { name: "Rename Balcony" })).toBeInTheDocument();
     });
 });

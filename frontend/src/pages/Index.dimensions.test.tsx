@@ -71,7 +71,7 @@ vi.mock("@/components/Sidebar", () => ({ default: (props: ComponentProps<typeof 
 // Replace only WebGL rendering/picking. Index, Review, and the 3D inspector are real.
 vi.mock("@react-three/fiber", () => ({
   Canvas: ({ children }: { children: ReactElement }) => {
-    const scene = Children.only(children) as ReactElement<{
+    const scene = Children.toArray(children).find(child => typeof child === "object" && "props" in child && child.props.walls) as ReactElement<{
       walls: FloorPlanProject["walls"];
       onSelect: (target: { type: "wall" | "room"; id: string }) => void;
     }>;

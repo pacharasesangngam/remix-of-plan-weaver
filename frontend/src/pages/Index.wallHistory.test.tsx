@@ -5,6 +5,8 @@ import type WallReview from "@/components/WallReview";
 import type Sidebar from "@/components/Sidebar";
 import type RightPanel from "@/components/RightPanel";
 import { editWallGeometry } from "@/lib/wallGeometry";
+import { openingGeometry } from "@/lib/openingModel";
+import type { DetectedDoor, DetectedWallSegment } from "@/types/detection";
 import type { FloorPlanProject } from "@/lib/projectIO";
 import Index from "./Index";
 
@@ -45,7 +47,7 @@ afterEach(cleanup);
 
 it("opens the uploaded-plan furniture editor and returns to review", () => {
     render(<Index />);
-    fireEvent.click(screen.getByText("อัปโหลดแปลน"));
+    fireEvent.click(screen.getByText("Upload Floor Plan"));
     fireEvent.click(screen.getByText("Import"));
     fireEvent.click(screen.getByRole("button", { name: "จัดวางเฟอร์นิเจอร์" }));
     expect(screen.getByRole("region", { name: "จัดวางเฟอร์นิเจอร์" })).toBeInTheDocument();
@@ -56,7 +58,7 @@ it("opens the uploaded-plan furniture editor and returns to review", () => {
 
 it("commits only the edited wall as one action and synchronizes undo, redo, JSON and Generate 3D", () => {
     render(<Index />);
-    fireEvent.click(screen.getByText("อัปโหลดแปลน"));
+    fireEvent.click(screen.getByText("Upload Floor Plan"));
     fireEvent.click(screen.getByText("Import"));
     fireEvent.click(screen.getByText("Back to Review"));
     expect(screen.getByText("Undo")).toBeDisabled();
@@ -78,19 +80,58 @@ it("commits only the edited wall as one action and synchronizes undo, redo, JSON
     expect(JSON.parse(screen.getByTestId("3d").textContent!).furniture).toEqual(project.furniture);
 });
 
+it("keeps an attached opening's size when its host wall is resized", () => {
+    render(<Index />);
+    fireEvent.click(screen.getByText("Upload Floor Plan"));
+    fireEvent.click(screen.getByText("Import"));
+    fireEvent.click(screen.getByText("Back to Review"));
+    fireEvent.click(screen.getByText("Create door"));
+    fireEvent.click(screen.getByText("Move door"));
+    const plan = { width: 10, height: 10 };
+    const width = (opening: DetectedDoor, walls: DetectedWallSegment[]) =>
+        openingGeometry(opening, "door", walls, plan.width, plan.height)!.width;
+    const walls = JSON.parse(screen.getByTestId("2d").textContent!) as DetectedWallSegment[];
+    const before = JSON.parse(screen.getByTestId("2d-openings").textContent!)[0] as DetectedDoor;
+    expect(width(before, walls)).toBeCloseTo(2, 8);
+
+    fireEvent.click(screen.getByText("Commit drag"));
+    const resized = JSON.parse(screen.getByTestId("2d").textContent!) as DetectedWallSegment[];
+    const after = JSON.parse(screen.getByTestId("2d-openings").textContent!)[0] as DetectedDoor;
+    expect(resized[0]).toMatchObject({ x2: 0.6, y2: 0.3 });
+    expect(after.wallId).toBe("a");
+    // A proportional wall scale would have grown the 2 m door to ~2.55 m.
+    expect(width(after, resized)).toBeCloseTo(2, 8);
+});
+
 it("persists a wall-attached opening edited in Review into 3D", () => {
     render(<Index />);
-    fireEvent.click(screen.getByText("อัปโหลดแปลน"));
+    fireEvent.click(screen.getByText("Upload Floor Plan"));
     fireEvent.click(screen.getByText("Import"));
     fireEvent.click(screen.getByText("Back to Review"));
     fireEvent.click(screen.getByText("Create door"));
     fireEvent.click(screen.getByText("Move door"));
 
-    expect(JSON.parse(screen.getByTestId("2d-openings").textContent!)).toEqual([
-        { id: "manual-door", wallId: "a", bbox: { x: 0.3, y: 0.19, w: 0.2, h: 0.02 } },
-    ]);
+    const review = JSON.parse(screen.getByTestId("2d-openings").textContent!);
+    expect(review[0]).toMatchObject({ id: "manual-door", wallId: "a", wallSpan: { start: expect.closeTo(0.5, 10), end: expect.closeTo(1, 10) } });
+    expect(review[0].bbox.x).toBeCloseTo(0.3);
+    expect(review[0].bbox.w).toBeCloseTo(0.2);
     fireEvent.click(screen.getByText("Generate"));
-    expect(JSON.parse(screen.getByTestId("3d").textContent!).doors).toEqual([
-        { id: "manual-door", wallId: "a", bbox: { x: 0.3, y: 0.19, w: 0.2, h: 0.02 } },
-    ]);
+    expect(JSON.parse(screen.getByTestId("3d").textContent!).doors).toEqual(review);
+});
+
+
+it("returns to Start without losing the project and hides download until a project is ready", () => {
+    render(<Index />);
+    expect(screen.queryByRole("button", { name: "Download Project" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByText("Upload Floor Plan"));
+    expect(screen.queryByRole("button", { name: "Download Project" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByText("Import"));
+    const before = screen.getByTestId("json").textContent;
+    expect(screen.getByRole("button", { name: "Download Project" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Sketch to Spec" }));
+    expect(screen.getByText("Start a new project")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Download Project" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByText("Upload Floor Plan"));
+    expect(screen.getByTestId("json").textContent).toBe(before);
+    expect(screen.getByRole("button", { name: "Download Project" })).toBeInTheDocument();
 });

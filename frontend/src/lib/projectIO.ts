@@ -24,6 +24,7 @@ export interface FloorPlanProject {
     scale: number;
     planWidth: number;
     planHeight: number;
+    wallHeightMeter?: number;
   };
   image?: {
     dataUrl: string;
@@ -46,6 +47,7 @@ export const createFloorPlanProject = ({
   scale,
   planWidth,
   planHeight,
+  wallHeightMeter = 2.8,
   rooms,
   walls,
   doors,
@@ -60,6 +62,7 @@ export const createFloorPlanProject = ({
   scale: number;
   planWidth: number;
   planHeight: number;
+  wallHeightMeter?: number;
   rooms: Room[];
   walls: DetectedWallSegment[];
   doors: DetectedDoor[];
@@ -77,6 +80,7 @@ export const createFloorPlanProject = ({
     scale,
     planWidth,
     planHeight,
+    wallHeightMeter,
   },
   image: image ?? null,
   rooms,
@@ -120,6 +124,7 @@ export const parseFloorPlanProject = (value: unknown): FloorPlanProject => {
       scale: safeDimension(meta.scale),
       planWidth: safeDimension(meta.planWidth),
       planHeight: safeDimension(meta.planHeight),
+      wallHeightMeter: safeDimension(meta.wallHeightMeter) || 2.8,
     },
     image: isObject(value.image) && typeof value.image.dataUrl === "string"
       ? {

@@ -17,6 +17,12 @@ export interface DetectedDoor {
   useBlenderModel?: string;
   /** The wall selected by the user. AI detections may leave this unresolved. */
   wallId?: string;
+  /** Cached attachment fractions; never the size source once planSegment exists. */
+  wallSpan?: { start: number; end: number };
+  /** Independent opening endpoints in normalized plan coordinates. */
+  planSegment?: { start: NormalizedPoint; end: NormalizedPoint };
+  heightM?: number;
+  sillHeightM?: number;
 }
 
 export interface DetectedWindow {
@@ -33,6 +39,12 @@ export interface DetectedWindow {
   useBlenderModel?: string;
   /** The wall selected by the user. AI detections may leave this unresolved. */
   wallId?: string;
+  /** Cached attachment fractions; never the size source once planSegment exists. */
+  wallSpan?: { start: number; end: number };
+  /** Independent opening endpoints in normalized plan coordinates. */
+  planSegment?: { start: NormalizedPoint; end: NormalizedPoint };
+  heightM?: number;
+  sillHeightM?: number;
 }
 
 export interface DetectedWallSegment {

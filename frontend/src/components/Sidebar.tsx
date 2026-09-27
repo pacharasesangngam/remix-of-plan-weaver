@@ -270,14 +270,14 @@ const Sidebar = ({
                       <div className="mt-1 text-[11px] text-muted-foreground">PNG, JPG, WEBP, PDF</div>
                       <input ref={inputRef} type="file" accept="image/*,.pdf,application/pdf" className="hidden" onChange={handleFileChange} />
                     </button>
-                    <button
+                    {/* <button
                       type="button"
                       onClick={() => importInputRef.current?.click()}
                       className="inline-flex h-11 w-full items-center justify-center gap-2 rounded-[20px] border border-border/55 bg-card px-3 text-sm font-medium text-foreground transition-colors hover:bg-accent"
                     >
                       <Download className="h-4 w-4" />
                       Import Existing Project
-                    </button>
+                    </button> */}
                   </div>
                 ) : (
                 <div className="relative overflow-hidden rounded-[24px] border border-border/55 bg-background shadow-inner">

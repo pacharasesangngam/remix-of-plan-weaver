@@ -1,3 +1,7 @@
+import OpeningDimensions from "./OpeningDimensions";
+import { openingGeometry, resolveOpenings, openingAtPoints, newOpeningRecord, type Opening } from "@/lib/openingModel";
+import { defaultOpeningHeight, defaultOpeningSill } from "@/lib/openingDefaults";
+import { finishWallDraw, snapWallDrawPoint, wallDrawConnections, type WallDrawSnap } from "@/lib/wallDrawing";
 import { useProjectActions } from "@/components/ProjectActionContext";
 import { Component, Suspense, createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
 import { Canvas, useFrame, useThree, type ThreeEvent } from "@react-three/fiber";
@@ -7,7 +11,7 @@ import { AppWindow, Box, ChevronDown, ChevronLeft, DoorOpen, Download, Image as 
 import type { BBox, NormalizedPoint, Room } from "@/types/floorplan";
 import type { DetectedWallSegment, DetectedDoor, DetectedWindow } from "@/types/detection";
 import { buildWallSolidGeometries } from "@/lib/wallSolidGeometry";
-import { computeGapIntervals, computeSolidSegments, projectOpeningEdgesOntoWall, defaultRenderWallHeight, wallSolidInputs } from "@/lib/wallRenderGeometry";
+import { computeGapIntervals, computeSolidSegments, wallSolidInputs } from "@/lib/wallRenderGeometry";
 import WallMeshHighlight from "./WallMeshHighlight";
 import { FurnitureMeshes } from "./FurnitureVisual";
 import { PLAN_3D_MOUSE_BUTTONS } from "@/lib/threeNavigation";
@@ -29,7 +33,7 @@ import {
 } from "@/types/materialCatalog";
 import { createWallTexture } from "@/lib/wallTextures";
 import { createStoneBlockSpecs } from "@/lib/stoneWallPanels";
-import { DEFAULT_WALL_THICKNESS_M, getWallThicknessM, resolvePlanDimensions } from "@/lib/wallMetrics";
+import { DEFAULT_WALL_THICKNESS_M, DEFAULT_WALL_HEIGHT_M, getWallHeightM, getWallThicknessM, resolvePlanDimensions } from "@/lib/wallMetrics";
 import { createOpeningBboxFromWallPoints } from "@/lib/openingPlacement";
 import { advanceOpeningDraft, cancelOpeningDraft, isValidOpeningTarget, openingPreviewIsOnWall, type OpeningDraftState } from "@/lib/openingInteraction";
 import { capturesThreeTargetPointer, nextThreeSelection, nextThreeToolAfterCreation, type ThreeToolMode } from "@/lib/threeInteraction";
@@ -48,6 +52,8 @@ interface RightPanelProps {
   windows?: DetectedWindow[];
   planWidth?: number;
   planHeight?: number;
+  wallHeightMeter?: number;
+  onWallHeightChange?: (height: number) => void;
   originalPlanUrl?: string | null;
   originalPlanName?: string | null;
   originalPlanIsPdf?: boolean;
@@ -387,51 +393,6 @@ const getWallLengthM = (wall: DetectedWallSegment, pw: number, ph: number): numb
       Math.pow((wall.y2 - wall.y1) * ph, 2),
   );
 
-const snapPointToWalls = (
-  point: NormalizedPoint,
-  walls: DetectedWallSegment[],
-  threshold = 0.018,
-): NormalizedPoint => {
-  let best = point;
-  let bestDistSq = threshold * threshold;
-
-  for (const wall of walls) {
-    const endpoints = [
-      { x: wall.x1, y: wall.y1 },
-      { x: wall.x2, y: wall.y2 },
-    ];
-
-    for (const endpoint of endpoints) {
-      const distSq = (point.x - endpoint.x) ** 2 + (point.y - endpoint.y) ** 2;
-      if (distSq < bestDistSq) {
-        best = endpoint;
-        bestDistSq = distSq;
-      }
-    }
-
-    const dx = wall.x2 - wall.x1;
-    const dy = wall.y2 - wall.y1;
-    const lenSq = dx * dx + dy * dy;
-    if (lenSq < 1e-8) continue;
-
-    const t = Math.max(
-      0,
-      Math.min(1, ((point.x - wall.x1) * dx + (point.y - wall.y1) * dy) / lenSq),
-    );
-    const projected = {
-      x: wall.x1 + dx * t,
-      y: wall.y1 + dy * t,
-    };
-    const distSq = (point.x - projected.x) ** 2 + (point.y - projected.y) ** 2;
-    if (distSq < bestDistSq) {
-      best = projected;
-      bestDistSq = distSq;
-    }
-  }
-
-  return best;
-};
-
 // ── Wall junction snapping ────────────────────────────────────────────────────
 
 const isHorizontalSegment = (wall: DetectedWallSegment): boolean =>
@@ -536,50 +497,8 @@ interface OpeningTransform {
   projectedWidth: number;   // opening width measured along wall axis (= gap width)
 }
 
-function getOpeningTransform(
-  bbox: BBox,
-  wall: DetectedWallSegment,
-  pw = PLAN_SIZE,
-  ph = PLAN_SIZE,
-): OpeningTransform | null {
-  const x1 = wall.x1 * pw - pw / 2;
-  const z1 = wall.y1 * ph - ph / 2;
-  const x2 = wall.x2 * pw - pw / 2;
-  const z2 = wall.y2 * ph - ph / 2;
-
-  const dx = x2 - x1;
-  const dz = z2 - z1;
-  const wallLengthM = Math.sqrt(
-    Math.pow((wall.x2 - wall.x1) * pw, 2) +
-    Math.pow((wall.y2 - wall.y1) * ph, 2),
-  );
-
-  if (wallLengthM <= 1e-9) return null;
-
-  const angle = Math.atan2(dz, dx);
-
-  const proj = projectOpeningEdgesOntoWall(bbox, wall, wallLengthM, pw, ph);
-  if (!proj) return null;
-
-  // Width along the wall axis = exactly the gap width the wall uses
-  const projectedWidth = proj.tEnd - proj.tStart;
-
-  // Centre of the opening in wall-local space (t from wall start)
-  const tCenter = (proj.tStart + proj.tEnd) / 2;
-
-  // Wall group origin is the wall midpoint → local X offset from midpoint
-  const localX = tCenter - wallLengthM / 2;
-
-  const wallCenterX = (x1 + x2) / 2;
-  const wallCenterZ = (z1 + z2) / 2;
-
-  return {
-    center: [wallCenterX, wallCenterZ],
-    angle,
-    localX,
-    wallLengthM,
-    projectedWidth,
-  };
+function getOpeningTransform(opening: Opening, wall: DetectedWallSegment, pw = PLAN_SIZE, ph = PLAN_SIZE): OpeningTransform | null {
+  return openingGeometry(opening, "door", [wall], pw, ph);
 }
 
 /**
@@ -1048,13 +967,13 @@ function DoorMesh({
     : findBestWall(door.bbox, walls, pw, ph);
   if (!wall) return null;
 
-  const transform = getOpeningTransform(door.bbox, wall, pw, ph);
+  const transform = getOpeningTransform(door, wall, pw, ph);
   if (!transform) return null;
 
   const { center, angle, localX, projectedWidth } = transform;
 
-  const doorW = projectedWidth > 0.05 ? projectedWidth : Math.max(getWidthM(door.bbox.w, door.widthM, pw), 0.8);
-  const doorH = Math.min(wallHeight * 0.9, 2.2);
+  const doorW = projectedWidth;
+  const doorH = openingGeometry(door, "door", [wall], pw, ph, wallHeight)!.height;
   const wallThickness = getWallThicknessM(wall, pw, ph);
   const frameDepth = wallThickness + 0.08;
   const slabDepth = Math.min(wallThickness + 0.03, 0.24);
@@ -1189,16 +1108,16 @@ function WindowMesh({
     : findBestWall(win.bbox, walls, pw, ph);
   if (!wall) return null;
 
-  const transform = getOpeningTransform(win.bbox, wall, pw, ph);
+  const transform = getOpeningTransform(win, wall, pw, ph);
   if (!transform) return null;
 
   const { center, angle, localX, projectedWidth } = transform;
 
-  const winW = projectedWidth > 0.05 ? projectedWidth : Math.max(getWidthM(win.bbox.w, win.widthM, pw), 0.6);
+  const winW = projectedWidth;
   // Height & sill: must exactly mirror computeGapIntervals window values
-  const winH = Math.min(wallHeight * 0.45, 1.2);
+  const winH = openingGeometry(win, "window", [wall], pw, ph, wallHeight)!.height;
   const winD = 0.08;
-  const sillY = wallHeight * 0.35;
+  const sillY = openingGeometry(win, "window", [wall], pw, ph, wallHeight)!.sill;
   const windowOption = findScgWindow(win.scgWindowCode);
   const frameColor = win.frameColor ?? windowOption.frameHex;
   const glassColor = win.glassColor ?? windowOption.glassHex;
@@ -1290,7 +1209,7 @@ function WindowMesh({
         <Text
           position={[0, winH + 0.25, 0]}
           fontSize={0.13}
-          color="#06b6d4"
+          color="#f472b6"
           anchorX="center"
           anchorY="middle"
         >
@@ -1320,11 +1239,12 @@ function PlacementPreviewMesh({
   if (!wall) return null;
   const bbox = createOpeningBboxFromWallPoints(wall, draft.start, preview.point, pw, ph);
   if (!bbox) return null;
-  const transform = getOpeningTransform(bbox, wall, pw, ph);
+  const transform = getOpeningTransform(openingAtPoints({ id: "preview", bbox }, wall, draft.start, preview.point, pw, ph), wall, pw, ph);
   if (!transform) return null;
-  const color = draft.kind === "door" ? "#f59e0b" : "#06b6d4";
-  const height = draft.kind === "door" ? Math.min(wallHeight * 0.9, 2.2) : Math.min(wallHeight * 0.45, 1.2);
-  const bottom = draft.kind === "door" ? 0 : wallHeight * 0.35;
+  const color = draft.kind === "door" ? "#f59e0b" : "#f472b6";
+  const hostHeight = getWallHeightM(wall, wallHeight);
+  const height = defaultOpeningHeight(draft.kind, hostHeight);
+  const bottom = defaultOpeningSill(draft.kind, hostHeight);
   const thickness = getWallThicknessM(wall, pw, ph);
 
   return (
@@ -1415,14 +1335,15 @@ function DeletePreviewMesh({
     : findBestWall(opening.bbox, walls, pw, ph);
   if (!wall) return null;
 
-  const transform = getOpeningTransform(opening.bbox, wall, pw, ph);
+  const transform = getOpeningTransform(opening, wall, pw, ph);
   if (!transform) return null;
 
   const { center, angle, localX, projectedWidth } = transform;
   const isDoor = target.type === "door";
-  const width = Math.max(projectedWidth, isDoor ? 0.75 : 0.9);
-  const height = isDoor ? Math.min(wallHeight * 0.9, 2.2) : Math.min(wallHeight * 0.45, 1.2);
-  const bottomY = isDoor ? 0 : wallHeight * 0.35;
+  const openingShape = openingGeometry(opening, isDoor ? "door" : "window", [wall], pw, ph, wallHeight)!;
+  const width = projectedWidth;
+  const height = openingShape.height;
+  const bottomY = openingShape.sill;
   const depth = getWallThicknessM(wall, pw, ph) + 0.16;
 
   return (
@@ -1714,7 +1635,8 @@ function RoomInfoCard({ room }: { room: Room }) {
 
 // ── Scene ─────────────────────────────────────────────────────────────────────
 
-function Scene({
+export function Scene({
+  defaultWallHeight,
   rooms,
   walls,
   doors,
@@ -1741,6 +1663,7 @@ function Scene({
   onDragCancel,
   onWalkExit,
 }: {
+  defaultWallHeight: number;
   rooms: Room[];
   walls: DetectedWallSegment[];
   doors: DetectedDoor[];
@@ -1775,7 +1698,24 @@ function Scene({
   const renderWalls = walls;
   const { pw, ph } = usePlanScale();
 
-  const defaultWallHeight = defaultRenderWallHeight(rooms);
+  const { camera, size: viewport } = useThree();
+  const [wallSnap, setWallSnap] = useState<WallDrawSnap | null>(null);
+  const drawSize = {
+    width: pw, height: ph,
+    project: (p: NormalizedPoint) => {
+      const v = new THREE.Vector3((p.x - 0.5) * pw, 0.06, (p.y - 0.5) * ph).project(camera);
+      return { x: (v.x + 1) * viewport.width / 2, y: (1 - v.y) * viewport.height / 2 };
+    },
+    unproject: (p: NormalizedPoint) => {
+      const ray = new THREE.Raycaster();
+      ray.setFromCamera(new THREE.Vector2(p.x / viewport.width * 2 - 1, 1 - p.y / viewport.height * 2), camera);
+      const hit = ray.ray.intersectPlane(new THREE.Plane(new THREE.Vector3(0, 1, 0), -0.06), new THREE.Vector3());
+      return hit ? { x: hit.x / pw + 0.5, y: hit.z / ph + 0.5 } : { x: 0, y: 0 };
+    },
+  };
+  const connections = wallDraft ? wallDrawConnections({ id: "draft", type: "interior", x1: wallDraft.start.x,
+    y1: wallDraft.start.y, x2: wallDraft.end.x, y2: wallDraft.end.y }, walls, drawSize) : [];
+  const markers = [...connections, ...(wallSnap ? [wallSnap] : [])].filter((p, i, all) => all.findIndex(q => Math.hypot(p.x - q.x, p.y - q.y) < 1e-8) === i);
   const wallGeometries = useMemo(() => buildWallSolidGeometries(
     wallSolidInputs(renderWalls, doors, windows, defaultWallHeight, pw, ph), pw, ph),
     [renderWalls, doors, windows, defaultWallHeight, pw, ph]);
@@ -1788,7 +1728,7 @@ function Scene({
 
   useEffect(() => {
     if (buildMode !== "select") onHoverTargetChange(null);
-    if (buildMode !== "wall") setWallDraft(null);
+    if (buildMode !== "wall") { setWallDraft(null); setWallSnap(null); }
   }, [buildMode, onHoverTargetChange]);
 
   const canPreviewTarget = capturesThreeTargetPointer(buildMode, "room");
@@ -1801,28 +1741,17 @@ function Scene({
       : null;
 
   const handleWallBuildPoint = (point: NormalizedPoint) => {
-    const snappedPoint = snapPointToWalls(point, renderWalls);
+    const { point: snappedPoint, snap } = snapWallDrawPoint(point, renderWalls, drawSize);
+    setWallSnap(snap);
     if (!wallDraft) {
       setWallDraft({ start: snappedPoint, end: snappedPoint });
       return;
     }
-
-    const length = Math.sqrt(
-      (wallDraft.start.x - snappedPoint.x) ** 2 + (wallDraft.start.y - snappedPoint.y) ** 2,
-    );
-    if (length < 0.005) return;
-
     const id = `manual-wall-${Date.now()}`;
-    onWallAdd?.({
-      id,
-      x1: wallDraft.start.x,
-      y1: wallDraft.start.y,
-      x2: snappedPoint.x,
-      y2: snappedPoint.y,
-      type: "interior",
-      thickness: DEFAULT_WALL_THICKNESS_M,
-      wallHeight: defaultWallHeight,
-    });
+    const result = finishWallDraw(wallDraft.start, snappedPoint, renderWalls, drawSize, pw, ph,
+      { id, type: "interior", thickness: DEFAULT_WALL_THICKNESS_M, wallHeight: defaultWallHeight });
+    if (!result) return;
+    onWallAdd?.(result.wall);
     onSelect({ type: "wall", id, point: snappedPoint });
     setWallDraft(null);
     onToolComplete();
@@ -1847,13 +1776,26 @@ function Scene({
       <WallBuildPlane
         enabled={buildMode === "wall"}
         onPointMove={(point) => {
-          const snappedPoint = snapPointToWalls(point, renderWalls);
+          const { point: snappedPoint, snap } = snapWallDrawPoint(point, renderWalls, drawSize);
+          setWallSnap(snap);
           setWallDraft((prev) => (prev ? { ...prev, end: snappedPoint } : prev));
         }}
         onPointClick={handleWallBuildPoint}
       />
 
       <WallDraftPreviewMesh draft={wallDraft} wallHeight={defaultWallHeight} />
+      {buildMode === "wall" && markers.map(marker => <group key={marker.key}
+        position={[(marker.x - 0.5) * pw, 0.07, (marker.y - 0.5) * ph]}
+        userData={{ wallDrawConnection: marker.kind }}>
+        <mesh rotation={[-Math.PI / 2, 0, 0]} raycast={() => null} renderOrder={100}>
+          <ringGeometry args={[0.08, 0.14, 32]} />
+          <meshBasicMaterial color="#22c55e" depthTest={false} depthWrite={false} side={THREE.DoubleSide} />
+        </mesh>
+        <mesh raycast={() => null} renderOrder={101}>
+          <sphereGeometry args={[0.055, 12, 12]} />
+          <meshBasicMaterial color="white" depthTest={false} depthWrite={false} />
+        </mesh>
+      </group>)}
 
       {/* ── Rooms — ShapeGeometry flat tiles ── */}
       {rooms.map((room, i) => (
@@ -1918,7 +1860,7 @@ function Scene({
       )}
 
       {/* ── Doors — wall-aligned via getOpeningTransform ── */}
-      {doors.map((door) => (
+      {resolveOpenings(doors, windows, renderWalls, pw, ph, defaultWallHeight).active.filter(item => item.kind === "door").map(({ opening: door }) => (
         <DoorMesh
           key={door.id}
           door={door}
@@ -1930,7 +1872,7 @@ function Scene({
       ))}
 
       {/* ── Windows — wall-aligned via getOpeningTransform ── */}
-      {windows.map((win) => (
+      {resolveOpenings(doors, windows, renderWalls, pw, ph, defaultWallHeight).active.filter(item => item.kind === "window").map(({ opening: win }) => (
         <WindowMesh
           key={win.id}
           win={win}
@@ -1996,6 +1938,8 @@ const RightPanel = ({
   scale = 0,
   planWidth = 0,
   planHeight = 0,
+  wallHeightMeter = DEFAULT_WALL_HEIGHT_M,
+  onWallHeightChange,
   originalPlanUrl = null,
   originalPlanName = null,
   originalPlanIsPdf = false,
@@ -2224,13 +2168,17 @@ const RightPanel = ({
     if (!bbox) return false;
     if (kind === "door" && onDoorAdd) {
       const id = `manual-door-${Date.now()}`;
-      onDoorAdd({ id, bbox, wallId: wall.id });
+      const opening = newOpeningRecord<DetectedDoor>(kind, id, wall, start, end, pw, ph, wallHeightMeter);
+      if (!opening) return false;
+      onDoorAdd(opening);
       setSelection({ type: "door", id });
       return true;
     }
     if (kind === "window" && onWindowAdd) {
       const id = `manual-window-${Date.now()}`;
-      onWindowAdd({ id, bbox, wallId: wall.id });
+      const opening = newOpeningRecord<DetectedWindow>(kind, id, wall, start, end, pw, ph, wallHeightMeter);
+      if (!opening) return false;
+      onWindowAdd(opening);
       setSelection({ type: "window", id });
       return true;
     }
@@ -2363,7 +2311,7 @@ const RightPanel = ({
     if (!onWallUpdate) return;
     const wall = walls.find((item) => item.id === id);
     if (!wall) return;
-    const current = safeNum(wall.wallHeight, maxH);
+    const current = getWallHeightM(wall, wallHeightMeter);
     onWallUpdate(id, "wallHeight", Math.max(1.2, Math.min(8, current + deltaM)));
   };
 
@@ -2376,7 +2324,7 @@ const RightPanel = ({
       windows,
       planWidth: pw,
       planHeight: ph,
-      wallHeight: rooms.length ? Math.max(...rooms.map(room => safeNum(room.wallHeight, 2.8)), 2.8) : 2.8,
+      wallHeight: wallHeightMeter,
     });
   };
 
@@ -2482,6 +2430,7 @@ const RightPanel = ({
           >
               <FurnitureMeshes items={furniture} planW={pw} planH={ph} />
               <Scene
+              defaultWallHeight={wallHeightMeter}
                 rooms={rooms}
                 walls={walls}
               doors={doors}
@@ -2675,7 +2624,7 @@ const RightPanel = ({
                 <span className="pl-3 text-amber-400">{doors.length} doors</span>
               )}
               {windows.length > 0 && (
-                <span className="pl-3 text-cyan-400">{windows.length} windows</span>
+                <span className="pl-3 text-[#f472b6]">{windows.length} windows</span>
               )}
               <span className="pl-3 text-muted-foreground">{calibrated ? totalArea.toFixed(1) : "—"} m²</span>
               <span className="pl-3 text-muted-foreground">H: {maxH.toFixed(1)}m</span>
@@ -2922,7 +2871,9 @@ const RightPanel = ({
                 <div className="space-y-2 rounded-xl border border-border p-3 text-xs">
                   <div>Length (m) <output aria-label="Length (m)">{calibrated ? getWallLengthM(selectedWall, pw, ph).toFixed(2) : "—"}</output></div>
                   <div>Width / thickness (m) <output>{calibrated || selectedWall.thickness > 0 ? getWallThicknessM(selectedWall, pw, ph).toFixed(2) : "—"}</output></div>
-                  <div>Height (m) <output>{safeNum(selectedWall.wallHeight, maxH)}</output></div>
+                  <label>Height (m) <input aria-label="Wall height (m)" type="number" min="0.5" step="0.1"
+                    key={`${selectedWall.id}:${selectedWall.wallHeight}`} defaultValue={getWallHeightM(selectedWall, wallHeightMeter)}
+                    onBlur={e => { const value = Number(e.target.value); if (value > 0) onWallUpdate?.(selectedWall.id, "wallHeight", value); }} /></label>
                   <button onClick={onBack} className="text-primary underline">Edit wall dimensions in Review</button>
                 </div>
                 {/* <div className="grid grid-cols-2 gap-2">
@@ -2936,6 +2887,14 @@ const RightPanel = ({
               </div>
             )}
 
+            {onWallHeightChange && <label className="text-xs">Default height for new walls (m)
+              <input aria-label="Default wall height (m)" key={wallHeightMeter} type="number" min="0.5" step="0.1" defaultValue={wallHeightMeter}
+                onBlur={e => { const value = Number(e.target.value); if (value > 0) onWallHeightChange(value); }} />
+            </label>}
+            {(selectedDoor || selectedWindow) && <OpeningDimensions opening={(selectedDoor || selectedWindow)!}
+              kind={selectedDoor ? "door" : "window"} walls={walls} doors={doors} windows={windows}
+              pw={pw} ph={ph} wallHeight={wallHeightMeter} calibrated={calibrated}
+              onEdit={(field, value) => selectedDoor ? onDoorUpdate?.(selectedDoor.id, field, value) : onWindowUpdate?.(selectedWindow!.id, field, value)} />}
             {(selectedDoor || selectedWindow) && (
               <fieldset className="space-y-3 rounded-xl border border-border p-3">
                 <legend className="px-1 text-sm font-semibold">รุ่นและสีวัสดุ</legend>
@@ -3050,10 +3009,10 @@ const RightPanel = ({
           </div>
 
           <details className="pointer-events-auto shrink-0 rounded-2xl border border-border bg-card/95 p-3 shadow-xl backdrop-blur-md">
-            <summary className="cursor-pointer text-sm font-medium">วัสดุในโปรเจกต์</summary>
+            <summary className="cursor-pointer text-sm font-medium">Material Summary</summary>
             <div className="mb-2 flex items-center gap-2">
               <div>
-                <p className="text-[11px] font-semibold text-foreground">Material schedule</p>
+                {/* <p className="text-[11px] font-semibold text-foreground">Material schedule</p> */}
                 <p className="text-[9px] text-muted-foreground">Assigned finishes in this 3D model</p>
               </div>
             </div>

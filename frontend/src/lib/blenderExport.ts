@@ -1,3 +1,5 @@
+import { openingGeometry, resolveOpenings, type Opening } from "./openingModel";
+import { computeGapIntervals } from "./wallRenderGeometry";
 import * as THREE from "three";
 import { createFurnitureGroup } from "./furnitureGeometry";
 import type { FurnitureItem } from "@/types/furniture";
@@ -127,56 +129,6 @@ const projectOpeningEdgesOntoWall = (
   return { tStart: Math.max(0, minT), tEnd: Math.min(wallLengthM, maxT) };
 };
 
-const computeGapIntervals = (
-  wall: DetectedWallSegment,
-  wallLengthM: number,
-  wallHeightM: number,
-  doors: DetectedDoor[],
-  windows: DetectedWindow[],
-  allWalls: DetectedWallSegment[],
-  pw = PLAN_SIZE,
-  ph = PLAN_SIZE,
-): GapInterval[] => {
-  const raw: GapInterval[] = [];
-
-  for (const door of doors) {
-    if (!door.bbox) continue;
-    if (door.wallId && door.wallId !== wall.id) continue;
-    if (!door.wallId && resolveOpeningWall(door.bbox, allWalls, pw, ph).wall?.id !== wall.id) continue;
-    const proj = projectOpeningEdgesOntoWall(door.bbox, wall, wallLengthM, pw, ph);
-    if (!proj) continue;
-    raw.push({ ...proj, yStart: 0, height: Math.min(wallHeightM * 0.9, 2.2) });
-  }
-
-  for (const win of windows) {
-    if (!win.bbox) continue;
-    if (win.wallId && win.wallId !== wall.id) continue;
-    if (!win.wallId && resolveOpeningWall(win.bbox, allWalls, pw, ph).wall?.id !== wall.id) continue;
-    const proj = projectOpeningEdgesOntoWall(win.bbox, wall, wallLengthM, pw, ph);
-    if (!proj) continue;
-    raw.push({ ...proj, yStart: wallHeightM * 0.35, height: Math.min(wallHeightM * 0.45, 1.2) });
-  }
-
-  if (raw.length === 0) return [];
-  raw.sort((a, b) => a.tStart - b.tStart);
-
-  const merged: GapInterval[] = [{ ...raw[0] }];
-  for (const cur of raw.slice(1)) {
-    const prev = merged[merged.length - 1];
-    if (cur.tStart <= prev.tEnd + 0.05) {
-      const newYStart = Math.min(prev.yStart, cur.yStart);
-      const top = Math.max(prev.yStart + prev.height, cur.yStart + cur.height);
-      prev.tEnd = Math.max(prev.tEnd, cur.tEnd);
-      prev.yStart = newYStart;
-      prev.height = top - newYStart;
-    } else {
-      merged.push({ ...cur });
-    }
-  }
-
-  return merged;
-};
-
 const computeSolidSegments = (wallLengthM: number, wallHeightM: number, gaps: GapInterval[]): SolidSegment[] => {
   const solids: SolidSegment[] = [];
   if (gaps.length === 0 && wallLengthM > 1e-9) return [{ tStart: 0, tEnd: wallLengthM, yStart: 0, yEnd: wallHeightM }];
@@ -244,29 +196,7 @@ const findBestWall = (
   return best;
 };
 
-const getOpeningTransform = (
-  bbox: BBox,
-  wall: DetectedWallSegment,
-  pw = PLAN_SIZE,
-  ph = PLAN_SIZE,
-): OpeningTransform | null => {
-  const x1 = wall.x1 * pw - pw / 2;
-  const z1 = wall.y1 * ph - ph / 2;
-  const x2 = wall.x2 * pw - pw / 2;
-  const z2 = wall.y2 * ph - ph / 2;
-  const wallLengthM = getWallLengthM(wall, pw, ph);
-  if (wallLengthM < 0.001) return null;
-
-  const proj = projectOpeningEdgesOntoWall(bbox, wall, wallLengthM, pw, ph);
-  if (!proj) return null;
-
-  return {
-    center: [(x1 + x2) / 2, (z1 + z2) / 2],
-    angle: Math.atan2(z2 - z1, x2 - x1),
-    localX: (proj.tStart + proj.tEnd) / 2 - wallLengthM / 2,
-    projectedWidth: proj.tEnd - proj.tStart,
-  };
-};
+const getOpeningTransform = (opening: Opening, wall: DetectedWallSegment, pw = PLAN_SIZE, ph = PLAN_SIZE): OpeningTransform | null => openingGeometry(opening, "door", [wall], pw, ph);
 
 const addBox = (
   parent: THREE.Object3D,
@@ -426,13 +356,13 @@ const addDoorMeshes = (
       ? walls.find((item) => item.id === door.wallId)
       : findBestWall(door.bbox, walls, pw, ph);
     if (!wall) return;
-    const transform = getOpeningTransform(door.bbox, wall, pw, ph);
+    const transform = getOpeningTransform(door, wall, pw, ph);
     if (!transform) return;
 
     const wallHeight = safeNum(wall.wallHeight, defaultWallHeight);
     const option = findScgDoor(door.scgDoorCode);
-    const doorW = transform.projectedWidth > 0.05 ? transform.projectedWidth : Math.max(getWidthM(door.bbox.w, door.widthM, pw), 0.8);
-    const doorH = Math.min(wallHeight * 0.9, 2.2);
+    const doorW = transform.projectedWidth;
+    const doorH = openingGeometry(door, "door", [wall], pw, ph, wallHeight)!.height;
     const wallThickness = getWallThicknessM(wall, pw, ph);
     const frameDepth = wallThickness + 0.08;
     const slabDepth = Math.min(wallThickness + 0.03, 0.24);
@@ -488,14 +418,14 @@ const addWindowMeshes = (
       ? walls.find((item) => item.id === win.wallId)
       : findBestWall(win.bbox, walls, pw, ph);
     if (!wall) return;
-    const transform = getOpeningTransform(win.bbox, wall, pw, ph);
+    const transform = getOpeningTransform(win, wall, pw, ph);
     if (!transform) return;
 
     const wallHeight = safeNum(wall.wallHeight, defaultWallHeight);
     const option = findScgWindow(win.scgWindowCode);
-    const winW = transform.projectedWidth > 0.05 ? transform.projectedWidth : Math.max(getWidthM(win.bbox.w, win.widthM, pw), 0.6);
-    const winH = Math.min(wallHeight * 0.45, 1.2);
-    const sillY = wallHeight * 0.35;
+    const winW = transform.projectedWidth;
+    const winH = openingGeometry(win, "window", [wall], pw, ph, wallHeight)!.height;
+    const sillY = openingGeometry(win, "window", [wall], pw, ph, wallHeight)!.sill;
     const winD = 0.08;
     const frameMaterial = new THREE.MeshStandardMaterial({ color: win.frameColor ?? option.frameHex, roughness: 0.45, metalness: 0.08 });
     const glassMaterial = new THREE.MeshStandardMaterial({
@@ -595,8 +525,9 @@ export const exportFloorPlanGlb = async ({
   addFloorMeshes(scene, rooms, pw, ph);
   furniture.forEach(item => scene.add(createFurnitureGroup(item, pw, ph)));
   addWallMeshes(scene, exportWalls, doors, windows, defaultWallHeight, pw, ph);
-  addDoorMeshes(scene, doors, exportWalls, defaultWallHeight, pw, ph);
-  addWindowMeshes(scene, windows, exportWalls, defaultWallHeight, pw, ph);
+  const accepted = resolveOpenings(doors, windows, exportWalls, pw, ph, defaultWallHeight).active;
+  addDoorMeshes(scene, doors.filter(o => accepted.some(a => a.kind === "door" && a.opening.id === o.id)), exportWalls, defaultWallHeight, pw, ph);
+  addWindowMeshes(scene, windows.filter(o => accepted.some(a => a.kind === "window" && a.opening.id === o.id)), exportWalls, defaultWallHeight, pw, ph);
 
   const ambient = new THREE.AmbientLight("#ffffff", 1.2);
   ambient.name = "Export Ambient Light";

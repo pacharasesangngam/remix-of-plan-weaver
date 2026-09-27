@@ -1,3 +1,5 @@
+import { withDefaultWallHeight } from "@/lib/wallMetrics";
+import { rehostOpening, type OpeningKind } from "@/lib/openingModel";
 import { preservesConfirmedDimensions, rebindConfirmedDimensions, type ConfirmedDimension } from "@/lib/confirmedDimensions";
 import { proposeWallLength, type LengthRequest, type GeometrySnapshot } from "@/lib/wallLengthEdit";
 import { useState, useCallback, useEffect, useReducer, useMemo } from "react";
@@ -134,8 +136,7 @@ const Index = () => {
   }, [unit, wallHeightMeter]);
 
   const handleWallHeightChange = useCallback((height: number) => {
-    editProject(p => ({ ...p, wallHeightMeter: height, rooms: p.rooms.map(r => ({ ...r, wallHeight: height })),
-      walls: p.walls.map(w => ({ ...w, wallHeight: height })) }), { label: "wall height change" });
+    editProject(p => withDefaultWallHeight(p, height), { label: "default wall height change" });
   }, [editProject]);
 
   const handleDetect = useCallback(async () => {
@@ -147,7 +148,7 @@ const Index = () => {
       if (result.cleanImage) {
         setCleanImageUrl(result.cleanImage);
       }
-      dispatch({ type: "reset", project: { ...editorHistory.present, confirmedDimensions: [], rooms: result.rooms,
+      dispatch({ type: "reset", project: { ...editorHistory.present, confirmedDimensions: [], rooms: result.rooms.map((room, index) => ({ ...room, name: `Room ${index + 1}` })),
         walls: initializeDetectedWalls(result.walls),
         doors: result.doors, windows: result.windows } });
       setDebugImages(result.debugImages ?? null);
@@ -199,6 +200,15 @@ const Index = () => {
   const handleWallAdd = useCallback((item: DetectedWallSegment) => {
     editProject(p => ({ ...p, walls: [...p.walls, item] }), { label: "wall creation" });
   }, [editProject]);
+  const handleOpeningRehost = useCallback((kind: OpeningKind, id: string, wallId: string, point: { x: number; y: number }) => {
+    editProject(p => {
+      const items = kind === "door" ? p.doors : p.windows;
+      const original = items.find(item => item.id === id);
+      if (!original) return p;
+      const updated = rehostOpening(original, kind, wallId, point, p.walls, p.doors, p.windows, p.planW || 20, p.planH || 20, p.wallHeightMeter);
+      return updated ? { ...p, [kind === "door" ? "doors" : "windows"]: items.map(item => item.id === id ? updated : item) } : p;
+    }, { label: "opening wall change" });
+  }, [editProject]);
   const handleDoorUpdate = useCallback((id: string, field: keyof DetectedDoor, value: DetectedDoor[keyof DetectedDoor]) => {
     editProject(p => ({ ...p, doors: p.doors.map(item => item.id === id ? { ...item, [field]: value } : item) }), fieldInfo("door", field));
   }, [editProject]);
@@ -240,7 +250,7 @@ const Index = () => {
     setFileType(project.image?.fileType ?? null);
     setImageFile(null);
     dispatch({ type: "reset", project: { ...emptyProject(), furniture: project.furniture ?? [], rooms: project.rooms, walls: project.walls,
-      doors: project.doors, windows: project.windows, unit: project.meta.unit, scale: project.meta.scale,
+      doors: project.doors, windows: project.windows, wallHeightMeter: project.meta.wallHeightMeter ?? 2.8, unit: project.meta.unit, scale: project.meta.scale,
       confirmedDimensions: project.meta.confirmedDimensions ?? [], calibrationStatus: savedCalibrationStatus(project.meta), planW: project.meta.planWidth, planH: project.meta.planHeight } });
     setDetected(true);
     setDetecting(false);
@@ -260,6 +270,7 @@ const Index = () => {
     scale,
     planWidth: planW,
     planHeight: planH,
+    wallHeightMeter,
     rooms,
     walls,
     doors,
@@ -300,12 +311,16 @@ const Index = () => {
                   {workflow === "draw" ? "กลับไปวาด 2D" : "Back to Review"}
                 </button>
               )}
-              <h1 className="text-sm font-semibold text-foreground tracking-tight font-sans">Sketch to Spec</h1>
+              <h1 className="text-sm font-semibold text-foreground tracking-tight font-sans">
+                <button type="button" onClick={() => { dispatch({ type: "cancel" }); setShowStart(true); }}
+                  className="rounded-sm transition-colors hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+                  Sketch to Spec
+                </button>
+              </h1>
             </div>
             <div className="flex items-center gap-2">
             {!showStart && workflow === "upload" && detected && <button disabled={detecting} className="rounded-xl border px-3 py-2 text-xs hover:bg-accent disabled:opacity-50" onClick={() => { dispatch({ type: "cancel" }); setGenerated(false); setPlacingFurniture(value => !value); }}>{placingFurniture ? "กลับไปตรวจแปลน" : "จัดวางเฟอร์นิเจอร์"}</button>}
-            {workflow && <button className="rounded-xl border px-3 py-2 text-xs hover:bg-accent" onClick={() => downloadProjectJson(projectData)}>บันทึกโปรเจกต์</button>}
-            {!showStart && <button disabled={detecting} className="rounded-xl border px-3 py-2 text-xs hover:bg-accent disabled:opacity-50" onClick={() => setShowStart(true)}>เลือกโหมด</button>}
+            {!showStart && !detecting && (detected || workflow === "draw") && <button className="rounded-xl border px-3 py-2 text-xs hover:bg-accent" onClick={() => downloadProjectJson(projectData)}>Download Project</button>}
             <button
               onClick={() => setTheme(theme === "dark" ? "light" : "dark")}
               className="inline-flex items-center gap-2 rounded-xl border border-border bg-card px-3 py-2 text-xs text-muted-foreground transition-colors hover:text-foreground"
@@ -357,10 +372,10 @@ const Index = () => {
             </div>
           ) : detectError ? (
             <div className="flex-1 flex flex-col items-center justify-center gap-4 p-8">
-              <p className="text-sm font-semibold text-foreground">Detection ล้มเหลว</p>
+              <p className="text-sm font-semibold text-foreground">Failed Detection</p>
               <p className="text-xs text-muted-foreground">{detectError}</p>
               <button onClick={() => setDetectError(null)} className="text-xs text-primary hover:underline">
-                ลองอีกครั้ง
+                Try again
               </button>
             </div>
           ) : workflow === "upload" && detected && placingFurniture && !generated ? (
@@ -399,6 +414,7 @@ const Index = () => {
               onWallDelete={handleWallDelete}
               onDoorDelete={handleDoorDelete}
               onDoorAdd={handleDoorAdd}
+              onOpeningRehost={handleOpeningRehost}
               onDoorUpdate={handleDoorUpdate}
               onWindowDelete={handleWindowDelete}
               onWindowAdd={handleWindowAdd}
@@ -418,6 +434,8 @@ const Index = () => {
             </div>
           ) : (
             <RightPanel
+              wallHeightMeter={wallHeightMeter}
+              onWallHeightChange={handleWallHeightChange}
               furniture={editorHistory.present.furniture}
               calibrationStatus={calibrationStatus}
               scale={scale}

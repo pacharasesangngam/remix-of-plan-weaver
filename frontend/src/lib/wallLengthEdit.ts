@@ -1,3 +1,4 @@
+import { openingGeometry, materializeOpening } from "./openingModel";
 import { preservesConfirmedDimensions, type ConfirmedDimension } from "./confirmedDimensions";
 import type { Room, NormalizedPoint, BBox } from "@/types/floorplan";
 import type { DetectedWallSegment as Wall, DetectedDoor, DetectedWindow } from "@/types/detection";
@@ -172,7 +173,7 @@ export function proposeWallLength(source: GeometrySnapshot, request: LengthReque
   const walls = source.walls.map((w, i) => changed[i] ? { ...w, x1: next[i].a.x / pw, y1: next[i].a.y / ph, x2: next[i].b.x / pw, y2: next[i].b.y / ph } : w);
   if (!preservesConfirmedDimensions(walls, source.confirmedDimensions, pw, ph)) return fail("This would move an endpoint of the confirmed calibration span. Edit a segment inside that span instead.");
   let openingError = "";
-  const openings = <T extends DetectedDoor | DetectedWindow>(items: T[]): T[] => items.map(item => {
+  const openings = <T extends DetectedDoor | DetectedWindow>(items: T[], kind: "door" | "window"): T[] => items.map(item => {
     const host = item.wallId ? source.walls.find(w => w.id === item.wallId) : resolveOpeningWall(item.bbox, source.walls, pw, ph).wall;
     const bounds = { x: item.bbox.x * pw, y: item.bbox.y * ph, w: item.bbox.w * pw, h: item.bbox.h * ph };
     if (!host) {
@@ -181,7 +182,8 @@ export function proposeWallLength(source: GeometrySnapshot, request: LengthReque
     }
     const i = source.walls.indexOf(host), s = original[i], n = next[i];
     const translated = changed[i] && equal(n.a.x - s.a.x, n.b.x - s.b.x) && equal(n.a.y - s.a.y, n.b.y - s.b.y);
-    const before = projectOpeningEdgesOntoWall(item.bbox, host, length(s), pw, ph);
+    const canonical = (item.planSegment || item.wallSpan) ? openingGeometry(item, kind, source.walls, pw, ph) : null;
+    const before = canonical ?? projectOpeningEdgesOntoWall(item.bbox, host, length(s), pw, ph);
     let updated = item;
     if (changed[i] && before) {
       const u = { x: (s.b.x - s.a.x) / length(s), y: (s.b.y - s.a.y) / length(s) };
@@ -204,6 +206,15 @@ export function proposeWallLength(source: GeometrySnapshot, request: LengthReque
           ...(item.polygon ? { polygon: item.polygon.map(transform) } : {}) };
       }
     }
+    if (canonical && changed[i]) {
+      const center = metric({ x: updated.bbox.x + updated.bbox.w / 2, y: updated.bbox.y + updated.bbox.h / 2 });
+      const centerT = ((center.x - n.a.x) * (n.b.x - n.a.x) + (center.y - n.a.y) * (n.b.y - n.a.y)) / length(n);
+      const start = centerT - canonical.width / 2, end = centerT + canonical.width / 2;
+      if (start < -EPS || end > length(n) + EPS) openingError = "There is not enough wall length for the attached opening.";
+      updated = { ...updated, planSegment: undefined, wallSpan: { start: start / length(n), end: end / length(n) } };
+      const resolved = openingGeometry(updated, kind, walls, pw, ph);
+      if (resolved) updated = materializeOpening(updated, kind, walls, pw, ph, 2.8, item);
+    }
     // Check every affected wall, not just the initially translated line. Use
     // actual segment sweeps instead of diagonal walls' axis-aligned envelopes.
     for (let j = 0; j < next.length; j++) {
@@ -223,16 +234,16 @@ export function proposeWallLength(source: GeometrySnapshot, request: LengthReque
         openingError = "A moving wall would reach a door or window. Try a smaller adjustment.";
     }
     if (changed[i]) {
-      const after = projectOpeningEdgesOntoWall(updated.bbox, walls[i], length(n), pw, ph);
+      const after = canonical ? openingGeometry(updated, kind, walls, pw, ph) : projectOpeningEdgesOntoWall(updated.bbox, walls[i], length(n), pw, ph);
       const ux = (n.b.x - n.a.x) / length(n), uy = (n.b.y - n.a.y) / length(n);
       const span = Math.abs(ux) * updated.bbox.w * pw + Math.abs(uy) * updated.bbox.h * ph;
       if (!before || !after || !equal(before.tEnd - before.tStart, after.tEnd - after.tStart)
-        || !equal(span, after.tEnd - after.tStart)) openingError = "There is not enough wall length for the attached opening.";
+        || (!canonical && !equal(span, after.tEnd - after.tStart))) openingError = "There is not enough wall length for the attached opening.";
     }
     if (!item.wallId && resolveOpeningWall(updated.bbox, walls, pw, ph).wall?.id !== host.id) openingError = "An opening would change host or become ambiguous.";
     return updated as T;
   });
-  const doors = openings(source.doors), windows = openings(source.windows);
+  const doors = openings(source.doors, "door"), windows = openings(source.windows, "window");
   if (openingError) return fail(openingError);
 
   // Update mapped room boundaries opportunistically; independent masks never block a wall edit.

@@ -19,6 +19,12 @@ export const getMeasuredRoomArea = (room: Room, width: number, height: number, c
 
 export const APPROXIMATE_PLAN_SIZE_M = 20;
 export const DEFAULT_WALL_THICKNESS_M = 0.15;
+/** Default height of a new wall; any single wall may override it. */
+export const DEFAULT_WALL_HEIGHT_M = 2.8;
+
+/** A wall always renders at its own measured height, falling back to the project default. */
+export const getWallHeightM = (wall: DetectedWallSegment, fallback = DEFAULT_WALL_HEIGHT_M): number =>
+  typeof wall.wallHeight === "number" && wall.wallHeight > 0 ? wall.wallHeight : fallback;
 
 export interface PlanDimensions {
   width: number;
@@ -86,3 +92,10 @@ export const wallStrokeWidthNormalized = (
   const thickness = getWallThicknessM(wall, planWidth, planHeight);
   return thickness * Math.hypot(uy / planWidth, ux / planHeight);
 };
+
+/** Changing a creation default preserves every existing wall, including legacy implicit heights. */
+export function withDefaultWallHeight<T extends { walls: DetectedWallSegment[]; wallHeightMeter: number }>(project: T, height: number): T {
+  if (!Number.isFinite(height) || height <= 0 || height === project.wallHeightMeter) return project;
+  return { ...project, wallHeightMeter: height,
+    walls: project.walls.map(wall => wall.wallHeight > 0 ? wall : { ...wall, wallHeight: getWallHeightM(wall, project.wallHeightMeter) }) };
+}

@@ -1,3 +1,4 @@
+import { syncOpeningRecords } from "./openingModel";
 import { deriveRooms } from "./wallTopology";
 import type { ConfirmedDimension } from "./confirmedDimensions";
 import type { Room, DimensionUnit } from "@/types/floorplan";
@@ -23,7 +24,7 @@ export interface HistoryState {
     notice: (ActionInfo & { direction: "Undid" | "Redid" }) | null;
 }
 const deriveProjectRooms = (project: ProjectState): ProjectState => ({ ...project, rooms: deriveRooms(project.walls, project.rooms, project.wallHeightMeter) });
-export const initialHistory = (present = emptyProject()): HistoryState => ({ present: deriveProjectRooms(present), past: [], future: [], pending: null, notice: null });
+export const initialHistory = (present = emptyProject()): HistoryState => ({ present: syncOpeningRecords(deriveProjectRooms(present)), past: [], future: [], pending: null, notice: null });
 export type HistoryAction =
     | { type: "edit"; update: (project: ProjectState) => ProjectState; info: ActionInfo }
     | { type: "begin"; info?: ActionInfo }
@@ -53,6 +54,7 @@ export function projectHistoryReducer(state: HistoryState, action: HistoryAction
                 const metadata = [...present.rooms, ...state.present.rooms.filter(r => !present.rooms.some(next => next.id === r.id))];
                 present = { ...present, rooms: deriveRooms(present.walls, metadata, present.wallHeightMeter) };
             }
+            present = syncOpeningRecords(present, state.present);
             if (equal(present, state.present)) return state;
             if (state.pending) return { ...state, present, notice: null,
                 pending: { ...state.pending, info: state.pending.info ?? action.info } };

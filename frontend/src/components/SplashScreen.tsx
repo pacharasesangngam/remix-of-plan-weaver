@@ -149,7 +149,7 @@ const SplashScreen = ({ onComplete }: SplashScreenProps) => {
             Sketch to Spec
           </h1>
           <p className="text-sm text-muted-foreground font-mono">
-            Upload · Detect · Generate
+            Plan · Visualize · Estimate
           </p>
         </div>
 
