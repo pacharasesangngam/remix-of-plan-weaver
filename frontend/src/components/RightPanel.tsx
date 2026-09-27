@@ -2638,7 +2638,7 @@ const RightPanel = ({
               <div className="px-2 py-1 rounded-lg bg-card/80 border border-border backdrop-blur-md text-[10px] text-muted-foreground font-mono">
                 {walkMode
                   ? "Click scene · WASD move · Mouse look · Esc unlock"
-                  : "ลากซ้าย/ขวา: เลื่อน · ลากปุ่มกลาง: หมุน · ลูกกลิ้ง: ซูม"}
+                  : "ลากซ้าย: หมุน · ลากขวา: เลื่อน · ลูกกลิ้ง: ซูม"}
               </div>
             </div>
           )}

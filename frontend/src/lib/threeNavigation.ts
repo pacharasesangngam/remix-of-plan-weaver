@@ -1,8 +1,8 @@
 import { MOUSE } from "three";
 
-// Both primary buttons pan; the wheel zooms and a middle-button drag orbits.
+// Left/middle drag orbits; right drag pans and the wheel zooms.
 export const PLAN_3D_MOUSE_BUTTONS = {
-  LEFT: MOUSE.PAN,
+  LEFT: MOUSE.ROTATE,
   MIDDLE: MOUSE.ROTATE,
   RIGHT: MOUSE.PAN,
 };

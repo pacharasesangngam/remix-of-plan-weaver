@@ -26,7 +26,7 @@ function scene() {
   return { camera, controls, drag, element };
 }
 
-it.each([0, 2])("pans with mouse button %s without rotating and stops after release", button => {
+it.each([2])("pans with mouse button %s without rotating and stops after release", button => {
   const { camera, controls, drag } = scene();
   try {
     const offset = camera.position.clone().sub(controls.target);
@@ -39,13 +39,16 @@ it.each([0, 2])("pans with mouse button %s without rotating and stops after rele
   } finally { controls.dispose(); }
 });
 
-it("keeps orbit on the middle button and zoom on the wheel", () => {
+it.each([0, 1])("orbits with mouse button %s, stops on release, and keeps wheel zoom", button => {
   const { camera, controls, drag, element } = scene();
   try {
     const before = camera.position.clone();
-    drag(1);
+    drag(button);
     expect(controls.target.distanceTo(new Vector3())).toBeLessThan(1e-6);
     expect(camera.position.distanceTo(before)).toBeGreaterThan(0.1);
+    const after = camera.position.clone();
+    document.dispatchEvent(new MouseEvent("pointermove", { clientX: 400, clientY: 300 }));
+    expect(camera.position.distanceTo(after)).toBeLessThan(1e-6);
     const distance = camera.position.distanceTo(controls.target);
     element.dispatchEvent(new WheelEvent("wheel", { deltaY: -100, cancelable: true }));
     expect(camera.position.distanceTo(controls.target)).toBeLessThan(distance);
