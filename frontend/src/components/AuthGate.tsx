@@ -143,7 +143,6 @@ function Login() {
   const [googleError, setGoogleError] = useState(() => new URLSearchParams(location.search).has("error") ? "Google sign-in was not completed or this account is not allowed." : "");
   useEffect(() => {
     if (!googleError) return;
-    setGoogleError("");
     navigate({ pathname: location.pathname, hash: location.hash }, { replace: true });
   }, [googleError, location.hash, location.pathname, navigate]);
   return <main className="flex min-h-screen items-center justify-center bg-background bg-[radial-gradient(ellipse_at_top,hsl(var(--primary)/0.08),transparent_65%)] p-6">

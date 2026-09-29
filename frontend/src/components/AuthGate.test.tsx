@@ -107,6 +107,13 @@ it("gates every route before Splash, then preserves Login → Splash → Start �
   expect(screen.queryByText("App")).toBeNull();
 });
 
+it("shows a Google sign-in failure and removes the transient error query", async () => {
+  setup(false, "/login?error=access_denied");
+  await screen.findByRole("heading", { name: "Sign in" });
+  expect(screen.getByRole("alert")).toHaveTextContent("Google sign-in was not completed");
+  expect(screen.getByTestId("location")).toHaveTextContent("/login");
+});
+
 it("restores a server session on refresh and returns to Login on a protected API 401", async () => {
   const view = setup(true, "/login");
   await screen.findByRole("heading", { name: "Splash Screen" });
