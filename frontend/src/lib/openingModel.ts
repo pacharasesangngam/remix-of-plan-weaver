@@ -1,4 +1,4 @@
-import { projectToWall, screenDistance, SNAP_PX } from "./wallGeometry";
+import { projectToWall, screenDistance, SNAP_PX, type ScreenSize } from "./wallGeometry";
 import type { DetectedDoor, DetectedWindow, DetectedWallSegment as Wall } from "@/types/detection";
 import type { NormalizedPoint as Point } from "@/types/floorplan";
 import { resolveOpeningWall } from "./openingAttachment";
@@ -62,6 +62,18 @@ export function materializeOpening<T extends Opening>(opening: T, kind: OpeningK
     heightM: opening.heightM ?? g.height, ...(kind === "window" ? { sillHeightM: opening.sillHeightM ?? g.sill } : {}) };
 }
 export type OpeningGeometry = NonNullable<ReturnType<typeof openingGeometry>>;
+/** Batch editors preview a shared size. It only reads as set when every opening of
+ * the kind already resolves to the same effective height or sill. */
+export function uniformOpeningM(openings: Opening[], kind: OpeningKind, field: "height" | "sill", walls: Wall[], pw: number, ph: number, height = 2.8): number | null {
+  if (openings.length === 0) return null;
+  const values = openings.map(opening => {
+    const geometry = openingGeometry(opening, kind, walls, pw, ph, height);
+    return geometry ? (field === "height" ? geometry.height : geometry.sill) : null;
+  });
+  const first = values[0];
+  if (first === null || first === undefined) return null;
+  return values.every(value => value !== null && Math.abs(value - first) <= 1e-6) ? first : null;
+}
 /** Explicit edited spans win; ambiguous hosts and overlapping secondary detections
  * remain in project data, but never create overlapping meshes or extra wall cuts. */
 export function resolveOpenings(doors: DetectedDoor[], windows: DetectedWindow[], walls: Wall[], pw: number, ph: number, height = 2.8) {
@@ -258,7 +270,7 @@ export function rehostOpening(opening: Opening, kind: OpeningKind, targetId: str
   return materializeOpening(updated, kind, walls, pw, ph, height, opening);
 }
 
-export function findOpeningRehost(opening: Opening, kind: OpeningKind, point: Point, size: { width: number; height: number },
+export function findOpeningRehost(opening: Opening, kind: OpeningKind, point: Point, size: ScreenSize,
   walls: Wall[], doors: DetectedDoor[], windows: DetectedWindow[], pw: number, ph: number, height = 2.8, grabOffset = 0): Opening | null {
   const source = openingGeometry(opening, kind, walls, pw, ph, height);
   if (!source) return null;

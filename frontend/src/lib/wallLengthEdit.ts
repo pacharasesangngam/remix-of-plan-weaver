@@ -8,7 +8,8 @@ import { getWallThicknessM } from "./wallMetrics";
 
 export interface GeometrySnapshot { confirmedDimensions?: ConfirmedDimension[]; walls: Wall[]; doors: DetectedDoor[]; windows: DetectedWindow[]; rooms: Room[] }
 export type Anchor = "start" | "end";
-export interface LengthRequest { wallId: string; length: number; anchor: Anchor }
+export interface DimensionSpan { start: NormalizedPoint; end: NormalizedPoint }
+export interface LengthRequest { wallId: string; length: number; anchor: Anchor; span?: DimensionSpan; confirm?: boolean }
 export type LengthCandidate = { ok: true; geometry: GeometrySnapshot; changedWallIds: string[]; displacement: number }
   | { ok: false; reason: string };
 type P = { x: number; y: number };
@@ -29,9 +30,14 @@ const overlaps = (a: BBox, b: BBox) => a.x <= b.x + b.w + EPS && b.x <= a.x + a.
 const on = (p: P, s: Segment) => Math.abs((s.b.x - s.a.x) * (p.y - s.a.y) - (s.b.y - s.a.y) * (p.x - s.a.x)) <= EPS * Math.max(1, length(s))
   && overlaps({ ...p, w: 0, h: 0 }, box(s));
 const cross = (a: P, b: P, p: P) => (b.x - a.x) * (p.y - a.y) - (b.y - a.y) * (p.x - a.x);
-const intersects = (s: Segment, t: Segment) => overlaps(box(s), box(t))
-  && cross(s.a, s.b, t.a) * cross(s.a, s.b, t.b) <= EPS * EPS
-  && cross(t.a, t.b, s.a) * cross(t.a, t.b, s.b) <= EPS * EPS;
+const intersects = (s: Segment, t: Segment) => {
+  if (!overlaps(box(s), box(t))) return false;
+  // Cross products are measured in squared metres. Scale the tolerance with
+  // the segment lengths so propagated junctions are not rejected by rounding.
+  const tolerance = EPS * Math.max(1, length(s), length(t)) ** 2;
+  return cross(s.a, s.b, t.a) * cross(s.a, s.b, t.b) <= tolerance
+    && cross(t.a, t.b, s.a) * cross(t.a, t.b, s.b) <= tolerance;
+};
 const sweptIntersection = (before: Segment, after: Segment, other: Segment) => {
   const points = [before.a, before.b, after.a, after.b].sort((a, b) => a.x - b.x || a.y - b.y)
     .filter((p, i, all) => !i || !same(p, all[i - 1]));
@@ -58,7 +64,7 @@ const overlapLength = (s: Segment, t: Segment) => {
 
 /** Shared endpoint nodes plus endpoint-on-segment attachments. Far endpoints
  * are boundaries unless an interior attachment actually needs their support. */
-function propagateJunctions(original: Segment[], moving: P, anchor: P, target: P, line: Set<number>, fixed: P[]) {
+function propagateJunctions(original: Segment[], moving: P, anchor: P, target: P, line: Set<number>, fixed: P[], constraints: Segment[]) {
   type Node = { before: P; after: P; depth: number; fixed: boolean };
   const nodes: Node[] = [];
   const nodeFor = (p: P) => {
@@ -67,6 +73,8 @@ function propagateJunctions(original: Segment[], moving: P, anchor: P, target: P
     return index;
   };
   const edges = original.map(s => ({ a: nodeFor(s.a), b: nodeFor(s.b) }));
+  nodeFor(anchor);
+  const locked = constraints.map(s => ({ a: nodeFor(s.a), b: nodeFor(s.b), dx: s.b.x - s.a.x, dy: s.b.y - s.a.y }));
   const movingId = nodeFor(moving);
   if (nodes[movingId].fixed) return null;
   const displacement = { x: target.x - moving.x, y: target.y - moving.y };
@@ -89,6 +97,18 @@ function propagateJunctions(original: Segment[], moving: P, anchor: P, target: P
   // A bounded iteration detects contradictory cycles rather than disconnecting them.
   for (let pass = 0; pass <= nodes.length + attachments.length; pass++) {
     let changed = false;
+    for (const constraint of locked) {
+      const a = nodes[constraint.a], b = nodes[constraint.b];
+      const expected = { x: a.after.x + constraint.dx, y: a.after.y + constraint.dy };
+      if (same(expected, b.after)) continue;
+      if (a.fixed && b.fixed) return null;
+      if (a.fixed || (!b.fixed && a.depth <= b.depth)) {
+        b.after = expected; b.depth = a.depth + 1;
+      } else {
+        a.after = { x: b.after.x - constraint.dx, y: b.after.y - constraint.dy }; a.depth = b.depth + 1;
+      }
+      changed = true;
+    }
     for (const { n, edge, t } of attachments) {
       const node = nodes[n], a = nodes[edge.a], b = nodes[edge.b];
       if (on(node.after, { a: a.after, b: b.after })) continue;
@@ -127,7 +147,9 @@ export function proposeWallLength(source: GeometrySnapshot, request: LengthReque
   const original = source.walls.map(w => ({ a: metric({ x: w.x1, y: w.y1 }), b: metric({ x: w.x2, y: w.y2 }) }));
   const index = source.walls.findIndex(w => w.id === request.wallId);
   if (index < 0) return fail("Wall is no longer available.");
-  const selected = original[index], direction = axis(selected);
+  const selected = request.span ? { a: metric(request.span.start), b: metric(request.span.end) } : original[index];
+  if (!on(selected.a, original[index]) || !on(selected.b, original[index])) return fail("This boundary is no longer on its wall.");
+  const direction = axis(selected);
   if (length(selected) <= EPS) return fail("Choose a wall with two different endpoints.");
   const anchor = request.anchor === "start" ? selected.a : selected.b;
   const moving = request.anchor === "start" ? selected.b : selected.a;
@@ -137,7 +159,7 @@ export function proposeWallLength(source: GeometrySnapshot, request: LengthReque
   const target = { x: anchor.x + intended.x * request.length, y: anchor.y + intended.y * request.length };
   const displacement = { x: target.x - moving.x, y: target.y - moving.y };
   const delta = Math.hypot(displacement.x, displacement.y);
-  if (delta <= EPS) return fail("The wall already has this length.");
+  if (delta <= EPS && !request.confirm) return fail("The wall already has this length.");
   const across = direction === "x" ? "y" : "x";
   const line = new Set<number>();
   original.forEach((s, i) => {
@@ -152,8 +174,13 @@ export function proposeWallLength(source: GeometrySnapshot, request: LengthReque
       if (i !== index && !line.has(i) && [...line].some(j => parallel(s, original[j]) && intersects(s, original[j]))) { line.add(i); grew = true; }
     });
   }
-  const fixed = (source.confirmedDimensions ?? []).flatMap(dimension => [metric(dimension.start), metric(dimension.end)]);
-  const propagated = propagateJunctions(original, moving, anchor, target, line, fixed);
+  const sameSpan = (d: ConfirmedDimension) => (same(metric(d.start), selected.a) && same(metric(d.end), selected.b))
+    || (same(metric(d.end), selected.a) && same(metric(d.start), selected.b));
+  const retained = (source.confirmedDimensions ?? []).filter(d => !(request.confirm && d.kind === "length" && sameSpan(d)));
+  const fixed = retained.filter(d => d.kind !== "length").flatMap(d => [metric(d.start), metric(d.end)]);
+  const constraints = retained.filter(d => d.kind === "length").map(d => ({ a: metric(d.start), b: metric(d.end) }));
+  const propagated = delta <= EPS ? { next: original, shift: (p: P) => p }
+    : propagateJunctions(original, moving, anchor, target, line, fixed, constraints);
   if (!propagated) return fail("The connected junctions cannot satisfy this length while keeping the anchor and confirmed span fixed.");
   const { next, shift } = propagated;
   const changed = original.map((s, i) => !same(s.a, next[i].a) || !same(s.b, next[i].b));
@@ -171,7 +198,18 @@ export function proposeWallLength(source: GeometrySnapshot, request: LengthReque
     }
   }
   const walls = source.walls.map((w, i) => changed[i] ? { ...w, x1: next[i].a.x / pw, y1: next[i].a.y / ph, x2: next[i].b.x / pw, y2: next[i].b.y / ph } : w);
-  if (!preservesConfirmedDimensions(walls, source.confirmedDimensions, pw, ph)) return fail("This would move an endpoint of the confirmed calibration span. Edit a segment inside that span instead.");
+  const dimensions = retained.map(d => d.kind !== "length" ? d : { ...d,
+    start: { ...d.start, ...normalized(shift(metric(d.start))) }, end: { ...d.end, ...normalized(shift(metric(d.end))) } });
+  if (request.confirm) {
+    const reference = (p: P) => {
+      const w = walls[index], point = normalized(p);
+      const endpoint = same(p, next[index].a) ? "start" as const : same(p, next[index].b) ? "end" as const : "interior" as const;
+      const junctionWallIds = endpoint === "interior" ? walls.filter((_, i) => i !== index && on(p, next[i])).map(w => w.id) : [];
+      return { ...point, wallId: w.id, endpoint, ...(junctionWallIds.length ? { junctionWallIds } : {}) };
+    };
+    dimensions.push({ kind: "length", start: reference(shift(selected.a)), end: reference(shift(selected.b)), lengthM: request.length });
+  }
+  if (!preservesConfirmedDimensions(walls, dimensions, pw, ph)) return fail("This edit conflicts with a confirmed dimension. Try editing the other end or the overall span.");
   let openingError = "";
   const openings = <T extends DetectedDoor | DetectedWindow>(items: T[], kind: "door" | "window"): T[] => items.map(item => {
     const host = item.wallId ? source.walls.find(w => w.id === item.wallId) : resolveOpeningWall(item.bbox, source.walls, pw, ph).wall;
@@ -292,12 +330,12 @@ export function proposeWallLength(source: GeometrySnapshot, request: LengthReque
     const w = Math.max(...points.map(p => p.x)) - x, h = Math.max(...points.map(p => p.y)) - y;
     return { ...room, polygon, wallPolygon, bbox: { x, y, w, h }, width: w, height: h, center: { x: x + w / 2, y: y + h / 2 }, areaSqm: undefined };
   });
-  return { ok: true, geometry: { walls, doors, windows, rooms, ...(source.confirmedDimensions ? { confirmedDimensions: source.confirmedDimensions } : {}) }, changedWallIds: walls.filter((_, i) => changed[i]).map(w => w.id), displacement: delta };
+  return { ok: true, geometry: { walls, doors, windows, rooms, ...(source.confirmedDimensions || request.confirm ? { confirmedDimensions: dimensions } : {}) }, changedWallIds: walls.filter((_, i) => changed[i]).map(w => w.id), displacement: delta };
 }
 
-export function chooseLengthAnchor(source: GeometrySnapshot, wallId: string, target: number, pw: number, ph: number): Anchor {
-  const start = proposeWallLength(source, { wallId, length: target, anchor: "start" }, pw, ph);
-  const end = proposeWallLength(source, { wallId, length: target, anchor: "end" }, pw, ph);
+export function chooseLengthAnchor(source: GeometrySnapshot, wallId: string, target: number, pw: number, ph: number, options: Pick<LengthRequest, "span" | "confirm"> = {}): Anchor {
+  const start = proposeWallLength(source, { wallId, length: target, anchor: "start", ...options }, pw, ph);
+  const end = proposeWallLength(source, { wallId, length: target, anchor: "end", ...options }, pw, ph);
   if (start.ok !== end.ok) return start.ok ? "start" : "end";
   if (!start.ok || !end.ok) return "start";
   const wall = source.walls.find(w => w.id === wallId)!;

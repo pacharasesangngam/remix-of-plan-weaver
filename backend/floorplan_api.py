@@ -13,7 +13,7 @@ import cv2
 import fitz
 import numpy as np
 from fastapi import FastAPI, File, HTTPException, Query, UploadFile
-from fastapi.middleware.cors import CORSMiddleware
+from auth import install_auth
 from shapely import boundary
 from shapely.geometry import GeometryCollection, LineString, MultiPolygon, Point, Polygon
 from shapely.ops import polygonize, unary_union
@@ -45,13 +45,7 @@ WIN_CLR = (220, 200, 0)
 
 
 app = FastAPI(title="Floor Plan Vision API", version="4.0.0")
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+install_auth(app)
 
 _model: Optional[YOLO] = None
 
@@ -65,7 +59,7 @@ def get_model() -> YOLO:
 
 @app.get("/health")
 def health():
-    return {"status": "ok", "model": MODEL_PATH.name, "version": "4.0.0", "pipeline": "floorplan_v4"}
+    return {"status": "ok"}
 
 
 @app.post("/api/detect-floorplan")

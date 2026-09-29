@@ -1,7 +1,7 @@
 import type { DetectFloorPlanResult } from "@/types/detection";
 import type { Room, BBox, NormalizedPoint } from "@/types/floorplan";
 
-const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL || "http://localhost:8000").replace(/\/+$/, "");
+import { apiFetch } from "@/lib/api";
 
 interface RawPoint {
   x: number;
@@ -145,9 +145,9 @@ export async function detectFloorPlan(
     formData.append("wall_height_meter", String(wallHeightMeter))
   }
 
-  const url = `${API_BASE_URL}/api/detect-floorplan${debug ? "?debug=true" : ""}`;
+  const url = `/api/detect-floorplan${debug ? "?debug=true" : ""}`;
 
-  const res = await fetch(url, {
+  const res = await apiFetch(url, {
     method: "POST",
     body: formData,
   });

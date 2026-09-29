@@ -31,7 +31,7 @@ export default function StartScreen({ onChoose, onImport }: { onChoose: (mode: "
           </button>)}
       </div>
       <div className="my-6 flex items-center gap-6 text-xs font-medium text-muted-foreground">
-        <div className="h-px flex-1 bg-border" /><span>OR</span><div className="h-px flex-1 bg-border" />
+        <div className="h-px flex-1 bg-border" /><span>or</span><div className="h-px flex-1 bg-border" />
       </div>
       <div className="flex flex-col gap-4 rounded-2xl border border-border bg-card p-5 shadow-sm sm:flex-row sm:items-center sm:justify-between sm:px-6">
         <div>

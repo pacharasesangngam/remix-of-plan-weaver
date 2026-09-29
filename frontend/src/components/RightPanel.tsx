@@ -1,5 +1,7 @@
 import OpeningDimensions from "./OpeningDimensions";
-import { openingGeometry, resolveOpenings, openingAtPoints, newOpeningRecord, type Opening } from "@/lib/openingModel";
+import { roomBoundaryWalls, roomWallHeightMinimum } from "@/lib/roomWallHeight";
+import { useThreePlanEditing } from "./useThreePlanEditing";
+import { openingGeometry, resolveOpenings, openingAtPoints, newOpeningRecord, type Opening, type OpeningKind } from "@/lib/openingModel";
 import { defaultOpeningHeight, defaultOpeningSill } from "@/lib/openingDefaults";
 import { finishWallDraw, snapWallDrawPoint, wallDrawConnections, type WallDrawSnap } from "@/lib/wallDrawing";
 import { useProjectActions } from "@/components/ProjectActionContext";
@@ -36,7 +38,7 @@ import { createStoneBlockSpecs } from "@/lib/stoneWallPanels";
 import { DEFAULT_WALL_THICKNESS_M, DEFAULT_WALL_HEIGHT_M, getWallHeightM, getWallThicknessM, resolvePlanDimensions } from "@/lib/wallMetrics";
 import { createOpeningBboxFromWallPoints } from "@/lib/openingPlacement";
 import { advanceOpeningDraft, cancelOpeningDraft, isValidOpeningTarget, openingPreviewIsOnWall, type OpeningDraftState } from "@/lib/openingInteraction";
-import { capturesThreeTargetPointer, nextThreeSelection, nextThreeToolAfterCreation, type ThreeToolMode } from "@/lib/threeInteraction";
+import { capturesThreeTargetPointer, nextThreeSelection, nextThreeToolAfterCreation, threeInteractionCursor, type ThreeToolMode } from "@/lib/threeInteraction";
 import { resolveOpeningWall } from "@/lib/openingAttachment";
 
 import { getMeasuredRoomArea, hasCalibration, type CalibrationStatus } from "@/lib/wallMetrics";
@@ -61,6 +63,8 @@ interface RightPanelProps {
   onRoomPatch?: (id: string, patch: Partial<Room>) => void;
   onRoomDelete?: (id: string) => void;
   onWallUpdate?: (id: string, field: keyof DetectedWallSegment, value: number | string) => void;
+  onWallGeometryCommit?: (walls: DetectedWallSegment[]) => void;
+  onOpeningRehost?: (kind: OpeningKind, id: string, wallId: string, point: NormalizedPoint) => void;
   onWallAdd?: (wall: DetectedWallSegment) => void;
   onWallDelete?: (id: string) => void;
   onDoorAdd?: (door: DetectedDoor) => void;
@@ -87,16 +91,6 @@ type Selection =
 type PlacementPreview = { wallId: string; point: NormalizedPoint } | null;
 type WallDraft = { start: NormalizedPoint; end: NormalizedPoint } | null;
 type OpeningDraft = OpeningDraftState | null;
-type WallGizmoPointerEvent = ThreeEvent<PointerEvent>;
-type R3FPointerCaptureTarget = {
-  setPointerCapture(pointerId: number): void;
-  releasePointerCapture(pointerId: number): void;
-};
-
-const supportsR3FPointerCapture = (target: EventTarget): target is EventTarget & R3FPointerCaptureTarget =>
-  typeof Reflect.get(target, "setPointerCapture") === "function"
-  && typeof Reflect.get(target, "releasePointerCapture") === "function";
-
 const ROOM_PALETTE = [
   { wall: "#e8d5b7", floor: "#d4b896" },
   { wall: "#dce8d5", floor: "#b8d4ae" },
@@ -826,6 +820,7 @@ function WallSegmentMesh({
   onPlacementHover,
   onPlacementLeave,
   onTargetHover,
+  onEditMove,
 }: {
   wall: DetectedWallSegment;
   wallHeight: number;
@@ -837,6 +832,7 @@ function WallSegmentMesh({
   onPlacementHover?: (wallId: string, point: NormalizedPoint) => void;
   onPlacementLeave?: () => void;
   onTargetHover?: (selection: Selection) => void;
+  onEditMove?: (event: ThreeEvent<PointerEvent>) => boolean;
 }) {
   const { pw, ph } = usePlanScale();
   const resolvedHeight = safeNum(wall.wallHeight, wallHeight);
@@ -878,6 +874,7 @@ function WallSegmentMesh({
       <mesh geometry={geometry}
         {...((onPlacementHover || onTargetHover || onSelect) ? {
           onPointerMove: (e: ThreeEvent<PointerEvent>) => {
+            if (onEditMove?.(e)) return;
             const point = getEventPoint(e.point);
             onPlacementHover?.(wall.id, point);
             onTargetHover?.({ type: "wall", id: wall.id, point });
@@ -1293,7 +1290,7 @@ function DeletePreviewMesh({
     if (!shape) return null;
 
     return (
-      <group>
+      <group userData={{ targetPreview: target }}>
         <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, 0.08, 0]} renderOrder={20} raycast={() => null}>
           <shapeGeometry args={[shape]} />
           <meshBasicMaterial color={color} transparent opacity={0.32} side={THREE.DoubleSide} depthWrite={false} />
@@ -1318,7 +1315,7 @@ function DeletePreviewMesh({
     const cx = (x1 + x2) / 2;
     const cz = (z1 + z2) / 2;
     return (
-      <group position={[cx, 0, cz]} rotation={[0, -angle, 0]}>
+      <group position={[cx, 0, cz]} rotation={[0, -angle, 0]} userData={{ targetPreview: target }}>
         <WallMeshHighlight geometry={geometry} color={color} showOutline={showOutline} />
       </group>
     );
@@ -1347,7 +1344,7 @@ function DeletePreviewMesh({
   const depth = getWallThicknessM(wall, pw, ph) + 0.16;
 
   return (
-    <group position={[center[0], 0, center[1]]} rotation={[0, -angle, 0]}>
+    <group position={[center[0], 0, center[1]]} rotation={[0, -angle, 0]} userData={{ targetPreview: target }}>
       <mesh position={[localX, bottomY + height / 2, 0]} renderOrder={20} raycast={() => null}>
         <boxGeometry args={[width, height, depth]} />
         <meshBasicMaterial color={color} transparent opacity={0.28} depthWrite={false} />
@@ -1407,6 +1404,38 @@ function WallDraftPreviewMesh({
   );
 }
 
+function WallDrawMarker({ point, active, kind, height = 0.07, color = "#22c55e", handle, onPointerDown, onPointerEnter, onPointerLeave }: {
+  point: NormalizedPoint; active: boolean; kind: "endpoint" | "junction"; height?: number; color?: string; handle?: string;
+  onPointerDown?: (event: ThreeEvent<PointerEvent>) => void; onPointerEnter?: () => void; onPointerLeave?: () => void;
+}) {
+  const ref = useRef<THREE.Group>(null);
+  const { pw, ph } = usePlanScale();
+  const viewPoint = useMemo(() => new THREE.Vector3(), []);
+  useFrame(({ camera, size }) => {
+    if (!ref.current) return;
+    // Keep the feedback legible at every zoom and viewing angle, in CSS pixels.
+    ref.current.getWorldPosition(viewPoint);
+    viewPoint.applyMatrix4(camera.matrixWorldInverse);
+    const span = camera instanceof THREE.PerspectiveCamera
+      ? 2 * Math.abs(viewPoint.z) * Math.tan(THREE.MathUtils.degToRad(camera.fov / 2)) / camera.zoom
+      : camera instanceof THREE.OrthographicCamera ? (camera.top - camera.bottom) / camera.zoom : 1;
+    ref.current.scale.setScalar(span / Math.max(1, size.height));
+    ref.current.quaternion.copy(camera.quaternion);
+  });
+  return <group ref={ref} position={[(point.x - 0.5) * pw, height, (point.y - 0.5) * ph]}
+    userData={{ wallDrawMarker: kind, active, editHandle: handle }} onPointerDown={onPointerDown} onPointerEnter={onPointerEnter} onPointerLeave={onPointerLeave}>
+    {onPointerDown && <mesh renderOrder={102}><circleGeometry args={[10, 24]} /><meshBasicMaterial transparent opacity={0} depthWrite={false} /></mesh>}
+    {active && <mesh raycast={() => null} renderOrder={100}>
+      <ringGeometry args={[6, 9, kind === "junction" ? 4 : 32]} />
+      <meshBasicMaterial color={color} depthTest={false} depthWrite={false} side={THREE.DoubleSide} />
+    </mesh>}
+    <mesh raycast={() => null} renderOrder={101}>
+      <circleGeometry args={[active ? 4 : 2.5, 24]} />
+      <meshBasicMaterial color={active ? "#ffffff" : "#fbbf24"} depthTest={false} depthWrite={false} side={THREE.DoubleSide} />
+    </mesh>
+  </group>;
+}
+
 function WallBuildPlane({
   enabled,
   onPointMove,
@@ -1440,170 +1469,6 @@ function WallBuildPlane({
       <planeGeometry args={[pw, ph]} />
       <meshBasicMaterial transparent opacity={0} depthWrite={false} />
     </mesh>
-  );
-}
-
-function WallEditGizmo({
-  wall,
-  wallHeight,
-  geometry,
-  onEndpointDrag,
-  onMoveDrag,
-  onHeightDrag,
-  onDragStateChange,
-  onDragCancel,
-}: {
-  wall: DetectedWallSegment;
-  wallHeight: number;
-  geometry: THREE.BufferGeometry;
-  onEndpointDrag: (id: string, endpoint: "start" | "end", point: NormalizedPoint) => void;
-  onMoveDrag: (id: string, center: NormalizedPoint) => void;
-  onHeightDrag: (id: string, deltaM: number) => void;
-  onDragStateChange: (dragging: boolean) => void;
-  onDragCancel: () => void;
-}) {
-  const { pw, ph } = usePlanScale();
-  const [dragMode, setDragMode] = useState<"start" | "end" | "move" | "height" | null>(null);
-  const pointerCaptureRef = useRef<{ target: R3FPointerCaptureTarget; pointerId: number } | null>(null);
-
-  const x1 = wall.x1 * pw - pw / 2;
-  const z1 = wall.y1 * ph - ph / 2;
-  const x2 = wall.x2 * pw - pw / 2;
-  const z2 = wall.y2 * ph - ph / 2;
-  const cx = (x1 + x2) / 2;
-  const cz = (z1 + z2) / 2;
-  const length = getWallLengthM(wall, pw, ph);
-  const height = safeNum(wall.wallHeight, wallHeight);
-  const angle = Math.atan2(z2 - z1, x2 - x1);
-  const thickness = getWallThicknessM(wall, pw, ph);
-  const faceOffset = thickness / 2 + 0.18;
-
-  const toNormalized = (point: THREE.Vector3): NormalizedPoint => ({
-    x: clamp01((point.x + pw / 2) / pw),
-    y: clamp01((point.z + ph / 2) / ph),
-  });
-
-  const beginDrag = (
-    mode: "start" | "end" | "move" | "height",
-    event?: WallGizmoPointerEvent,
-  ) => {
-    if (event && event.button !== 0) return;
-    event?.stopPropagation();
-    if (event && supportsR3FPointerCapture(event.currentTarget)) {
-      event.currentTarget.setPointerCapture(event.pointerId);
-      pointerCaptureRef.current = { target: event.currentTarget, pointerId: event.pointerId };
-    }
-    setDragMode(mode);
-    onDragStateChange(true);
-  };
-
-  const finishDrag = (event?: WallGizmoPointerEvent) => {
-    event?.stopPropagation();
-    const capture = pointerCaptureRef.current;
-    if (capture) capture.target.releasePointerCapture(capture.pointerId);
-    pointerCaptureRef.current = null;
-    setDragMode(null);
-    onDragStateChange(false);
-  };
-
-  return (
-    <group>
-      {dragMode && (
-        <mesh
-          rotation={[-Math.PI / 2, 0, 0]}
-          position={[0, 0.1, 0]}
-          onPointerMove={(e) => {
-            e.stopPropagation();
-            if (dragMode === "height") {
-              const movementY = "movementY" in e.nativeEvent ? e.nativeEvent.movementY : 0;
-              onHeightDrag(wall.id, -movementY * 0.025);
-              return;
-            }
-            const point = toNormalized(e.point);
-            if (dragMode === "move") onMoveDrag(wall.id, point);
-            else onEndpointDrag(wall.id, dragMode, point);
-          }}
-          onPointerUp={(e) => {
-            finishDrag(e);
-          }}
-          onPointerCancel={(e) => {
-            e.stopPropagation();
-            onDragCancel();
-            finishDrag(e);
-          }}
-        >
-          <planeGeometry args={[pw, ph]} />
-          <meshBasicMaterial transparent opacity={0} depthWrite={false} />
-        </mesh>
-      )}
-
-      <group position={[cx, 0, cz]} rotation={[0, -angle, 0]}>
-        <WallMeshHighlight geometry={geometry} color="#38bdf8" outlineOnly />
-      </group>
-
-      {[
-        { mode: "start" as const, localX: -length / 2, label: "Start" },
-        { mode: "end" as const, localX: length / 2, label: "End" },
-      ].map((handle) => (
-        <group key={handle.mode} position={[cx, 0, cz]} rotation={[0, -angle, 0]}>
-          <group position={[handle.localX, height + 0.18, faceOffset]}>
-            <mesh
-              onPointerDown={(e) => {
-                beginDrag(handle.mode, e);
-              }}
-              rotation={[Math.PI / 2, 0, 0]}
-            >
-              <torusGeometry args={[0.13, 0.025, 10, 24]} />
-              <meshStandardMaterial color="#22c55e" emissive="#16a34a" emissiveIntensity={0.2} roughness={0.3} />
-            </mesh>
-            <mesh
-              onPointerDown={(e) => {
-                beginDrag(handle.mode, e);
-              }}
-              rotation={[0, 0, handle.mode === "start" ? Math.PI / 2 : -Math.PI / 2]}
-            >
-              <coneGeometry args={[0.075, 0.18, 16]} />
-              <meshStandardMaterial color="#bbf7d0" emissive="#22c55e" emissiveIntensity={0.1} roughness={0.28} />
-            </mesh>
-          </group>
-        </group>
-      ))}
-
-      <group position={[cx, height * 0.52, cz]} rotation={[0, -angle, 0]}>
-        <group position={[0, 0, faceOffset]}>
-          <mesh
-            onPointerDown={(e) => {
-              beginDrag("move", e);
-            }}
-          >
-            <boxGeometry args={[0.34, 0.34, 0.045]} />
-            <meshStandardMaterial color="#3b82f6" emissive="#2563eb" emissiveIntensity={0.18} roughness={0.3} />
-          </mesh>
-        </group>
-        <Text position={[0, 0.34, faceOffset]} fontSize={0.11} color="#bfdbfe" anchorX="center" anchorY="middle">
-          Move
-        </Text>
-      </group>
-
-      <group position={[cx, height + 0.42, cz]} rotation={[0, -angle, 0]}>
-        <mesh position={[0, -0.2, faceOffset]} raycast={() => null}>
-          <boxGeometry args={[0.035, 0.4, 0.035]} />
-          <meshBasicMaterial color="#f59e0b" transparent opacity={0.72} />
-        </mesh>
-        <mesh
-          position={[0, 0, faceOffset]}
-          onPointerDown={(e) => {
-            beginDrag("height", e);
-          }}
-        >
-          <coneGeometry args={[0.18, 0.34, 24]} />
-          <meshStandardMaterial color="#f59e0b" emissive="#d97706" emissiveIntensity={0.24} roughness={0.3} metalness={0.06} />
-        </mesh>
-        <Text position={[0, 0.32, faceOffset]} fontSize={0.11} color="#fde68a" anchorX="center" anchorY="middle">
-          Height
-        </Text>
-      </group>
-    </group>
   );
 }
 
@@ -1655,12 +1520,8 @@ export function Scene({
   onPlacementHover,
   onWallAdd,
   onToolComplete,
-  onWallEndpointDrag,
-  onWallMoveDrag,
-  onWallHeightDrag,
-  onDragStart,
-  onDragEnd,
-  onDragCancel,
+  onWallGeometryCommit,
+  onOpeningCommit,
   onWalkExit,
 }: {
   defaultWallHeight: number;
@@ -1682,59 +1543,65 @@ export function Scene({
   onPlacementHover: (preview: PlacementPreview) => void;
   onWallAdd?: (wall: DetectedWallSegment) => void;
   onToolComplete: () => void;
-  onWallEndpointDrag: (id: string, endpoint: "start" | "end", point: NormalizedPoint) => void;
-  onWallMoveDrag: (id: string, center: NormalizedPoint) => void;
-  onWallHeightDrag: (id: string, deltaM: number) => void;
-  onDragStart: () => void;
-  onDragEnd: () => void;
-  onDragCancel: () => void;
+  onWallGeometryCommit?: (walls: DetectedWallSegment[]) => void;
+  onOpeningCommit?: (kind: OpeningKind, original: Opening, updated: Opening) => void;
   onWalkExit: () => void;
 }) {
-  const [hoveredId, setHoveredId] = useState<string | null>(null);
-  const [wallDragging, setWallDragging] = useState(false);
   const [wallDraft, setWallDraft] = useState<WallDraft>(null);
   const orbitControlsRef = useRef<React.ComponentRef<typeof OrbitControls>>(null);
 
-  const renderWalls = walls;
   const { pw, ph } = usePlanScale();
 
   const { camera, size: viewport } = useThree();
   const [wallSnap, setWallSnap] = useState<WallDrawSnap | null>(null);
-  const drawSize = {
+  const sizeAt = (height = 0.06) => ({
     width: pw, height: ph,
     project: (p: NormalizedPoint) => {
-      const v = new THREE.Vector3((p.x - 0.5) * pw, 0.06, (p.y - 0.5) * ph).project(camera);
+      const v = new THREE.Vector3((p.x - 0.5) * pw, height, (p.y - 0.5) * ph).project(camera);
       return { x: (v.x + 1) * viewport.width / 2, y: (1 - v.y) * viewport.height / 2 };
     },
     unproject: (p: NormalizedPoint) => {
       const ray = new THREE.Raycaster();
       ray.setFromCamera(new THREE.Vector2(p.x / viewport.width * 2 - 1, 1 - p.y / viewport.height * 2), camera);
-      const hit = ray.ray.intersectPlane(new THREE.Plane(new THREE.Vector3(0, 1, 0), -0.06), new THREE.Vector3());
+      const hit = ray.ray.intersectPlane(new THREE.Plane(new THREE.Vector3(0, 1, 0), -height), new THREE.Vector3());
       return hit ? { x: hit.x / pw + 0.5, y: hit.z / ph + 0.5 } : { x: 0, y: 0 };
     },
-  };
+  });
+  const drawSize = sizeAt();
+  const editing = useThreePlanEditing({ walls, doors, windows, pw, ph, wallHeight: defaultWallHeight,
+    enabled: buildMode === "select" && !walkMode, sizeAt, onWallCommit: onWallGeometryCommit, onOpeningCommit });
+  const renderWalls = editing.walls, renderDoors = editing.doors, renderWindows = editing.windows;
+  const wallDragging = editing.active;
+  const selectTarget = (target: Selection) => { if (!editing.suppressClick.current) onSelect(target); };
   const connections = wallDraft ? wallDrawConnections({ id: "draft", type: "interior", x1: wallDraft.start.x,
     y1: wallDraft.start.y, x2: wallDraft.end.x, y2: wallDraft.end.y }, walls, drawSize) : [];
   const markers = [...connections, ...(wallSnap ? [wallSnap] : [])].filter((p, i, all) => all.findIndex(q => Math.hypot(p.x - q.x, p.y - q.y) < 1e-8) === i);
+  const endpoints = buildMode === "wall" ? renderWalls.flatMap(wall => [{ x: wall.x1, y: wall.y1 }, { x: wall.x2, y: wall.y2 }])
+    .filter((p, i, all) => all.findIndex(q => q.x === p.x && q.y === p.y) === i)
+    .filter(p => !markers.some(marker => Math.hypot(marker.x - p.x, marker.y - p.y) < 1e-8)) : [];
   const wallGeometries = useMemo(() => buildWallSolidGeometries(
-    wallSolidInputs(renderWalls, doors, windows, defaultWallHeight, pw, ph), pw, ph),
-    [renderWalls, doors, windows, defaultWallHeight, pw, ph]);
+    wallSolidInputs(renderWalls, renderDoors, renderWindows, defaultWallHeight, pw, ph), pw, ph),
+    [renderWalls, renderDoors, renderWindows, defaultWallHeight, pw, ph]);
   useEffect(() => () => wallGeometries.forEach(geometry => geometry.dispose()), [wallGeometries]);
-
-  const handleHover = (id: string | null) => {
-    setHoveredId(id);
-    onHoverChange(id);
-  };
 
   useEffect(() => {
     if (buildMode !== "select") onHoverTargetChange(null);
     if (buildMode !== "wall") { setWallDraft(null); setWallSnap(null); }
   }, [buildMode, onHoverTargetChange]);
 
+  useEffect(() => {
+    if (buildMode !== "wall") return;
+    const escape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") { setWallDraft(null); setWallSnap(null); onToolComplete(); }
+    };
+    window.addEventListener("keydown", escape);
+    return () => window.removeEventListener("keydown", escape);
+  }, [buildMode, onToolComplete]);
+
   const canPreviewTarget = capturesThreeTargetPointer(buildMode, "room");
   const isPlacementMode = buildMode === "door" || buildMode === "window";
   const activeTargetPreview =
-    buildMode === "select" ? hoverTarget ?? selectedTarget : hoverTarget;
+    buildMode === "select" ? selectedTarget ?? hoverTarget : hoverTarget;
   const selectedWallForEdit =
     buildMode === "select" && selectedTarget?.type === "wall"
       ? renderWalls.find((wall) => wall.id === selectedTarget.id) ?? null
@@ -1758,7 +1625,7 @@ export function Scene({
   };
 
   return (
-    <>
+    <group {...editing.events}>
       <ambientLight intensity={0.8} />
       <directionalLight position={[10, 16, 10]} intensity={1.2} castShadow />
       <pointLight position={[-8, 10, -8]} intensity={0.5} color="#60a5fa" />
@@ -1784,18 +1651,10 @@ export function Scene({
       />
 
       <WallDraftPreviewMesh draft={wallDraft} wallHeight={defaultWallHeight} />
-      {buildMode === "wall" && markers.map(marker => <group key={marker.key}
-        position={[(marker.x - 0.5) * pw, 0.07, (marker.y - 0.5) * ph]}
-        userData={{ wallDrawConnection: marker.kind }}>
-        <mesh rotation={[-Math.PI / 2, 0, 0]} raycast={() => null} renderOrder={100}>
-          <ringGeometry args={[0.08, 0.14, 32]} />
-          <meshBasicMaterial color="#22c55e" depthTest={false} depthWrite={false} side={THREE.DoubleSide} />
-        </mesh>
-        <mesh raycast={() => null} renderOrder={101}>
-          <sphereGeometry args={[0.055, 12, 12]} />
-          <meshBasicMaterial color="white" depthTest={false} depthWrite={false} />
-        </mesh>
-      </group>)}
+      {buildMode === "wall" && <>
+        {endpoints.map(point => <WallDrawMarker key={`${point.x}:${point.y}`} point={point} active={false} kind="endpoint" />)}
+        {markers.map(marker => <WallDrawMarker key={marker.key} point={marker} active kind={marker.kind} />)}
+      </>}
 
       {/* ── Rooms — ShapeGeometry flat tiles ── */}
       {rooms.map((room, i) => (
@@ -1803,9 +1662,9 @@ export function Scene({
           key={room.id}
           room={room}
           index={i}
-          hovered={hoveredId === room.id}
-          onHover={handleHover}
-          onSelect={canPreviewTarget ? (id) => onSelect({ type: "room", id }) : undefined}
+          hovered={activeTargetPreview?.type === "room" && activeTargetPreview.id === room.id}
+          onHover={onHoverChange}
+          onSelect={canPreviewTarget ? (id) => selectTarget({ type: "room", id }) : undefined}
           onTargetHover={canPreviewTarget ? onHoverTargetChange : undefined}
         />
       ))}
@@ -1813,15 +1672,18 @@ export function Scene({
       {/* ── Walls — split into sub-segments around door/window openings ── */}
       {renderWalls.map((wall) => {
         return (
+          <group key={wall.id} userData={{ wallBody: wall.id }} onPointerDown={event => {
+            if (buildMode === "select" && selectedTarget?.type === "wall" && selectedTarget.id === wall.id) editing.beginWall(wall, "move", event);
+          }}>
           <WallSegmentMesh
-            key={wall.id}
             wall={wall}
             wallHeight={defaultWallHeight}
-            doors={doors}
-            windows={windows}
+            doors={renderDoors}
+            windows={renderWindows}
             walls={renderWalls}
             geometry={wallGeometries.get(wall.id)!}
-            onSelect={capturesThreeTargetPointer(buildMode, "wall") ? (id, point) => onSelect({ type: "wall", id, point }) : undefined}
+            onEditMove={editing.move}
+            onSelect={capturesThreeTargetPointer(buildMode, "wall") ? (id, point) => selectTarget({ type: "wall", id, point }) : undefined}
             onPlacementHover={
               isPlacementMode
                 ? (id, point) => onPlacementHover({ wallId: id, point })
@@ -1830,25 +1692,44 @@ export function Scene({
             onPlacementLeave={isPlacementMode ? () => onPlacementHover(null) : undefined}
             onTargetHover={canPreviewTarget ? onHoverTargetChange : undefined}
           />
+          </group>
         );
       })}
 
-      {selectedWallForEdit && (
-        <WallEditGizmo
-          wall={selectedWallForEdit}
-          geometry={wallGeometries.get(selectedWallForEdit.id)!}
-          wallHeight={defaultWallHeight}
-          onEndpointDrag={onWallEndpointDrag}
-          onMoveDrag={onWallMoveDrag}
-          onHeightDrag={onWallHeightDrag}
-          onDragStateChange={(dragging) => {
-            setWallDragging(dragging);
-            if (dragging) onDragStart();
-            else onDragEnd();
-          }}
-          onDragCancel={onDragCancel}
-        />
-      )}
+      {selectedWallForEdit && <>
+        <group position={[(selectedWallForEdit.x1 + selectedWallForEdit.x2 - 1) * pw / 2, 0, (selectedWallForEdit.y1 + selectedWallForEdit.y2 - 1) * ph / 2]}
+          rotation={[0, -Math.atan2((selectedWallForEdit.y2 - selectedWallForEdit.y1) * ph, (selectedWallForEdit.x2 - selectedWallForEdit.x1) * pw), 0]}>
+          <WallMeshHighlight geometry={wallGeometries.get(selectedWallForEdit.id)!} color="#38bdf8" outlineOnly />
+        </group>
+        {onWallGeometryCommit && (["start", "end"] as const).map(end => <WallDrawMarker key={end}
+          point={end === "start" ? { x: selectedWallForEdit.x1, y: selectedWallForEdit.y1 } : { x: selectedWallForEdit.x2, y: selectedWallForEdit.y2 }}
+          height={getWallHeightM(selectedWallForEdit, defaultWallHeight) + 0.04} active kind="endpoint" color="#38bdf8"
+          handle={`wall:${end}`} onPointerDown={event => editing.beginWall(selectedWallForEdit, end, event)}
+          onPointerEnter={() => onHoverTargetChange(selectedTarget)} onPointerLeave={() => onHoverTargetChange(null)} />)}
+        {onWallGeometryCommit && <WallDrawMarker point={{ x: (selectedWallForEdit.x1 + selectedWallForEdit.x2) / 2, y: (selectedWallForEdit.y1 + selectedWallForEdit.y2) / 2 }}
+          height={getWallHeightM(selectedWallForEdit, defaultWallHeight) + 0.4} active kind="endpoint" color="#2563eb"
+          handle="wall:height" onPointerDown={event => editing.beginWall(selectedWallForEdit, "height", event)}
+          onPointerEnter={() => onHoverTargetChange(selectedTarget)} onPointerLeave={() => onHoverTargetChange(null)} />}
+      </>}
+      {editing.feedback.map(marker => <WallDrawMarker key={marker.key} point={marker} height={editing.height} active kind={marker.kind} />)}
+      {editing.rehostWallId && (() => {
+        const host = renderWalls.find(wall => wall.id === editing.rehostWallId)!;
+        return <group userData={{ openingRehostTarget: host.id }}
+          position={[(host.x1 + host.x2 - 1) * pw / 2, 0, (host.y1 + host.y2 - 1) * ph / 2]}
+          rotation={[0, -Math.atan2((host.y2 - host.y1) * ph, (host.x2 - host.x1) * pw), 0]}>
+          <WallMeshHighlight geometry={wallGeometries.get(host.id)!} color="#22c55e" />
+        </group>;
+      })()}
+      {buildMode === "select" && onOpeningCommit && (selectedTarget?.type === "door" || selectedTarget?.type === "window") && (() => {
+        const kind = selectedTarget.type;
+        const opening = (kind === "door" ? renderDoors : renderWindows).find(o => o.id === selectedTarget.id);
+        const g = opening && openingGeometry(opening, kind, renderWalls, pw, ph, defaultWallHeight);
+        if (!g || !opening) return null;
+        return (["start", "end"] as const).map(end => <WallDrawMarker key={end} point={g[end]} height={g.sill + g.height / 2}
+          active kind="endpoint" color={kind === "door" ? "#f59e0b" : "#f472b6"} handle={`${kind}:${end}`}
+          onPointerDown={event => editing.beginOpening(kind, opening, end, event)}
+          onPointerEnter={() => onHoverTargetChange(selectedTarget)} onPointerLeave={() => onHoverTargetChange(null)} />);
+      })()}
 
       {isPlacementMode && (
         <PlacementPreviewMesh
@@ -1860,42 +1741,51 @@ export function Scene({
       )}
 
       {/* ── Doors — wall-aligned via getOpeningTransform ── */}
-      {resolveOpenings(doors, windows, renderWalls, pw, ph, defaultWallHeight).active.filter(item => item.kind === "door").map(({ opening: door }) => (
+      {resolveOpenings(renderDoors, renderWindows, renderWalls, pw, ph, defaultWallHeight).active.filter(item => item.kind === "door").map(({ opening: door }) => (
+        <group key={door.id} userData={{ openingBody: "door", id: door.id }} onPointerDown={event => {
+          if (buildMode !== "select" || event.button !== 0) return;
+          editing.beginOpening("door", door, "move", event); onSelect({ type: "door", id: door.id });
+        }}>
         <DoorMesh
-          key={door.id}
           door={door}
           wallHeight={defaultWallHeight}
           walls={renderWalls}
-          onSelect={capturesThreeTargetPointer(buildMode, "door") ? (id) => onSelect({ type: "door", id }) : undefined}
+          onSelect={capturesThreeTargetPointer(buildMode, "door") ? (id) => selectTarget({ type: "door", id }) : undefined}
           onHover={canPreviewTarget ? onHoverTargetChange : undefined}
         />
+        </group>
       ))}
 
       {/* ── Windows — wall-aligned via getOpeningTransform ── */}
-      {resolveOpenings(doors, windows, renderWalls, pw, ph, defaultWallHeight).active.filter(item => item.kind === "window").map(({ opening: win }) => (
+      {resolveOpenings(renderDoors, renderWindows, renderWalls, pw, ph, defaultWallHeight).active.filter(item => item.kind === "window").map(({ opening: win }) => (
+        <group key={win.id} userData={{ openingBody: "window", id: win.id }} onPointerDown={event => {
+          if (buildMode !== "select" || event.button !== 0) return;
+          editing.beginOpening("window", win, "move", event); onSelect({ type: "window", id: win.id });
+        }}>
         <WindowMesh
-          key={win.id}
           win={win}
           wallHeight={defaultWallHeight}
           walls={renderWalls}
-          onSelect={capturesThreeTargetPointer(buildMode, "window") ? (id) => onSelect({ type: "window", id }) : undefined}
+          onSelect={capturesThreeTargetPointer(buildMode, "window") ? (id) => selectTarget({ type: "window", id }) : undefined}
           onHover={canPreviewTarget ? onHoverTargetChange : undefined}
         />
+        </group>
       ))}
 
-      {canPreviewTarget && (
+      {canPreviewTarget && [hoverTarget, selectedTarget].filter((target, index, all) => target && (index === 1 || target.type !== all[1]?.type || target.id !== all[1]?.id)).map(target => (
         <DeletePreviewMesh
-          target={activeTargetPreview}
+          key={`${target!.type}:${target!.id}`}
+          target={target}
           wallGeometries={wallGeometries}
-          showOutline={targetPreviewShowsOutline(activeTargetPreview, selectedTarget)}
+          showOutline={targetPreviewShowsOutline(target, selectedTarget)}
           rooms={rooms}
           walls={renderWalls}
-          doors={doors}
-          windows={windows}
+          doors={renderDoors}
+          windows={renderWindows}
           wallHeight={defaultWallHeight}
-            color="#3b82f6"
+          color={target === selectedTarget ? "#3b82f6" : "#93c5fd"}
         />
-      )}
+      ))}
 
       <CameraPresetController
         preset={viewPreset}
@@ -1921,7 +1811,7 @@ export function Scene({
           makeDefault
         />
       )}
-    </>
+    </group>
   );
 }
 
@@ -1947,6 +1837,8 @@ const RightPanel = ({
   onRoomPatch,
   onRoomDelete,
   onWallUpdate,
+  onWallGeometryCommit,
+  onOpeningRehost,
   onWallAdd,
   onWallDelete,
   onDoorAdd,
@@ -1985,7 +1877,6 @@ const RightPanel = ({
   const [showPlanReference, setShowPlanReference] = useState(true);
   // Temporarily retained for later restoration; the compact 3D workspace hides it.
   const showOriginalPlanWidget = false;
-  const [isDecorateOpen, setIsDecorateOpen] = useState(true);
   const [isPlanViewerOpen, setIsPlanViewerOpen] = useState(false);
   const [planZoom, setPlanZoom] = useState(1);
   const [originalPlanAspect, setOriginalPlanAspect] = useState<number | null>(null);
@@ -2049,6 +1940,15 @@ const RightPanel = ({
   const selectedWindowOption = findScgWindow(selectedWindow?.scgWindowCode);
   const selectedRoomFloorArea = selectedRoom ? getMeasuredRoomArea(selectedRoom, pw, ph, calibrated) : null;
   const selectedRoomTileCount = selectedRoomFloorArea != null ? estimateTileCount(selectedRoomFloorArea, selectedRoomTile) : null;
+  const selectedBoundaryWalls = selectedRoom ? roomBoundaryWalls(selectedRoom, walls) : [];
+  const boundaryHeights = selectedBoundaryWalls.map(wall => getWallHeightM(wall, wallHeightMeter));
+  const roomBoundaryHeight = boundaryHeights.length && boundaryHeights.every(height => Math.abs(height - boundaryHeights[0]) < 1e-8) ? boundaryHeights[0] : undefined;
+  const [roomHeightDraft, setRoomHeightDraft] = useState("");
+  useEffect(() => { setRoomHeightDraft(roomBoundaryHeight === undefined ? "" : String(roomBoundaryHeight)); }, [roomBoundaryHeight, selectedRoom?.id]);
+  const roomHeightMinimum = selectedRoom ? roomWallHeightMinimum({ rooms, walls, doors, windows, planW: pw, planH: ph, wallHeightMeter }, selectedRoom.id) : 0.5;
+  const wallFinishArea = useMemo(() => calibrated ? wallSolidInputs(walls, doors, windows, wallHeightMeter, pw, ph)
+    .reduce((area, input) => area + input.solids.reduce((sum, solid) => sum + (solid.tEnd - solid.tStart) * (solid.yEnd - solid.yStart), 0), 0) : null,
+    [calibrated, walls, doors, windows, wallHeightMeter, pw, ph]);
   const materialSummary = useMemo(() => {
     const unique = (items: string[]) => [...new Set(items.filter(Boolean))];
     return {
@@ -2252,69 +2152,6 @@ const RightPanel = ({
     });
   };
 
-  const dragSelectedWallEndpoint = (
-    id: string,
-    endpoint: "start" | "end",
-    point: NormalizedPoint,
-  ) => {
-    if (!onWallUpdate) return;
-    const wall = walls.find((item) => item.id === id);
-    if (!wall) return;
-
-    const anchor =
-      endpoint === "start"
-        ? { x: wall.x2, y: wall.y2 }
-        : { x: wall.x1, y: wall.y1 };
-    const current =
-      endpoint === "start"
-        ? { x: wall.x1, y: wall.y1 }
-        : { x: wall.x2, y: wall.y2 };
-    const axisX = current.x - anchor.x;
-    const axisY = current.y - anchor.y;
-    const axisLength = Math.sqrt(axisX * axisX + axisY * axisY);
-    if (axisLength < 1e-6) return;
-
-    const ux = axisX / axisLength;
-    const uy = axisY / axisLength;
-    const rawDistance = (point.x - anchor.x) * ux + (point.y - anchor.y) * uy;
-    const distance = Math.max(0.01, rawDistance);
-    const projected = {
-      x: clamp01(anchor.x + ux * distance),
-      y: clamp01(anchor.y + uy * distance),
-    };
-
-    if (endpoint === "start") {
-      onWallUpdate(id, "x1", projected.x);
-      onWallUpdate(id, "y1", projected.y);
-      return;
-    }
-    onWallUpdate(id, "x2", projected.x);
-    onWallUpdate(id, "y2", projected.y);
-  };
-
-  const moveSelectedWall = (id: string, center: NormalizedPoint) => {
-    if (!onWallUpdate) return;
-    const wall = walls.find((item) => item.id === id);
-    if (!wall) return;
-
-    const dx = wall.x2 - wall.x1;
-    const dy = wall.y2 - wall.y1;
-    const halfDx = dx / 2;
-    const halfDy = dy / 2;
-    onWallUpdate(id, "x1", clamp01(center.x - halfDx));
-    onWallUpdate(id, "y1", clamp01(center.y - halfDy));
-    onWallUpdate(id, "x2", clamp01(center.x + halfDx));
-    onWallUpdate(id, "y2", clamp01(center.y + halfDy));
-  };
-
-  const resizeSelectedWallHeight = (id: string, deltaM: number) => {
-    if (!onWallUpdate) return;
-    const wall = walls.find((item) => item.id === id);
-    if (!wall) return;
-    const current = getWallHeightM(wall, wallHeightMeter);
-    onWallUpdate(id, "wallHeight", Math.max(1.2, Math.min(8, current + deltaM)));
-  };
-
   const handleExportGlb = async () => {
     await exportFloorPlanGlb({
       furniture,
@@ -2404,9 +2241,9 @@ const RightPanel = ({
   };
 
   return (
-    <div className="flex-1 flex items-center justify-center bg-background relative overflow-hidden">
+    <div className="relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-background">
       {!generated ? (
-        <div className="flex flex-col items-center gap-4">
+        <div className="flex flex-1 flex-col items-center justify-center gap-4">
           <div className="w-16 h-16 rounded-2xl bg-surface-raised border border-border flex items-center justify-center">
             <Box className="w-8 h-8 text-muted-foreground" />
           </div>
@@ -2419,12 +2256,44 @@ const RightPanel = ({
         </div>
       ) : (
         <PlanScaleCtx.Provider value={planScale}>
+        <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+        <div className="relative z-30 flex w-full shrink-0 items-center justify-between gap-3 border-b border-border bg-card/30 px-5 py-3">
+          <div className="flex min-w-0 items-center gap-2">
+            <Box className="h-4 w-4 shrink-0 text-primary" />
+            <div className="min-w-0"><p className="text-sm font-semibold text-foreground">3D View</p><p className="text-[11px] text-muted-foreground">Explore and edit your space in 3D</p></div>
+          </div>
+          <div className="flex items-center gap-3 whitespace-nowrap">
+            <button onClick={() => { setBuildMode("select"); setIsAddMenuOpen(false); }} className={`inline-flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-[11px] font-medium transition-colors ${buildMode === "select" ? "border-blue-600 bg-blue-600 text-white shadow-sm" : "border-border bg-background text-foreground hover:bg-accent"}`}><MousePointer2 className="h-3.5 w-3.5" />Select</button>
+            <div ref={addMenuRef} className={`relative flex items-center gap-2 rounded-lg border px-3 py-1.5 transition-all duration-200 ${buildMode !== "select" ? "border-blue-500/60 bg-blue-500/10" : "border-border bg-card/80"}`}>
+              {buildMode === "select" ? <>
+                <button onClick={() => setIsAddMenuOpen(open => !open)} aria-expanded={isAddMenuOpen} className="flex items-center gap-1.5 text-[11px] font-medium text-blue-500 transition-colors hover:text-blue-400"><Plus className="h-3.5 w-3.5" />Add Element <ChevronDown className={`h-3 w-3 transition-transform ${isAddMenuOpen ? "rotate-180" : ""}`} /></button>
+                {isAddMenuOpen && <div className="absolute left-0 top-full z-50 mt-2 w-36 rounded-lg border border-border bg-card p-1 shadow-xl">
+                  {([{ id: "wall", label: "Wall", Icon: Pencil }, { id: "door", label: "Door", Icon: DoorOpen }, { id: "window", label: "Window", Icon: AppWindow }] as const).map(({ id, label, Icon }) => <button key={id} onClick={() => { setBuildMode(id); setIsAddMenuOpen(false); }} className="flex w-full items-center gap-2 rounded px-2 py-2 text-left text-xs hover:bg-accent"><Icon className="h-3.5 w-3.5" />{label}</button>)}
+                </div>}
+              </> : <>
+                {buildMode === "wall" ? <Pencil className="h-3.5 w-3.5 shrink-0 animate-pulse text-blue-400" /> : buildMode === "door" ? <DoorOpen className="h-3.5 w-3.5 shrink-0 animate-pulse text-blue-400" /> : <AppWindow className="h-3.5 w-3.5 shrink-0 animate-pulse text-blue-400" />}
+                <span className="whitespace-nowrap text-[11px] font-medium text-blue-300">{buildMode === "wall" ? "Click start and end point" : openingDraft ? "Click opening end on the same wall" : "Click opening start on a wall"}</span>
+                {buildMode === "wall" && onWallHeightChange && <label className="flex items-center gap-1.5 whitespace-nowrap text-[11px] font-medium text-blue-300">New wall H (m)
+                  <input aria-label="Default wall height (m)" key={wallHeightMeter} type="number" min="0.5" step="0.1" defaultValue={wallHeightMeter}
+                    onBlur={e => { const value = Number(e.target.value); if (value > 0) onWallHeightChange(value); }}
+                    className="h-7 w-16 rounded-md border border-border bg-background px-1.5 text-xs font-mono text-foreground outline-none" /></label>}
+                <button onClick={() => { setBuildMode("select"); setIsAddMenuOpen(false); }} aria-label="Cancel Add Element" className="rounded p-1 text-muted-foreground hover:bg-accent hover:text-foreground"><X className="h-3.5 w-3.5" /></button>
+              </>}
+            </div>
+            <button onClick={toggleWalkMode} className={`inline-flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-[11px] font-medium transition-colors ${walkMode ? "border-blue-600 bg-blue-600 text-white" : "border-border bg-background text-foreground hover:bg-accent"}`}><Move3D className="h-3.5 w-3.5" />{walkMode ? "Walk Mode On" : "Walk Mode"}</button>
+            <span className="mx-1 h-4 w-px bg-border" />
+            <div className="flex overflow-hidden rounded-lg border border-border bg-card/80"><button onClick={onUndo} disabled={!canUndo} aria-label="Undo" title="Undo (Ctrl/Cmd + Z)" className="p-1.5 text-muted-foreground hover:bg-accent hover:text-foreground disabled:opacity-35"><RotateCcw className="h-3.5 w-3.5" /></button><button onClick={onRedo} disabled={!canRedo} aria-label="Redo" title="Redo (Ctrl/Cmd + Shift + Z)" className="border-l border-border p-1.5 text-muted-foreground hover:bg-accent hover:text-foreground disabled:opacity-35"><RotateCcw className="h-3.5 w-3.5 -scale-x-100" /></button></div>
+          </div>
+          <button onClick={handleExportGlb} className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-background px-3 py-1.5 text-[11px] font-medium text-foreground transition-colors hover:bg-accent" title="Export a .glb file for Blender"><Download className="h-3.5 w-3.5" />Export GLB</button>
+        </div>
+        <div className="flex min-h-0 min-w-0 flex-1">
+          <div role="region" aria-label="3D canvas" className="relative min-h-0 min-w-0 flex-1 overflow-hidden">
           <Canvas
             camera={{
               position: [camDist * 0.7, camDist * 0.5, camDist * 0.7],
               fov: 45,
             }}
-            style={{ width: "100%", height: "100%", cursor: buildMode === "wall" || hasValidOpeningTarget ? "cell" : "default" }}
+            style={{ width: "100%", height: "100%", cursor: threeInteractionCursor(buildMode, !!hoverTarget, hasValidOpeningTarget) }}
             onPointerMissed={clearSelect}
             onContextMenu={event => event.preventDefault()}
           >
@@ -2449,12 +2318,14 @@ const RightPanel = ({
               onPlacementHover={setPlacementPreview}
               onWallAdd={onWallAdd}
               onToolComplete={() => setBuildMode((current) => nextThreeToolAfterCreation(current))}
-              onWallEndpointDrag={dragSelectedWallEndpoint}
-              onWallMoveDrag={moveSelectedWall}
-              onWallHeightDrag={resizeSelectedWallHeight}
-              onDragStart={() => projectActions.begin({ label: "wall geometry change" })}
-              onDragEnd={() => projectActions.commit()}
-              onDragCancel={() => projectActions.cancel()}
+              onWallGeometryCommit={onWallGeometryCommit}
+              onOpeningCommit={(kind, original, updated) => {
+                if (updated.wallId !== original.wallId) {
+                  const g = openingGeometry(updated, kind, walls, pw, ph, wallHeightMeter);
+                  if (g) onOpeningRehost?.(kind, original.id, g.wall.id, { x: (g.start.x + g.end.x) / 2, y: (g.start.y + g.end.y) / 2 });
+                } else if (kind === "door") onDoorUpdate?.(original.id, "wallSpan", updated.wallSpan);
+                else onWindowUpdate?.(original.id, "wallSpan", updated.wallSpan);
+              }}
               onWalkExit={exitWalkMode}
             />
           </Canvas>
@@ -2651,69 +2522,56 @@ const RightPanel = ({
             </button>
           </div>
 
-          <div className="absolute inset-x-0 top-0 z-30 flex items-center justify-between gap-3 border-b border-border bg-card/30 px-5 py-3">
-            <div className="flex min-w-0 items-center gap-2">
-              <Box className="h-4 w-4 shrink-0 text-primary" />
-              <div className="min-w-0"><p className="text-sm font-semibold text-foreground">3D View</p><p className="text-[11px] text-muted-foreground">Explore and edit your space in 3D</p></div>
-            </div>
-            <div className="flex items-center gap-3 whitespace-nowrap">
-              <button onClick={() => { setBuildMode("select"); setIsAddMenuOpen(false); }} className={`inline-flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-[11px] font-medium transition-colors ${buildMode === "select" ? "border-blue-600 bg-blue-600 text-white shadow-sm" : "border-border bg-background text-foreground hover:bg-accent"}`}><MousePointer2 className="h-3.5 w-3.5" />Select</button>
-              <div ref={addMenuRef} className={`relative flex items-center gap-2 rounded-lg border px-3 py-1.5 transition-all duration-200 ${buildMode !== "select" ? "border-blue-500/60 bg-blue-500/10" : "border-border bg-card/80"}`}>
-                {buildMode === "select" ? <>
-                  <button onClick={() => setIsAddMenuOpen(open => !open)} aria-expanded={isAddMenuOpen} className="flex items-center gap-1.5 text-[11px] font-medium text-blue-500 transition-colors hover:text-blue-400"><Plus className="h-3.5 w-3.5" />Add Element <ChevronDown className={`h-3 w-3 transition-transform ${isAddMenuOpen ? "rotate-180" : ""}`} /></button>
-                  {isAddMenuOpen && <div className="absolute left-0 top-full z-50 mt-2 w-36 rounded-lg border border-border bg-card p-1 shadow-xl">
-                    {([{ id: "wall", label: "Wall", Icon: Pencil }, { id: "door", label: "Door", Icon: DoorOpen }, { id: "window", label: "Window", Icon: AppWindow }] as const).map(({ id, label, Icon }) => <button key={id} onClick={() => { setBuildMode(id); setIsAddMenuOpen(false); }} className="flex w-full items-center gap-2 rounded px-2 py-2 text-left text-xs hover:bg-accent"><Icon className="h-3.5 w-3.5" />{label}</button>)}
-                  </div>}
-                </> : <>
-                  {buildMode === "wall" ? <Pencil className="h-3.5 w-3.5 shrink-0 animate-pulse text-blue-400" /> : buildMode === "door" ? <DoorOpen className="h-3.5 w-3.5 shrink-0 animate-pulse text-blue-400" /> : <AppWindow className="h-3.5 w-3.5 shrink-0 animate-pulse text-blue-400" />}
-                  <span className="whitespace-nowrap text-[11px] font-medium text-blue-300">{buildMode === "wall" ? "Click start and end point" : openingDraft ? "Click opening end on the same wall" : "Click opening start on a wall"}</span>
-                  <button onClick={() => { setBuildMode("select"); setIsAddMenuOpen(false); }} aria-label="Cancel Add Element" className="rounded p-1 text-muted-foreground hover:bg-accent hover:text-foreground"><X className="h-3.5 w-3.5" /></button>
-                </>}
-              </div>
-              <button onClick={toggleWalkMode} className={`inline-flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-[11px] font-medium transition-colors ${walkMode ? "border-blue-600 bg-blue-600 text-white" : "border-border bg-background text-foreground hover:bg-accent"}`}><Move3D className="h-3.5 w-3.5" />{walkMode ? "Walk Mode On" : "Walk Mode"}</button>
-              <span className="mx-1 h-4 w-px bg-border" />
-              <div className="flex overflow-hidden rounded-lg border border-border bg-card/80"><button onClick={onUndo} disabled={!canUndo} aria-label="Undo" title="Undo (Ctrl/Cmd + Z)" className="p-1.5 text-muted-foreground hover:bg-accent hover:text-foreground disabled:opacity-35"><RotateCcw className="h-3.5 w-3.5" /></button><button onClick={onRedo} disabled={!canRedo} aria-label="Redo" title="Redo (Ctrl/Cmd + Shift + Z)" className="border-l border-border p-1.5 text-muted-foreground hover:bg-accent hover:text-foreground disabled:opacity-35"><RotateCcw className="h-3.5 w-3.5 -scale-x-100" /></button></div>
-            </div>
-            <button onClick={handleExportGlb} className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-background px-3 py-1.5 text-[11px] font-medium text-foreground transition-colors hover:bg-accent" title="Export a .glb file for Blender"><Download className="h-3.5 w-3.5" />Export GLB</button>
-          </div>
-
           <div className="absolute bottom-5 left-5 z-20 flex h-28 w-28 items-center justify-center rounded-full border border-border bg-card/95 text-[10px] font-semibold text-slate-500 shadow-lg backdrop-blur-md" aria-label="View cube orientation">
             <button onClick={() => setViewPreset("top")} title="Top view" className="absolute top-2 rounded px-2 py-1 hover:bg-accent">N</button><button onClick={() => setViewPreset("front")} title="Front view" className="absolute bottom-2 rounded px-2 py-1 hover:bg-accent">S</button><button onClick={() => setViewPreset("side")} title="Side view" className="absolute left-1 rounded px-2 py-1 hover:bg-accent">W</button><button onClick={() => setViewPreset("side")} title="Side view" className="absolute right-1 rounded px-2 py-1 hover:bg-accent">E</button>
             <button onClick={() => setViewPreset("perspective")} title="Perspective view" className="h-8 w-8 rotate-[30deg] transform rounded-sm border border-slate-300 bg-gradient-to-br from-white via-slate-100 to-slate-300 shadow-sm transition-transform hover:scale-110 dark:border-slate-600 dark:from-slate-200 dark:to-slate-400" />
           </div>
 
-          <div className="absolute bottom-4 right-4 top-20 z-20 flex w-[320px] max-w-[calc(100%-2rem)] flex-col gap-3 pointer-events-none">
-          <div className="pointer-events-auto flex min-h-0 flex-col overflow-hidden rounded-2xl border border-border bg-card/95 p-4 shadow-xl backdrop-blur-md">
-            <div className={`flex shrink-0 items-center justify-between gap-2 ${isDecorateOpen ? "mb-3" : ""}`}>
-              <div className="flex min-w-0 items-center gap-2">
-                <Palette className="h-4 w-4 shrink-0 text-primary" />
-                <div className="min-w-0 break-words">
-                  <div className="text-sm font-semibold text-foreground">Decoration</div>
-                  <div className="text-xs text-muted-foreground" role="status" aria-live="polite">
-                    {selection ? `${({ room: "ห้อง", wall: "ผนัง", door: "ประตู", window: "หน้าต่าง" })[selection.type]} · ${selectedRoom?.name ?? selection.id}` : "Select an object to start decorating."}
-                  </div>
-                </div>
+          </div>
+          <aside aria-label="3D properties and decoration" className="relative flex min-h-0 w-[280px] shrink-0 flex-col overflow-hidden border-l border-border bg-card/30 text-xs">
+            <div className="min-h-0 flex-1 space-y-3 overflow-y-auto overscroll-contain p-3 [&_input:not([type=color]):not([type=checkbox])]:h-8 [&_input:not([type=color]):not([type=checkbox])]:w-full [&_input:not([type=color]):not([type=checkbox])]:rounded-md [&_input:not([type=color]):not([type=checkbox])]:border [&_input:not([type=color]):not([type=checkbox])]:border-border [&_input:not([type=color]):not([type=checkbox])]:bg-background [&_input:not([type=color]):not([type=checkbox])]:px-2 [&_input]:text-xs [&_select]:h-8 [&_select]:rounded-md [&_select]:text-xs">
+            {selection && <section aria-label="Properties" className="space-y-3">
+              <div className="flex items-center justify-between gap-2" aria-live="polite">
+                <h3 className="text-xs font-semibold text-foreground">Properties · {({ room: "Floor", wall: "Wall", door: "Door", window: "Window" })[selection.type]}</h3>
+                <button onClick={() => setSelection(null)} aria-label="Clear selection" className="rounded p-1 text-muted-foreground hover:bg-accent hover:text-foreground"><X className="h-3.5 w-3.5" /></button>
               </div>
-              <div className="flex items-center gap-1">
-                {selection && (
-                  <button onClick={() => setSelection(null)} className="rounded-lg p-2 text-muted-foreground hover:bg-accent hover:text-foreground" title="ยกเลิกการเลือก" aria-label="ยกเลิกการเลือก">
-                    <X className="h-4 w-4" />
+              {selectedRoom && <div className="space-y-2">
+                <div className="flex justify-between text-[11px]"><span className="text-muted-foreground">Floor area</span><output>{selectedRoomFloorArea?.toFixed(2) ?? "\u2014"} m²</output></div>
+                <label className="block space-y-1 text-[11px] text-muted-foreground">Room Wall Height (m)
+                  <input aria-label="Room Wall Height (m)" type="number" min={roomHeightMinimum} step="0.1"
+                    value={roomHeightDraft} placeholder="Mixed"
+                    onBlur={() => setRoomHeightDraft(roomBoundaryHeight === undefined ? "" : String(roomBoundaryHeight))}
+                    onChange={event => { setRoomHeightDraft(event.target.value); const value = Number(event.target.value); if (event.target.value && Number.isFinite(value) && value >= roomHeightMinimum) onRoomUpdate?.(selectedRoom.id, "wallHeight", value); }} />
+                </label>
+                <p className="text-[10px] leading-4 text-muted-foreground">Applies to this room's boundary walls, including shared walls. Existing openings keep their size.</p>
+              </div>}
+              {selectedWall && <div className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <span className="text-[11px] font-medium text-foreground">Wall</span>
+                  <button
+                    onClick={() => onWallUpdate?.(selectedWall.id, "type", selectedWall.type === "exterior" ? "interior" : "exterior")}
+                    className="rounded-lg bg-primary/10 px-2 py-1 text-[10px] font-mono text-primary"
+                  >
+                    {selectedWall.type}
                   </button>
-                )}
-                <button
-                  onClick={() => setIsDecorateOpen((open) => !open)}
-                  className="rounded-lg p-2 text-muted-foreground hover:bg-accent hover:text-foreground"
-                  aria-expanded={isDecorateOpen}
-                  aria-controls="decorate-content"
-                  title={isDecorateOpen ? "Minimize Decorate" : "Expand Decorate"}
-                  aria-label={isDecorateOpen ? "Minimize Decorate" : "Expand Decorate"}
-                >
-                  <ChevronDown className={`h-4 w-4 transition-transform ${isDecorateOpen ? "" : "-rotate-90"}`} />
-                </button>
-              </div>
-            </div>
+                </div>                <div className="space-y-2 rounded-xl border border-border p-3 text-xs">
+                  <div>Length (m) <output aria-label="Length (m)">{calibrated ? getWallLengthM(selectedWall, pw, ph).toFixed(2) : "—"}</output></div>
+                  <div>Width / thickness (m) <output>{calibrated || selectedWall.thickness > 0 ? getWallThicknessM(selectedWall, pw, ph).toFixed(2) : "—"}</output></div>
+                  <label>Height (m) <input aria-label="Wall height (m)" type="number" min="0.5" step="0.1"
+                    key={`${selectedWall.id}:${selectedWall.wallHeight}`} defaultValue={getWallHeightM(selectedWall, wallHeightMeter)}
+                    onBlur={e => { const value = Number(e.target.value); if (value > 0) onWallUpdate?.(selectedWall.id, "wallHeight", value); }} /></label>
+                  <button onClick={onBack} className="text-primary underline">Edit wall dimensions in Review</button>
+                </div>
+              </div>}
+            {(selectedDoor || selectedWindow) && <OpeningDimensions opening={(selectedDoor || selectedWindow)!}
+              kind={selectedDoor ? "door" : "window"} walls={walls} doors={doors} windows={windows}
+              pw={pw} ph={ph} wallHeight={wallHeightMeter} calibrated={calibrated}
+              onEdit={(field, value) => selectedDoor ? onDoorUpdate?.(selectedDoor.id, field, value) : onWindowUpdate?.(selectedWindow!.id, field, value)} />}
 
-            {isDecorateOpen && <div id="decorate-content" className="min-h-0 overflow-y-auto overscroll-contain pr-2 space-y-4 [&_label]:text-[13px] [&_input]:text-sm [&_select]:text-sm">
+            </section>}
+            <section aria-label="Decoration" className={`space-y-3 ${selection ? "border-t border-border pt-3" : ""}`}>
+              <h3 className="flex items-center gap-2 text-xs font-semibold"><Palette className="h-3.5 w-3.5 text-primary" />Decoration</h3>
+            {!selection && <p className="rounded-xl border border-dashed border-border px-3 py-2 text-[11px] leading-5 text-muted-foreground">Select a floor, wall, door, or window in the 3D view to edit it.</p>}
             {!calibrated && <p className="rounded-xl bg-primary/10 p-3 text-xs text-muted-foreground">Calibrate scale in Review to estimate quantities</p>}
             {/* {selection && <p className="rounded-xl bg-primary/10 p-3 text-xs leading-5 text-muted-foreground">ปรับแล้วเห็นผลทันทีในฉาก · ใช้ปุ่มย้อนกลับเพื่อเลิกทำ</p>} */}
             {!selection && (
@@ -2757,7 +2615,7 @@ const RightPanel = ({
             {selectedRoom && (
               <div className="space-y-3">
                 <fieldset className="space-y-3 rounded-xl border border-border p-3">
-                <legend className="px-1 text-sm font-semibold">Meterials</legend>
+                <legend className="px-1 text-sm font-semibold">Materials</legend>
                 <MaterialSwatches label="Tiles" value={selectedRoom.tileCode ?? selectedRoomTile.code}
                   onChange={code => applyTileToRoom(selectedRoom.id, code)}
                   options={SCG_TILE_CATALOG.map(tile => ({ id: tile.code, name: tile.name, detail: `${tile.code} · ${tile.sizeCm} cm`, style: {
@@ -2811,20 +2669,7 @@ const RightPanel = ({
                   />
                 </label>
                 </fieldset>
-                <fieldset className="space-y-3 rounded-xl border border-border p-3">
-                <legend className="px-1 text-sm font-semibold">size</legend>
-                <label className="block text-[11px] text-muted-foreground">
-                  height (m)
-                  <input
-                    type="number"
-                    min={1.8}
-                    step={0.1}
-                    value={safeNum(selectedRoom.wallHeight, 2.8)}
-                    onChange={(e) => onRoomUpdate?.(selectedRoom.id, "wallHeight", parseFloat(e.target.value) || 2.8)}
-                    className="mt-1 h-9 w-full rounded-xl border border-border bg-background px-3 text-xs text-foreground"
-                  />
-                </label>
-                </fieldset>
+
               </div>
             )}
 
@@ -2832,15 +2677,7 @@ const RightPanel = ({
               <div className="space-y-3">
                 <fieldset className="space-y-3 rounded-xl border border-border p-3">
                 <legend className="px-1 text-sm font-semibold">สีและวัสดุผนัง</legend>
-                <div className="flex items-center justify-between">
-                  <span className="text-[11px] font-medium text-foreground">Wall</span>
-                  <button
-                    onClick={() => onWallUpdate?.(selectedWall.id, "type", selectedWall.type === "exterior" ? "interior" : "exterior")}
-                    className="rounded-lg bg-primary/10 px-2 py-1 text-[10px] font-mono text-primary"
-                  >
-                    {selectedWall.type}
-                  </button>
-                </div>
+
                 <MaterialSwatches label="สีทาผนัง" value={selectedWall.wallColor && selectedWall.wallColor !== selectedWallPaint.hex ? undefined : selectedWall.scgPaintCode ?? selectedWallPaint.code}
                   onChange={code => applyPaintToWall(selectedWall.id, code)}
                   options={SCG_PAINT_CATALOG.map(paint => ({ id: paint.code, name: paint.name, detail: paint.code, style: { backgroundColor: paint.hex } }))} />
@@ -2868,14 +2705,7 @@ const RightPanel = ({
                   />
                 </label>
                 </fieldset>
-                <div className="space-y-2 rounded-xl border border-border p-3 text-xs">
-                  <div>Length (m) <output aria-label="Length (m)">{calibrated ? getWallLengthM(selectedWall, pw, ph).toFixed(2) : "—"}</output></div>
-                  <div>Width / thickness (m) <output>{calibrated || selectedWall.thickness > 0 ? getWallThicknessM(selectedWall, pw, ph).toFixed(2) : "—"}</output></div>
-                  <label>Height (m) <input aria-label="Wall height (m)" type="number" min="0.5" step="0.1"
-                    key={`${selectedWall.id}:${selectedWall.wallHeight}`} defaultValue={getWallHeightM(selectedWall, wallHeightMeter)}
-                    onBlur={e => { const value = Number(e.target.value); if (value > 0) onWallUpdate?.(selectedWall.id, "wallHeight", value); }} /></label>
-                  <button onClick={onBack} className="text-primary underline">Edit wall dimensions in Review</button>
-                </div>
+
                 {/* <div className="grid grid-cols-2 gap-2">
                   <button onClick={() => setBuildMode("door")} className="inline-flex items-center justify-center gap-1 rounded-xl border border-border bg-background px-3 py-2 text-[11px] text-foreground hover:bg-accent">
                     <Plus className="h-3 w-3" /> Door
@@ -2887,14 +2717,6 @@ const RightPanel = ({
               </div>
             )}
 
-            {onWallHeightChange && <label className="text-xs">Default height for new walls (m)
-              <input aria-label="Default wall height (m)" key={wallHeightMeter} type="number" min="0.5" step="0.1" defaultValue={wallHeightMeter}
-                onBlur={e => { const value = Number(e.target.value); if (value > 0) onWallHeightChange(value); }} />
-            </label>}
-            {(selectedDoor || selectedWindow) && <OpeningDimensions opening={(selectedDoor || selectedWindow)!}
-              kind={selectedDoor ? "door" : "window"} walls={walls} doors={doors} windows={windows}
-              pw={pw} ph={ph} wallHeight={wallHeightMeter} calibrated={calibrated}
-              onEdit={(field, value) => selectedDoor ? onDoorUpdate?.(selectedDoor.id, field, value) : onWindowUpdate?.(selectedWindow!.id, field, value)} />}
             {(selectedDoor || selectedWindow) && (
               <fieldset className="space-y-3 rounded-xl border border-border p-3">
                 <legend className="px-1 text-sm font-semibold">รุ่นและสีวัสดุ</legend>
@@ -3005,11 +2827,14 @@ const RightPanel = ({
                 Delete selected
               </button>
             )}
-            </div>}
-          </div>
-
-          <details className="pointer-events-auto shrink-0 rounded-2xl border border-border bg-card/95 p-3 shadow-xl backdrop-blur-md">
-            <summary className="cursor-pointer text-sm font-medium">Material Summary</summary>
+            </section>
+            </div>
+            <div className="max-h-[40%] shrink-0 overflow-y-auto border-t border-border bg-card/30">
+          <details open>
+            <summary className="sticky top-0 z-10 cursor-pointer bg-card p-3 text-xs font-semibold">Material Summary</summary>
+            <div className="max-h-[30vh] space-y-3 overflow-y-auto overscroll-contain px-3 pb-3">
+              <div className="flex justify-between gap-2 text-[11px]"><span className="text-muted-foreground">Wall finish area</span><output aria-label="Wall finish area">{wallFinishArea?.toFixed(2) ?? "\u2014"} m²</output></div>
+              <p className="text-[10px] text-muted-foreground">One face per wall, excluding openings.</p>
             <div className="mb-2 flex items-center gap-2">
               <div>
                 {/* <p className="text-[11px] font-semibold text-foreground">Material schedule</p> */}
@@ -3033,9 +2858,12 @@ const RightPanel = ({
                 </div>
               ))}
             </div>
+            </div>
           </details>
-
+            </div>
+          </aside>
           </div>
+        </div>
 
         </PlanScaleCtx.Provider>
       )}

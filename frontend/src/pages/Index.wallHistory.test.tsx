@@ -25,12 +25,21 @@ vi.mock("@/components/SplashScreen", () => ({ default: () => null }));
 vi.mock("@/services/floorplanAI", () => ({ detectFloorPlan: vi.fn() }));
 vi.mock("@/components/Sidebar", () => ({ default: (props: ComponentProps<typeof Sidebar>) => <>
     <button onClick={() => props.onProjectImport(project)}>Import</button>
+    <button onClick={() => props.onProjectImport({ ...project, meta: { ...project.meta, calibrationStatus: "calibrated" } })}>Import calibrated</button>
     <output data-testid="json">{JSON.stringify(props.projectData.walls)}</output>
     <output data-testid="json-furniture">{JSON.stringify(props.projectData.furniture)}</output>
 </> }));
 vi.mock("@/components/RightPanel", () => ({ default: (props: ComponentProps<typeof RightPanel>) =>
-    <output data-testid="3d">{JSON.stringify({ walls: props.walls, doors: props.doors, windows: props.windows, furniture: props.furniture })}</output> }));
+    <><output data-testid="3d">{JSON.stringify({ walls: props.walls, doors: props.doors, windows: props.windows, furniture: props.furniture })}</output>
+      <output data-testid="3d-scale">{JSON.stringify([props.scale, props.planWidth, props.planHeight, props.calibrationStatus])}</output>
+      <button onClick={() => props.onWallGeometryCommit?.(props.walls!.map((wall, i) => i ? wall : { ...wall, x1: wall.x1 + 0.1, x2: wall.x2 + 0.1 }))}>3D move wall</button>
+      <button onClick={() => props.onOpeningRehost?.("door", "manual-door", "b", { x: 0.5, y: 0.5 })}>3D rehost door</button>
+      <button onClick={props.onUndo}>3D undo</button><button onClick={props.onRedo}>3D redo</button>
+    </> }));
 vi.mock("@/components/WallReview", () => ({ default: (props: ComponentProps<typeof WallReview>) => <>
+    <button onClick={() => props.onWallLengthCommit?.({ wallId: "a", length: 5, anchor: "start", confirm: true }, {
+        walls: props.walls!, rooms: props.rooms, doors: props.doors!, windows: props.windows!, confirmedDimensions: props.confirmedDimensions,
+    }, props.planWidth!, props.planHeight!)}>Commit length</button>
     <button onClick={() => {
         const walls = props.walls!;
         props.onWallGeometryCommit!(editWallGeometry(walls, { ...walls[0], x2: 0.6, y2: 0.3 }, "end")!);
@@ -45,7 +54,51 @@ vi.mock("@/components/WallReview", () => ({ default: (props: ComponentProps<type
 </> }));
 afterEach(cleanup);
 
-it("opens the uploaded-plan furniture editor and returns to review", () => {
+it("propagates a Review dimension edit to JSON and 3D as one undo step", () => {
+    render(<Index />);
+    fireEvent.click(screen.getByText("Upload Floor Plan")); fireEvent.click(screen.getByText("Import calibrated"));
+    fireEvent.click(screen.getByText("Back to Review")); fireEvent.click(screen.getByText("Commit length"));
+    const edited = JSON.parse(screen.getByTestId("json").textContent!);
+    expect(edited[0].x2).toBeCloseTo(0.6);
+    expect(edited[1]).toMatchObject({ x1: 0.6, x2: 0.6 });
+    fireEvent.click(screen.getByText("Undo"));
+    expect(JSON.parse(screen.getByTestId("json").textContent!)).toEqual(project.walls);
+    expect(screen.getByText("Undo")).toBeDisabled();
+    fireEvent.click(screen.getByText("Redo")); fireEvent.click(screen.getByText("Generate"));
+    expect(JSON.parse(screen.getByTestId("3d").textContent!).walls).toEqual(edited);
+    expect(JSON.parse(screen.getByTestId("3d-scale").textContent!).slice(0, 3)).toEqual([1, 10, 10]);
+});
+
+it("commits 3D wall and opening drags atomically with undo while preserving scale and opening size", () => {
+    render(<Index />);
+    fireEvent.click(screen.getByText("Upload Floor Plan"));
+    fireEvent.click(screen.getByText("Import"));
+    fireEvent.click(screen.getByText("Back to Review"));
+    fireEvent.click(screen.getByText("Create door"));
+    fireEvent.click(screen.getByText("Generate"));
+    const read = () => JSON.parse(screen.getByTestId("3d").textContent!);
+    const before = read(), scale = screen.getByTestId("3d-scale").textContent;
+    fireEvent.click(screen.getByText("3D move wall"));
+    const moved = read();
+    expect(moved.walls[0].x1).toBeCloseTo(0.2, 10);
+    expect(openingGeometry(moved.doors[0], "door", moved.walls, 10, 10)!.width).toBeCloseTo(2, 10);
+    expect(moved.doors[0].bbox.x).toBeCloseTo(before.doors[0].bbox.x + 0.1, 10);
+    fireEvent.click(screen.getByText("3D undo"));
+    expect(read()).toEqual(before);
+    fireEvent.click(screen.getByText("3D redo"));
+    expect(read()).toEqual(moved);
+    fireEvent.click(screen.getByText("3D rehost door"));
+    const rehosted = read();
+    expect(rehosted.doors[0].wallId).toBe("b");
+    expect(openingGeometry(rehosted.doors[0], "door", rehosted.walls, 10, 10)!.width).toBeCloseTo(2, 10);
+    expect(rehosted.walls).toEqual(moved.walls);
+    fireEvent.click(screen.getByText("3D undo"));
+    expect(read()).toEqual(moved);
+    expect(screen.getByTestId("3d-scale").textContent).toBe(scale);
+});
+
+// The top-bar Furniture Layout action is temporarily hidden; FurniturePlanner itself is still covered by its own test.
+it.skip("opens the uploaded-plan furniture editor and returns to review", () => {
     render(<Index />);
     fireEvent.click(screen.getByText("Upload Floor Plan"));
     fireEvent.click(screen.getByText("Import"));

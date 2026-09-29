@@ -1,8 +1,12 @@
 import type { DetectedWallSegment as Wall } from "@/types/detection";
 import type { NormalizedPoint } from "@/types/floorplan";
 
-export interface DimensionEndpoint extends NormalizedPoint { wallId: string; endpoint: "start" | "end" }
-export interface ConfirmedDimension { start: DimensionEndpoint; end: DimensionEndpoint; lengthM: number }
+export interface DimensionEndpoint extends NormalizedPoint {
+  wallId: string; endpoint: "start" | "end" | "interior";
+  /** Interior references follow the actual junction, not an arbitrary point on a host. */
+  junctionWallIds?: string[];
+}
+export interface ConfirmedDimension { start: DimensionEndpoint; end: DimensionEndpoint; lengthM: number; kind?: "length" }
 export const endpointPosition = (wall: Wall, endpoint: "start" | "end"): NormalizedPoint => endpoint === "start"
   ? { x: wall.x1, y: wall.y1 } : { x: wall.x2, y: wall.y2 };
 export function confirmCalibration(points: NormalizedPoint[], walls: Wall[], lengthM: number): ConfirmedDimension[] {
@@ -21,7 +25,17 @@ export function preservesConfirmedDimensions(walls: Wall[], dimensions: Confirme
   return dimensions.every(d => {
     const points = [d.start, d.end].map(ref => {
       const w = walls.find(w => w.id === ref.wallId);
-      return w ? endpointPosition(w, ref.endpoint) : null;
+      if (!w) return null;
+      if (ref.endpoint !== "interior") return endpointPosition(w, ref.endpoint);
+      if (d.kind !== "length") return null;
+      const onWall = (host: Wall | undefined) => {
+        if (!host) return false;
+        const dx = (host.x2 - host.x1) * pw, dy = (host.y2 - host.y1) * ph;
+        const x = (ref.x - host.x1) * pw, y = (ref.y - host.y1) * ph;
+        const len = Math.hypot(dx, dy), t = (x * dx + y * dy) / (len * len);
+        return len > 0 && t >= -1e-8 && t <= 1 + 1e-8 && Math.abs(x * dy - y * dx) / len < 1e-6;
+      };
+      return onWall(w) && (ref.junctionWallIds ?? []).every(id => onWall(walls.find(w => w.id === id))) ? ref : null;
     });
     return points.every((p, i) => p && Math.hypot((p.x - [d.start, d.end][i].x) * pw, (p.y - [d.start, d.end][i].y) * ph) < 1e-6)
       && Math.abs(Math.hypot((points[1]!.x - points[0]!.x) * pw, (points[1]!.y - points[0]!.y) * ph) - d.lengthM) < 1e-5;
@@ -30,9 +44,10 @@ export function preservesConfirmedDimensions(walls: Wall[], dimensions: Confirme
 export function parseConfirmedDimensions(value: unknown, walls: Wall[], pw: number, ph: number): ConfirmedDimension[] {
   if (value == null) return [];
   if (!Array.isArray(value)) throw new Error("Invalid confirmed calibration dimensions.");
-  const validPoint = (p: DimensionEndpoint) => p && typeof p.wallId === "string" && ["start", "end"].includes(p.endpoint)
-    && Number.isFinite(p.x) && Number.isFinite(p.y);
-  if (!value.every(d => d && validPoint(d.start) && validPoint(d.end) && Number.isFinite(d.lengthM) && d.lengthM > 0)
+  const validPoint = (p: DimensionEndpoint) => p && typeof p.wallId === "string" && ["start", "end", "interior"].includes(p.endpoint)
+    && Number.isFinite(p.x) && Number.isFinite(p.y)
+    && (p.junctionWallIds === undefined || (Array.isArray(p.junctionWallIds) && p.junctionWallIds.every(id => typeof id === "string")));
+  if (!value.every(d => d && (d.kind === undefined || d.kind === "length") && validPoint(d.start) && validPoint(d.end) && Number.isFinite(d.lengthM) && d.lengthM > 0)
     || !preservesConfirmedDimensions(walls, value, pw, ph)) throw new Error("Confirmed dimensions do not match the saved geometry and scale.");
   return value;
 }
@@ -41,6 +56,7 @@ export function parseConfirmedDimensions(value: unknown, walls: Wall[], pw: numb
 export function rebindConfirmedDimensions(dimensions: ConfirmedDimension[] = [], walls: Wall[]): ConfirmedDimension[] {
   return dimensions.flatMap(d => {
     const resolve = (ref: DimensionEndpoint): DimensionEndpoint | null => {
+      if (ref.junctionWallIds?.some(id => !walls.some(w => w.id === id))) return null;
       if (walls.some(w => w.id === ref.wallId)) return ref;
       for (const w of walls) for (const endpoint of ["start", "end"] as const) {
         const p = endpointPosition(w, endpoint);

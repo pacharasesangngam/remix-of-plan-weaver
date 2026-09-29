@@ -1,5 +1,13 @@
 # Welcome to your Lovable project
 
+## Internal authentication
+
+Before running the app, configure the Python authentication environment using
+[backend/AUTH.md](../backend/AUTH.md). Login gates Splash, Start, and every app route;
+the Python APIs require a server session independently. No public sign-up or default
+credentials are included. Vite proxies `/auth` and `/api` locally when `VITE_API_BASE_URL` is empty.
+The backend setup guide also covers Google allowlists, HTTPS, and same-site deployment.
+
 ## Project info
 
 **URL**: https://lovable.dev/projects/REPLACE_WITH_PROJECT_ID

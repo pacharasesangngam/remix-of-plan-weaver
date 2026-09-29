@@ -2,13 +2,27 @@ import type { DetectedWallSegment as Wall } from "@/types/detection";
 import type { NormalizedPoint as Point } from "@/types/floorplan";
 
 export type Endpoint = "start" | "end";
+export interface ScreenSize {
+    width: number;
+    height: number;
+    project?: (point: Point) => Point;
+    unproject?: (point: Point) => Point;
+}
 export const SNAP_PX = 12;
 const EPS = 1e-8;
 export const endpointPoint = (wall: Wall, end: Endpoint): Point => end === "start"
     ? { x: wall.x1, y: wall.y1 } : { x: wall.x2, y: wall.y2 };
-export const screenDistance = (a: Point, b: Point, size: { width: number; height: number }) =>
-    Math.hypot((a.x - b.x) * size.width, (a.y - b.y) * size.height);
-export function projectToWall(point: Point, wall: Wall, size = { width: 1, height: 1 }) {
+export const screenDistance = (a: Point, b: Point, size: ScreenSize) => {
+    if (size.project) { const p = size.project(a), q = size.project(b); return Math.hypot(p.x - q.x, p.y - q.y); }
+    return Math.hypot((a.x - b.x) * size.width, (a.y - b.y) * size.height);
+};
+export function projectToWall(point: Point, wall: Wall, size: ScreenSize = { width: 1, height: 1 }) {
+    if (size.project && size.unproject) {
+        const a = size.project(endpointPoint(wall, "start")), b = size.project(endpointPoint(wall, "end"));
+        const hit = projectToWall(size.project(point), { ...wall, x1: a.x, y1: a.y, x2: b.x, y2: b.y });
+        // Project back onto the stored axis to remove ray/plane roundoff.
+        return projectToWall(size.unproject(hit), wall, { width: size.width, height: size.height });
+    }
     const dx = (wall.x2 - wall.x1) * size.width, dy = (wall.y2 - wall.y1) * size.height;
     const t = Math.max(0, Math.min(1, (((point.x - wall.x1) * size.width * dx + (point.y - wall.y1) * size.height * dy) / (dx * dx + dy * dy || 1))));
     return { x: wall.x1 + (wall.x2 - wall.x1) * t, y: wall.y1 + (wall.y2 - wall.y1) * t, t };
@@ -31,14 +45,14 @@ export function editWallGeometry(walls: Wall[], updated: Wall, endpoint?: Endpoi
 }
 
 export interface WallSnap extends Point { key: string; kind: "endpoint" | "segment" }
-export function wallSnapTargets(point: Point, walls: Wall[], excluded: Set<string>, size: { width: number; height: number }): WallSnap[] {
+export function wallSnapTargets(point: Point, walls: Wall[], excluded: Set<string>, size: ScreenSize): WallSnap[] {
     return walls.filter(wall => !excluded.has(wall.id) && validWall(wall)).flatMap(wall => [
         { ...endpointPoint(wall, "start"), key: `${wall.id}:start`, kind: "endpoint" as const },
         { ...endpointPoint(wall, "end"), key: `${wall.id}:end`, kind: "endpoint" as const },
         { ...projectToWall(point, wall, size), key: `${wall.id}:segment`, kind: "segment" as const },
     ]);
 }
-export function findWallSnap(point: Point, targets: WallSnap[], size: { width: number; height: number }, blocked: Set<string>): WallSnap | null {
+export function findWallSnap(point: Point, targets: WallSnap[], size: ScreenSize, blocked: Set<string>): WallSnap | null {
     const candidates = targets.filter(target => {
         const distance = screenDistance(point, target, size);
         if (blocked.has(target.key)) {
@@ -54,7 +68,7 @@ export function findWallSnap(point: Point, targets: WallSnap[], size: { width: n
 
 // A body drag has one translation. Connections constrain that translation,
 // using the same finite-segment projections and screen-space range as endpoint drags.
-export function snapWallTranslation(wall: Wall, walls: Wall[], size: { width: number; height: number }, blocked: Record<Endpoint, Set<string>>, reverseBlocked = new Set<string>()) {
+export function snapWallTranslation(wall: Wall, walls: Wall[], size: ScreenSize, blocked: Record<Endpoint, Set<string>>, reverseBlocked = new Set<string>()) {
     const ends = ["start", "end"] as const;
     const others = walls.filter(other => other.id !== wall.id && validWall(other));
     type Connection = { shift: Point; normal?: Point; movingEnd?: Endpoint; fixed: Wall; target: WallSnap; reverseEnd?: Endpoint };
@@ -104,7 +118,10 @@ export function snapWallTranslation(wall: Wall, walls: Wall[], size: { width: nu
         shifts.push({ x: (da * b.normal.y - db * a.normal.y) / det / size.width,
             y: (a.normal.x * db - b.normal.x * da) / det / size.height });
     }
-    const options = shifts.filter(shift => screenDistance(shift, { x: 0, y: 0 }, size) < SNAP_PX).map(shift => {
+    const shiftDistance = (shift: Point) => size.project
+        ? Math.max(...ends.map(end => { const p = endpointPoint(wall, end); return screenDistance(p, { x: p.x + shift.x, y: p.y + shift.y }, size); }))
+        : screenDistance(shift, { x: 0, y: 0 }, size);
+    const options = shifts.filter(shift => shiftDistance(shift) < SNAP_PX).map(shift => {
         const moved = translate(shift);
         const matches = connections.filter(connection => connected(connection, moved));
         const endpoints = matches.filter(connection => connection.movingEnd && connection.target.kind === "endpoint");
@@ -112,7 +129,7 @@ export function snapWallTranslation(wall: Wall, walls: Wall[], size: { width: nu
             ? `${connection.movingEnd}:${connection.fixed.id}` : `${connection.fixed.id}:${connection.reverseEnd}`)).size;
         return { moved, shift, matches, endpoints, count };
     }).sort((a, b) => b.endpoints.length - a.endpoints.length || b.count - a.count
-        || screenDistance(a.shift, { x: 0, y: 0 }, size) - screenDistance(b.shift, { x: 0, y: 0 }, size));
+        || shiftDistance(a.shift) - shiftDistance(b.shift));
     const best = options[0];
     if (!best) return { wall, targets: [] as WallSnap[] };
     // Copy exact stored coordinates for endpoint matches; the only correction
@@ -125,7 +142,7 @@ export function snapWallTranslation(wall: Wall, walls: Wall[], size: { width: nu
 }
 
 // Read-only feedback for actual endpoint connections on a previewed wall.
-export function wallConnectionTargets(wall: Wall, walls: Wall[], size: { width: number; height: number }): WallSnap[] {
+export function wallConnectionTargets(wall: Wall, walls: Wall[], size: ScreenSize): WallSnap[] {
     const ends = ["start", "end"] as const;
     const others = walls.filter(other => other.id !== wall.id && validWall(other));
     // Enumerate actual connections after the chosen translation, in both

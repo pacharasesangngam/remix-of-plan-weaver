@@ -11,8 +11,8 @@ beforeEach(() => {
 });
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
 
-function Editor() {
-  const [history, dispatch] = useReducer(projectHistoryReducer, initialHistory({ ...emptyProject(), planW: 30, planH: 30, scale: 0.03 }));
+function Editor({ withFurniture = false }: { withFurniture?: boolean }) {
+  const [history, dispatch] = useReducer(projectHistoryReducer, initialHistory({ ...emptyProject(), planW: 30, planH: 30, scale: 0.03, furniture: withFurniture ? [{ id: "sofa", kind: "sofa", x: 0.2, y: 0.2, width: 2.1, depth: 0.9, height: 0.85, rotation: 0, color: "#888888" }] : [] }));
   return <><DrawPlan project={history.present} onEdit={(update, info) => dispatch({ type: "edit", update, info })}
     onGenerate={() => {}} onUndo={() => dispatch({ type: "undo" })} onRedo={() => dispatch({ type: "redo" })}
     canUndo={history.past.length > 0} canRedo={history.future.length > 0} /><output data-testid="project">{JSON.stringify(history.present)}</output></>;
@@ -20,13 +20,14 @@ function Editor() {
 
 it("pans empty space in select mode and right-drags while drawing without creating geometry", () => {
   render(<Editor />);
+  fireEvent.click(screen.getByRole("button", { name: "Add Wall" }));
   const canvas = screen.getByRole("img", { name: "พื้นที่วาดแปลน 2D" });
   const before = screen.getByTestId("project").textContent;
   fireEvent.pointerDown(canvas, { clientX: 100, clientY: 100, button: 2 });
   fireEvent.pointerMove(canvas, { clientX: 150, clientY: 180 });
   fireEvent.pointerUp(canvas, { button: 2 });
   expect(canvas).toHaveAttribute("viewBox", "-50 -80 1000 1000");
-  fireEvent.click(screen.getByRole("button", { name: "เลือก" }));
+  fireEvent.click(screen.getByRole("button", { name: "Select" }));
   fireEvent.pointerDown(canvas, { clientX: 150, clientY: 180, button: 0 });
   fireEvent.pointerMove(canvas, { clientX: 100, clientY: 100 });
   fireEvent.pointerUp(canvas);
@@ -36,53 +37,58 @@ it("pans empty space in select mode and right-drags while drawing without creati
   expect(screen.getByTestId("project").textContent).toBe(before);
 });
 
-it("shows contextual rotation when clicking furniture even from the room tool", () => {
-  render(<Editor />);
-  fireEvent.click(screen.getByRole("button", { name: "เฟอร์นิเจอร์" }));
-  const canvas = screen.getByRole("img", { name: "พื้นที่วาดแปลน 2D" });
-  fireEvent.pointerDown(canvas, { clientX: 200, clientY: 200, button: 0 });
-  fireEvent.click(screen.getByRole("button", { name: "วาดห้อง" }));
+it("hides furniture tools and symbols without removing existing project data", () => {
+  render(<Editor withFurniture />);
+  const before = screen.getByTestId("project").textContent;
+  expect(JSON.parse(before!).furniture).toHaveLength(1);
+  expect(screen.queryByRole("button", { name: /Furniture|เฟอร์นิเจอร์/i })).not.toBeInTheDocument();
+  expect(screen.queryByLabelText("เฟอร์นิเจอร์ โซฟา")).not.toBeInTheDocument();
   expect(screen.queryByRole("slider", { name: "ลากเพื่อหมุนเฟอร์นิเจอร์" })).not.toBeInTheDocument();
-  fireEvent.pointerDown(screen.getByLabelText("เฟอร์นิเจอร์ โซฟา"), { clientX: 200, clientY: 200, button: 0 });
-  fireEvent.pointerUp(canvas, { clientX: 200, clientY: 200, button: 0 });
-  fireEvent.keyDown(screen.getByRole("slider", { name: "ลากเพื่อหมุนเฟอร์นิเจอร์" }), { key: "ArrowRight", shiftKey: true });
-  expect(JSON.parse(screen.getByTestId("project").textContent!).furniture[0].rotation).toBe(15);
-  fireEvent.click(screen.getByRole("button", { name: "Undo" }));
-  expect(JSON.parse(screen.getByTestId("project").textContent!).furniture[0].rotation).toBe(0);
+  fireEvent.click(screen.getByRole("button", { name: "Add Room" }));
+  fireEvent.keyDown(window, { key: "Escape" });
+  expect(screen.getByRole("button", { name: "Select" })).toHaveAttribute("aria-pressed", "true");
+  expect(screen.getByTestId("project").textContent).toBe(before);
 });
 
-it("places, rotates, moves and deletes furniture with undo", () => {
-  render(<Editor />);
-  fireEvent.click(screen.getByRole("button", { name: "เฟอร์นิเจอร์" }));
-  const canvas = screen.getByRole("img", { name: "พื้นที่วาดแปลน 2D" });
-  fireEvent.pointerDown(canvas, { clientX: 200, clientY: 200, button: 0 });
+it("preserves existing furniture through room creation, movement, deletion, undo and redo", () => {
+  render(<Editor withFurniture />);
   const read = () => JSON.parse(screen.getByTestId("project").textContent!);
-  expect(read().furniture[0].kind).toBe("sofa");
-  fireEvent.change(screen.getByLabelText("ความกว้าง (m)"), { target: { value: "2.5" } });
-  fireEvent.click(screen.getByRole("button", { name: "ใช้ขนาดนี้" }));
-  expect(read().furniture[0].width).toBe(2.5);
-  expect(screen.getByLabelText("ความกว้างเฟอร์นิเจอร์ 2.50 เมตร")).toBeInTheDocument();
-  fireEvent.click(screen.getByRole("button", { name: "หมุน 90°" }));
-  expect(read().furniture[0].rotation).toBe(90);
-  fireEvent.pointerDown(screen.getByLabelText("เฟอร์นิเจอร์ โซฟา"), { clientX: 200, clientY: 200, button: 0 });
+  const furniture = read().furniture;
+  const canvas = screen.getByRole("img", { name: "พื้นที่วาดแปลน 2D" });
+  fireEvent.click(screen.getByRole("button", { name: "Add Room" }));
+  fireEvent.click(screen.getByRole("button", { name: "Draw on canvas" }));
+  fireEvent.pointerDown(canvas, { clientX: 100, clientY: 100, button: 0 });
+  fireEvent.pointerDown(canvas, { clientX: 300, clientY: 300, button: 0 });
+  expect(read().rooms).toHaveLength(1);
+  expect(read().furniture).toEqual(furniture);
+  fireEvent.pointerDown(canvas.querySelector("polygon")!, { clientX: 200, clientY: 200, button: 0 });
   fireEvent.pointerMove(canvas, { clientX: 300, clientY: 300 });
   fireEvent.pointerUp(canvas, { clientX: 300, clientY: 300, button: 0 });
-  expect(read().furniture[0].x).toBeCloseTo(0.3);
-  fireEvent.click(screen.getByRole("button", { name: "ลบที่เลือก" }));
-  expect(read().furniture).toHaveLength(0);
+  expect(read().rooms[0].bbox.x).toBeCloseTo(0.2);
+  expect(read().furniture).toEqual(furniture);
+  fireEvent.click(screen.getByRole("button", { name: "Delete selected" }));
+  expect(read().rooms).toHaveLength(0);
+  expect(read().furniture).toEqual(furniture);
   fireEvent.click(screen.getByRole("button", { name: "Undo" }));
-  expect(read().furniture).toHaveLength(1);
+  expect(read().rooms).toHaveLength(1);
+  expect(read().furniture).toEqual(furniture);
+  fireEvent.click(screen.getByRole("button", { name: "Redo" }));
+  expect(read().rooms).toHaveLength(0);
+  expect(read().furniture).toEqual(furniture);
 });
 
 it("shows total dimensions and pans without changing geometry or sticking after release", () => {
   render(<Editor />);
+  fireEvent.click(screen.getByRole("button", { name: "Add Room" }));
+  fireEvent.click(screen.getByRole("button", { name: "Draw on canvas" }));
   const canvas = screen.getByRole("img", { name: "พื้นที่วาดแปลน 2D" });
   fireEvent.pointerDown(canvas, { clientX: 100, clientY: 100, button: 0 });
   fireEvent.pointerDown(canvas, { clientX: 300, clientY: 400, button: 0 });
   expect(screen.getByLabelText("ความกว้างรวม 6.00 เมตร")).toBeInTheDocument();
   expect(screen.getByLabelText("ความลึกรวม 9.00 เมตร")).toBeInTheDocument();
   const before = screen.getByTestId("project").textContent;
-  fireEvent.click(screen.getByRole("button", { name: "เลื่อนแปลน" }));
+  expect(screen.queryByRole("button", { name: /^(Pan|เลื่อนแปลน)$/ })).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "Select" }));
   fireEvent.pointerDown(canvas, { clientX: 200, clientY: 200, button: 0 });
   fireEvent.pointerMove(canvas, { clientX: 250, clientY: 280 });
   expect(canvas.getAttribute("viewBox")).toBe("-50 -80 1000 1000");
@@ -110,10 +116,12 @@ it("zooms with the wheel while keeping the pointer's anchor in place", () => {
 
 it("previews a room drag, commits on release, and restores it with one undo", () => {
   render(<Editor />);
+  fireEvent.click(screen.getByRole("button", { name: "Add Room" }));
+  fireEvent.click(screen.getByRole("button", { name: "Draw on canvas" }));
   const canvas = screen.getByRole("img", { name: "พื้นที่วาดแปลน 2D" });
   fireEvent.pointerDown(canvas, { clientX: 100, clientY: 100, button: 0 });
   fireEvent.pointerDown(canvas, { clientX: 300, clientY: 300, button: 0 });
-  fireEvent.click(screen.getByRole("button", { name: "เลือก" }));
+  fireEvent.click(screen.getByRole("button", { name: "Select" }));
   const floor = canvas.querySelector("polygon")!;
   fireEvent.pointerDown(floor, { clientX: 200, clientY: 200, button: 0 });
   fireEvent.pointerMove(canvas, { clientX: 300, clientY: 400 });
@@ -135,8 +143,8 @@ it("previews a room drag, commits on release, and restores it with one undo", ()
 
 it("draws continuous walls and closes the loop into a room", () => {
   render(<Editor />);
-  fireEvent.click(screen.getByRole("button", { name: "วาดผนัง" }));
-  expect(screen.getByText("วิธีวาดผนัง")).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "Add Wall" }));
+  expect(screen.getByText(/Click to add corners/)).toBeInTheDocument();
   const canvas = screen.getByRole("img", { name: "พื้นที่วาดแปลน 2D" });
   for (const [clientX, clientY] of [[100, 100], [300, 100], [300, 300], [100, 300]]) fireEvent.pointerDown(canvas, { clientX, clientY, button: 0 });
   expect(screen.getByText("คลิกเพื่อปิดห้อง")).toBeInTheDocument();
@@ -145,17 +153,17 @@ it("draws continuous walls and closes the loop into a room", () => {
   expect(state.rooms).toHaveLength(1);
   expect(state.rooms[0].polygon).toHaveLength(4);
   expect(state.walls).toHaveLength(4);
-  expect(screen.getByRole("button", { name: "ดู 3D" })).toBeEnabled();
+  expect(screen.getByRole("button", { name: "View in 3D" })).toBeEnabled();
   fireEvent.click(screen.getByRole("button", { name: "Undo" }));
   expect(JSON.parse(screen.getByTestId("project").textContent!).rooms).toHaveLength(0);
 });
 
 it("finishes an open wall chain without creating a floor", () => {
   render(<Editor />);
-  fireEvent.click(screen.getByRole("button", { name: "วาดผนัง" }));
+  fireEvent.click(screen.getByRole("button", { name: "Add Wall" }));
   const canvas = screen.getByRole("img", { name: "พื้นที่วาดแปลน 2D" });
   for (const [clientX, clientY] of [[100, 100], [300, 100], [300, 300]]) fireEvent.pointerDown(canvas, { clientX, clientY, button: 0 });
-  fireEvent.click(screen.getByRole("button", { name: "จบแนวผนัง (ไม่สร้างพื้น)" }));
+  fireEvent.click(screen.getByRole("button", { name: "Finish walls" }));
   const state = JSON.parse(screen.getByTestId("project").textContent!);
   expect(state.rooms).toHaveLength(0);
   expect(state.walls).toHaveLength(2);
@@ -163,7 +171,9 @@ it("finishes an open wall chain without creating a floor", () => {
 
 it("creates a room with two clicks, enables 3D, and undoes the whole room", () => {
   render(<Editor />);
-  expect(screen.getByRole("button", { name: "ดู 3D" })).toBeDisabled();
+  fireEvent.click(screen.getByRole("button", { name: "Add Room" }));
+  fireEvent.click(screen.getByRole("button", { name: "Draw on canvas" }));
+  expect(screen.getByRole("button", { name: "View in 3D" })).toBeDisabled();
   const canvas = screen.getByRole("img", { name: "พื้นที่วาดแปลน 2D" });
   fireEvent.pointerDown(canvas, { clientX: 100, clientY: 100, button: 0 });
   fireEvent.pointerMove(canvas, { clientX: 300, clientY: 300 });
@@ -172,7 +182,7 @@ it("creates a room with two clicks, enables 3D, and undoes the whole room", () =
   expect(project.rooms).toHaveLength(1);
   expect(project.walls).toHaveLength(4);
   expect(project.rooms[0].width * 30).toBeCloseTo(6);
-  expect(screen.getByRole("button", { name: "ดู 3D" })).toBeEnabled();
+  expect(screen.getByRole("button", { name: "View in 3D" })).toBeEnabled();
   fireEvent.click(screen.getByRole("button", { name: "Undo" }));
   expect(JSON.parse(screen.getByTestId("project").textContent!).walls).toHaveLength(0);
   fireEvent.click(screen.getByRole("button", { name: "Redo" }));
@@ -181,10 +191,12 @@ it("creates a room with two clicks, enables 3D, and undoes the whole room", () =
 
 it("places a door on a wall and prevents overlapping openings", () => {
   render(<Editor />);
+  fireEvent.click(screen.getByRole("button", { name: "Add Room" }));
+  fireEvent.click(screen.getByRole("button", { name: "Draw on canvas" }));
   const canvas = screen.getByRole("img", { name: "พื้นที่วาดแปลน 2D" });
   fireEvent.pointerDown(canvas, { clientX: 100, clientY: 100, button: 0 });
   fireEvent.pointerDown(canvas, { clientX: 300, clientY: 300, button: 0 });
-  fireEvent.click(screen.getByRole("button", { name: "ประตู" }));
+  fireEvent.click(screen.getByRole("button", { name: "Door" }));
   fireEvent.pointerDown(canvas, { clientX: 200, clientY: 100, button: 0 });
   const project = JSON.parse(screen.getByTestId("project").textContent!);
   expect(project.doors).toHaveLength(1);

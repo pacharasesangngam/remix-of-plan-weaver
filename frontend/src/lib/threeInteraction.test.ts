@@ -1,7 +1,15 @@
 import { describe, expect, it } from "vitest";
-import { capturesThreeTargetPointer, nextThreeSelection, nextThreeToolAfterCreation } from "./threeInteraction";
+import { capturesThreeTargetPointer, nextThreeSelection, nextThreeToolAfterCreation, threeInteractionCursor } from "./threeInteraction";
 
 describe("3D interaction policy", () => {
+  it("uses a pointer for selectable targets and preserves creation cursors", () => {
+    expect(threeInteractionCursor("select", true, false)).toBe("pointer");
+    expect(threeInteractionCursor("select", false, false)).toBe("default");
+    expect(threeInteractionCursor("wall", true, false)).toBe("cell");
+    expect(threeInteractionCursor("door", false, true)).toBe("cell");
+    expect(threeInteractionCursor("window", false, true)).toBe("cell");
+    expect(threeInteractionCursor("door", true, false)).toBe("default");
+  });
   it("keeps selection when a hovered target is left, changes it on another target, and clears it on empty space", () => {
     expect(nextThreeSelection("wall-a", "select", "leave")).toBe("wall-a");
     expect(nextThreeSelection("wall-a", "select", "target", "door-a")).toBe("door-a");

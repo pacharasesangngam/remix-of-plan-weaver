@@ -2,6 +2,7 @@ import { cleanup, fireEvent, render } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import WallReview from "./WallReview";
 import type { DetectedDoor, DetectedWallSegment, DetectedWindow } from "@/types/detection";
+import { newOpeningRecord } from "@/lib/openingModel";
 import { useState, type ComponentProps } from "react";
 
 const wall: DetectedWallSegment = { id: "wall-a", x1: 0.2, y1: 0.3, x2: 0.6, y2: 0.3, type: "interior" };
@@ -59,7 +60,7 @@ describe("wall endpoint dragging", () => {
         expect(marker()).toHaveAttribute("cy", "0.6");
         expect(marker()).toHaveAttribute("stroke", "#22c55e");
         expect(marker()).toHaveAttribute("fill", "none");
-        expect(marker()?.parentElement?.querySelector('circle[stroke="#f59e0b"]')).toHaveAttribute("fill", "#fff");
+        expect(marker()?.parentElement?.querySelector('circle[stroke="#2563eb"]')).toHaveAttribute("fill", "#fff");
         expect(commit).not.toHaveBeenCalled();
         move(0.73, 0.56);
         expect(marker()).toBeNull();
@@ -85,7 +86,7 @@ describe("wall endpoint dragging", () => {
         for (const key of ["interior-a:start", "interior-b:start", "target:start"]) {
             const marker = svg.querySelector(`[data-wall-snap-target="${key}"]`);
             expect(marker).toHaveAttribute("stroke", "#22c55e");
-            expect(marker?.parentElement?.querySelector('circle[stroke="#f59e0b"]')).toHaveAttribute("fill", "#fff");
+            expect(marker?.parentElement?.querySelector('circle[stroke="#2563eb"]')).toHaveAttribute("fill", "#fff");
         }
         expect(commit).not.toHaveBeenCalled();
         move(0.75, 0.5);
@@ -123,7 +124,7 @@ describe("wall endpoint dragging", () => {
         expect(markers()).toHaveLength(2);
         for (const marker of markers()) {
             expect(marker).toHaveAttribute("stroke", "#22c55e");
-            expect(marker.parentElement?.querySelector('circle[stroke="#f59e0b"]')).toHaveAttribute("fill", "#fff");
+            expect(marker.parentElement?.querySelector('circle[stroke="#2563eb"]')).toHaveAttribute("fill", "#fff");
         }
         end(0.2, 0.3);
         expect(commit).not.toHaveBeenCalled();
@@ -170,7 +171,7 @@ describe("wall endpoint dragging", () => {
         expect(span).toHaveAttribute("y1", "0.3");
         expect(span).toHaveAttribute("y2", "0.3");
         expect(svg.querySelectorAll('[data-measurement-endpoint]')).toHaveLength(2);
-        expect(svg.textContent).toContain("8.00m");
+        expect(svg.querySelector('[data-dimension-label] text')).toHaveTextContent(/^8.00$/);
         fireEvent.click([...container.querySelectorAll("button")].find(b => b.textContent?.includes("m/px"))!);
         expect(footprint.getAttribute("d")).toBe(originalPath);
         expect(footprint).toHaveAttribute("stroke", "none");
@@ -183,7 +184,7 @@ describe("wall endpoint dragging", () => {
         move(0.7, 0.5);
         end(0.7, 0.5);
         expect(commit).toHaveBeenCalledWith([{ ...wall, x2: 0.7, y2: 0.5 }, neighbor]);
-        expect(svg.textContent).toContain("—");
+        expect(svg.querySelector('[data-plan-dimension]')).toBeNull();
     });
     it("freely leaves an existing T-junction without a modifier or host movement", () => {
         const host = { ...wall, id: "host", x1: 0.6, y1: 0.1, x2: 0.6, y2: 0.8 };
@@ -280,15 +281,15 @@ describe("wall endpoint dragging", () => {
         expect(marker()?.tagName).toBe("circle");
         expect(marker()).toHaveAttribute("cx", "0.75");
         expect(marker()).toHaveAttribute("fill", "none");
-        expect(marker()?.parentElement?.querySelector('circle[stroke="#f59e0b"]')).toHaveAttribute("fill", "#fff");
+        expect(marker()?.parentElement?.querySelector('circle[stroke="#2563eb"]')).toHaveAttribute("fill", "#fff");
         expect(svg.querySelector('[data-measurement-endpoint="end"]')).toBeNull();
-        expect(svg.querySelectorAll('circle[stroke="#f59e0b"]')).toHaveLength(2);
+        expect(svg.querySelectorAll('circle[stroke="#2563eb"]')).toHaveLength(2);
         expect(svg.querySelectorAll('[data-wall-endpoint]')).toHaveLength(2); // Hit areas remain available.
         expect(commit).not.toHaveBeenCalled();
         move(0.52, 0.4);
         expect(marker()).toBeNull();
         expect(svg.querySelector('[data-measurement-endpoint="end"]')).not.toBeNull();
-        expect(svg.querySelectorAll('circle[stroke="#f59e0b"]')).toHaveLength(2);
+        expect(svg.querySelectorAll('circle[stroke="#2563eb"]')).toHaveLength(2);
         move(0.544, 0.4);
         end(0.544, 0.45);
         expect(commit).toHaveBeenCalledOnce();
@@ -312,7 +313,7 @@ describe("wall endpoint dragging", () => {
             expect(marker.tagName).toBe("circle");
             expect(marker).toHaveAttribute("cy", "0.6");
             expect(marker).toHaveAttribute("fill", "none");
-            expect(marker.parentElement?.querySelector('circle[stroke="#f59e0b"]')).toHaveAttribute("fill", "#fff");
+            expect(marker.parentElement?.querySelector('circle[stroke="#2563eb"]')).toHaveAttribute("fill", "#fff");
             expect(marker).toHaveAttribute("stroke", "#22c55e");
         }
         move(0.4, 0.55);
@@ -809,5 +810,93 @@ describe("Review room selection and naming", () => {
         expect(update).toHaveBeenCalledTimes(2);
         expect(update).toHaveBeenLastCalledWith("room-1", "name", "Balcony");
         expect(view.getByRole("button", { name: "Rename Balcony" })).toBeInTheDocument();
+    });
+});
+
+describe("batch opening sizes", () => {
+    const doorA = newOpeningRecord("door", "door-a", wall, { x: 0.25, y: 0.3 }, { x: 0.32, y: 0.3 }, 20, 10)!;
+    const doorB = newOpeningRecord("door", "door-b", wall, { x: 0.45, y: 0.3 }, { x: 0.52, y: 0.3 }, 20, 10)!;
+    const windowA = newOpeningRecord("window", "window-a", neighbor, { x: 0.65, y: 0.35 }, { x: 0.7, y: 0.4 }, 20, 10)!;
+    const windowB = newOpeningRecord("window", "window-b", neighbor, { x: 0.72, y: 0.55 }, { x: 0.77, y: 0.6 }, 20, 10)!;
+
+    const renderBatch = (handlers: Partial<ComponentProps<typeof WallReview>>) => render(
+        <WallReview calibrationStatus="calibrated" rooms={[]} walls={[wall, neighbor]}
+            doors={[doorA, doorB]} windows={[windowA, windowB]}
+            unit="m" imageUrl="plan.png" scale={1} planWidth={20} planHeight={10}
+            onScaleChange={vi.fn()} onRoomUpdate={vi.fn()} onGenerate={vi.fn()} {...handlers} />,
+    );
+    const openBatchEditor = (view: ReturnType<typeof render>, category: "Doors" | "Windows") => {
+        if (view.queryByRole("button", { name: new RegExp(`${category}\\s*2`) }) === null) {
+            fireEvent.click(view.getByText("Other Elements"));
+            fireEvent.click(view.getByRole("button", { name: new RegExp(`${category}\\s*2`) }));
+        }
+        fireEvent.click(view.getByText("Edit"));
+    };
+    const updatedFields = (mock: { mock: { calls: unknown[][] } }) =>
+        mock.mock.calls.map(([id, field, value]) => [id, field, value]);
+
+    it("applies one height to every door without touching width or the host wall", () => {
+        const onDoorUpdate = vi.fn();
+        const view = renderBatch({ onDoorUpdate });
+        openBatchEditor(view, "Doors");
+        expect(view.queryByLabelText("Sill Height")).toBeNull();
+        expect(view.getByLabelText("Height")).toHaveValue(2.2);
+        fireEvent.change(view.getByLabelText("Height"), { target: { value: "2.4" } });
+        fireEvent.click(view.getByText("Apply"));
+
+        expect(updatedFields(onDoorUpdate)).toEqual([
+            ["door-a", "heightM", 2.4],
+            ["door-b", "heightM", 2.4],
+        ]);
+        // The draft closes so a later single-door edit can still override the batch value.
+        expect(view.queryByLabelText("Height")).toBeNull();
+    });
+
+    it("applies height and sill height to every window", () => {
+        const onWindowUpdate = vi.fn();
+        const view = renderBatch({ onWindowUpdate });
+        openBatchEditor(view, "Windows");
+        fireEvent.change(view.getByLabelText("Sill Height"), { target: { value: "0.6" } });
+        fireEvent.change(view.getByLabelText("Height"), { target: { value: "1.5" } });
+        fireEvent.click(view.getByText("Apply"));
+
+        expect(updatedFields(onWindowUpdate)).toEqual([
+            ["window-a", "sillHeightM", 0.6],
+            ["window-a", "heightM", 1.5],
+            ["window-b", "sillHeightM", 0.6],
+            ["window-b", "heightM", 1.5],
+        ]);
+    });
+
+    it("discards a cancelled draft and clamps a height the host wall cannot hold", () => {
+        const onDoorUpdate = vi.fn();
+        const view = renderBatch({ onDoorUpdate });
+        openBatchEditor(view, "Doors");
+        fireEvent.change(view.getByLabelText("Height"), { target: { value: "9" } });
+        fireEvent.click(view.getByText("Cancel"));
+        expect(onDoorUpdate).not.toHaveBeenCalled();
+
+        openBatchEditor(view, "Doors");
+        fireEvent.change(view.getByLabelText("Height"), { target: { value: "9" } });
+        fireEvent.click(view.getByText("Apply"));
+        // The wall is 2.8 m, so each door keeps the largest height that still fits.
+        expect(updatedFields(onDoorUpdate)).toEqual([
+            ["door-a", "heightM", 2.8],
+            ["door-b", "heightM", 2.8],
+        ]);
+    });
+
+    it("still allows a single door to override the batched height", () => {
+        const onDoorUpdate = vi.fn();
+        const view = renderBatch({ onDoorUpdate });
+        openBatchEditor(view, "Doors");
+        fireEvent.change(view.getByLabelText("Height"), { target: { value: "2.4" } });
+        fireEvent.click(view.getByText("Apply"));
+        onDoorUpdate.mockClear();
+
+        fireEvent.click(view.getByText("Door 1"));
+        fireEvent.change(view.getByLabelText("Opening height (m)"), { target: { value: "2.05" } });
+        fireEvent.blur(view.getByLabelText("Opening height (m)"));
+        expect(onDoorUpdate).toHaveBeenCalledExactlyOnceWith("door-a", "heightM", 2.05);
     });
 });

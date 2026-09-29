@@ -6,6 +6,7 @@ node_modules/
 *.log
 
 # Runtime data
+backend/.data/
 *.pid
 *.pid.lock
 

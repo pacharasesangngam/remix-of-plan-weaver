@@ -1,5 +1,6 @@
 import { withDefaultWallHeight } from "@/lib/wallMetrics";
 import { rehostOpening, type OpeningKind } from "@/lib/openingModel";
+import { setRoomWallHeight } from "@/lib/roomWallHeight";
 import { preservesConfirmedDimensions, rebindConfirmedDimensions, type ConfirmedDimension } from "@/lib/confirmedDimensions";
 import { proposeWallLength, type LengthRequest, type GeometrySnapshot } from "@/lib/wallLengthEdit";
 import { useState, useCallback, useEffect, useReducer, useMemo } from "react";
@@ -9,6 +10,7 @@ import Sidebar from "@/components/Sidebar";
 import RightPanel from "@/components/RightPanel";
 import WallReview from "@/components/WallReview";
 import SplashScreen from "@/components/SplashScreen";
+import { LogoutButton } from "@/components/AuthGate";
 import StartScreen from "@/components/StartScreen";
 import DrawPlan from "@/components/DrawPlan";
 import FurniturePlanner from "@/components/FurniturePlanner";
@@ -167,6 +169,10 @@ const Index = () => {
     return { label: `${kind} ${names[field] ?? field} change`, threeOnly };
   };
   const handleRoomUpdate = useCallback((id: string, field: keyof Room, value: number | string) => {
+    if (field === "wallHeight") {
+      editProject(p => setRoomWallHeight(p, id, Number(value)), fieldInfo("room", field));
+      return;
+    }
     editProject(p => ({ ...p, rooms: p.rooms.map(r => r.id === id ? { ...r, [field]: value,
       confidence: field === "width" || field === "height" ? "manual" : r.confidence,
       ...(field === "width" || field === "height" ? { areaSqm: undefined } : {}),
@@ -319,7 +325,9 @@ const Index = () => {
               </h1>
             </div>
             <div className="flex items-center gap-2">
-            {!showStart && workflow === "upload" && detected && <button disabled={detecting} className="rounded-xl border px-3 py-2 text-xs hover:bg-accent disabled:opacity-50" onClick={() => { dispatch({ type: "cancel" }); setGenerated(false); setPlacingFurniture(value => !value); }}>{placingFurniture ? "กลับไปตรวจแปลน" : "จัดวางเฟอร์นิเจอร์"}</button>}
+            
+            {/* Temporarily hidden: Furniture Layout action. Implementation stays intact in FurniturePlanner + placingFurniture below.
+            {!showStart && workflow === "upload" && detected && <button disabled={detecting} className="rounded-xl border px-3 py-2 text-xs hover:bg-accent disabled:opacity-50" onClick={() => { dispatch({ type: "cancel" }); setGenerated(false); setPlacingFurniture(value => !value); }}>{placingFurniture ? "กลับไปตรวจแปลน" : "จัดวางเฟอร์นิเจอร์"}</button>} */}
             {!showStart && !detecting && (detected || workflow === "draw") && <button className="rounded-xl border px-3 py-2 text-xs hover:bg-accent" onClick={() => downloadProjectJson(projectData)}>Download Project</button>}
             <button
               onClick={() => setTheme(theme === "dark" ? "light" : "dark")}
@@ -329,6 +337,7 @@ const Index = () => {
               {mounted && theme === "dark" ? <Sun className="w-3.5 h-3.5" /> : <Moon className="w-3.5 h-3.5" />}
               {mounted && theme === "dark" ? "Light" : "Dark"}
             </button>
+            <LogoutButton />
             </div>
           </div>
         </header>
@@ -454,6 +463,8 @@ const Index = () => {
               onRoomDelete={handleRoomDelete}
               onWallUpdate={handleWallUpdate}
               onWallAdd={handleWallAdd}
+              onWallGeometryCommit={handleWallGeometryCommit}
+              onOpeningRehost={handleOpeningRehost}
               onWallDelete={handleWallDelete}
               onDoorAdd={handleDoorAdd}
               onDoorUpdate={handleDoorUpdate}

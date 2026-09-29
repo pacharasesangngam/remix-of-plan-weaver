@@ -35,6 +35,22 @@ export interface TopologyFace { polygon: Point[]; holes: Point[][]; wallIds: str
 export interface TopologyLoop { polygon: Point[]; area: number; wallIds: string[]; nodeIds: number[] }
 export interface WallTopology { nodes: TopologyNode[]; edges: TopologyEdge[]; faces: TopologyFace[] }
 
+/** Boundary measurements refer to the planar graph, never to a room's bounding box. */
+export function roomBoundarySpans(room: Room, topology: WallTopology) {
+  const rings = [room.wallPolygon ?? room.polygon ?? [], ...(room.holes ?? [])];
+  const onSide = (p: Point, a: Point, b: Point) => {
+    const dx = b.x - a.x, dy = b.y - a.y, len = Math.hypot(dx, dy);
+    const t = ((p.x - a.x) * dx + (p.y - a.y) * dy) / (len * len);
+    return len > TOPOLOGY_EPS && t >= -TOPOLOGY_EPS && t <= 1 + TOPOLOGY_EPS
+      && Math.abs(dx * (p.y - a.y) - dy * (p.x - a.x)) <= TOPOLOGY_EPS * len;
+  };
+  return topology.edges.flatMap(edge => {
+    const start = topology.nodes[edge.a], end = topology.nodes[edge.b];
+    const boundary = rings.some(ring => ring.some((a, i) => onSide(start, a, ring[(i + 1) % ring.length]) && onSide(end, a, ring[(i + 1) % ring.length])));
+    return boundary ? [{ wallId: edge.wallIds[0], start: { x: start.x, y: start.y }, end: { x: end.x, y: end.y } }] : [];
+  });
+}
+
 /** Planar segment graph shared by all wall sources. Stored walls are never split or mutated. */
 export function buildWallTopology(walls: Wall[]): WallTopology {
   const segments = walls.filter(w => [w.x1, w.y1, w.x2, w.y2].every(Number.isFinite))

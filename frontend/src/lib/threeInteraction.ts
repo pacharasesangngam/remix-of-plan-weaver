@@ -1,6 +1,9 @@
 export type ThreeToolMode = "select" | "wall" | "door" | "window";
 export type ThreeTargetKind = "room" | "wall" | "door" | "window";
 
+export const threeInteractionCursor = (mode: ThreeToolMode, hovered: boolean, validOpeningTarget: boolean) =>
+  mode === "wall" || validOpeningTarget ? "cell" : mode === "select" && hovered ? "pointer" : "default";
+
 /** Only the active tool may consume a pointer event from a scene object. */
 export const capturesThreeTargetPointer = (mode: ThreeToolMode, target: ThreeTargetKind): boolean =>
   mode === "select" || ((mode === "door" || mode === "window") && target === "wall");
