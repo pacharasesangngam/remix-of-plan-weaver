@@ -7,7 +7,7 @@ export default function StartScreen({ onChoose, onImport }: { onChoose: (mode: "
   const fileInput = useRef<HTMLInputElement>(null);
   const [error, setError] = useState("");
   return <main className="flex-1 overflow-y-auto bg-[radial-gradient(ellipse_at_top,hsl(var(--primary)/0.08),transparent_65%)] px-6 py-10 sm:px-10 sm:py-12 lg:px-12">
-    <div className="max-w-6xl">
+    <div className="w-full">
       <div className="mb-7">
         <p className="text-xs font-semibold tracking-widest text-primary">WORKSPACE</p>
         <h2 className="mt-4 text-3xl font-semibold tracking-tight sm:text-4xl">Start a new project</h2>
@@ -26,7 +26,7 @@ export default function StartScreen({ onChoose, onImport }: { onChoose: (mode: "
             <span className="min-w-0">
               <span className="block text-lg font-semibold tracking-tight">{title}</span>
               <span className="mt-1 block text-sm text-muted-foreground">{tag}</span>
-              <span className="mt-3 block max-w-xs text-sm leading-6 text-muted-foreground">{detail}</span>
+              <span className="mt-3 block text-sm leading-6 text-muted-foreground">{detail}</span>
             </span>
           </button>)}
       </div>
