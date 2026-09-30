@@ -14,11 +14,13 @@ import {
   ScanLine,
   Upload,
   X,
+  ChevronUp,
 } from "lucide-react";
 import type { Room, FloorPlanData, AppMode, DimensionUnit } from "@/types/floorplan";
 import type { FloorPlanProject } from "@/lib/projectIO";
 import { downloadProjectJson, parseFloorPlanProject } from "@/lib/projectIO";
 import DebugPanel from "@/components/DebugPanel";
+import { useIsMobile } from "@/hooks/use-mobile";
 
 interface SidebarProps {
   mode: AppMode;
@@ -72,6 +74,7 @@ const Sidebar = ({
   const [copied, setCopied] = useState(false);
   const [debugOpen, setDebugOpen] = useState(false);
   const [developerToolsOpen, setDeveloperToolsOpen] = useState(false);
+  const isMobile = useIsMobile();
   const inputRef = useRef<HTMLInputElement>(null);
   const importInputRef = useRef<HTMLInputElement>(null);
 
@@ -84,6 +87,10 @@ const Sidebar = ({
   useEffect(() => {
     if (detected) setCollapsed(true);
   }, [detected]);
+
+  useEffect(() => {
+    if (isMobile) setCollapsed(true);
+  }, [isMobile]);
 
   const handleDrop = useCallback((e: React.DragEvent) => {
     e.preventDefault();
@@ -133,13 +140,13 @@ const Sidebar = ({
     : null;
 
   return (
-    <div className="relative flex shrink-0">
+    <div className="relative flex shrink-0 max-md:absolute max-md:inset-x-0 max-md:bottom-0 max-md:z-40 max-md:flex-col-reverse max-md:pointer-events-none">
       <div
-        className={`relative flex flex-col overflow-hidden border-r border-border bg-[linear-gradient(180deg,hsl(var(--card))_0%,hsl(var(--surface-raised))_100%)] transition-all duration-300 ${
-          collapsed ? "w-0 opacity-0 pointer-events-none" : "w-[360px]"
+        className={`relative flex flex-col overflow-hidden border-border bg-[linear-gradient(180deg,hsl(var(--card))_0%,hsl(var(--surface-raised))_100%)] transition-all duration-300 md:border-r max-md:pointer-events-auto max-md:rounded-t-[28px] max-md:border max-md:border-b-0 max-md:bg-background/90 max-md:shadow-[0_-16px_48px_hsl(var(--foreground)/0.12)] max-md:backdrop-blur-2xl ${
+          collapsed ? "w-0 opacity-0 pointer-events-none max-md:h-0 max-md:w-full max-md:border-0" : "w-[360px] max-md:h-[min(68dvh,560px)] max-md:w-full"
         }`}
       >
-        <div className="scrollbar-none w-[360px] h-full overflow-y-auto">
+        <div className="scrollbar-none h-full w-[360px] overflow-y-auto max-md:w-full">
           <div className="border-b border-border/70 bg-[radial-gradient(circle_at_top_left,hsl(var(--primary)/0.22),transparent_34%)] px-5 pb-5 pt-6">
             <div className="space-y-4">
               <div className="flex items-center justify-between">
@@ -416,12 +423,14 @@ const Sidebar = ({
         type="button"
         onClick={() => setCollapsed((c) => !c)}
         aria-label={collapsed ? "Open sidebar" : "Close sidebar"}
-        className="absolute -right-6 top-1/2 z-30 flex h-16 w-8 -translate-y-1/2 flex-col items-center justify-center gap-0.5 rounded-xl border border-border/55 bg-card/95 px-1 text-muted-foreground shadow-lg backdrop-blur-sm transition-all hover:text-foreground hover:shadow-xl"
+        className="absolute -right-6 top-1/2 z-30 flex h-16 w-8 -translate-y-1/2 flex-col items-center justify-center gap-0.5 rounded-xl border border-border/55 bg-card/95 px-1 text-muted-foreground shadow-lg backdrop-blur-sm transition-all hover:text-foreground hover:shadow-xl max-md:pointer-events-auto max-md:relative max-md:bottom-auto max-md:left-auto max-md:right-auto max-md:top-auto max-md:mt-3 max-md:mb-[calc(env(safe-area-inset-bottom)+0.75rem)] max-md:ml-4 max-md:flex-row max-md:h-11 max-md:w-auto max-md:translate-y-0 max-md:gap-2 max-md:rounded-full max-md:border-border/70 max-md:bg-background/80 max-md:px-4 max-md:shadow-xl max-md:backdrop-blur-2xl"
       >
-        {collapsed ? <ChevronRight className="h-4 w-4" /> : <ChevronLeft className="h-4 w-4" />}
-        <span className="text-[8px] font-semibold uppercase tracking-[0.14em] [writing-mode:vertical-rl]">
+        <span className="hidden md:contents">{collapsed ? <ChevronRight className="h-4 w-4" /> : <ChevronLeft className="h-4 w-4" />}</span>
+        <span className="md:hidden">{collapsed ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}</span>
+        <span className="text-[8px] font-semibold uppercase tracking-[0.14em] [writing-mode:vertical-rl] max-md:hidden">
           {collapsed ? "Open" : "Close"}
         </span>
+        <span className="hidden text-xs font-medium normal-case tracking-normal md:hidden">{collapsed ? "Plan tools" : "Close tools"}</span>
       </button>
 
       <input

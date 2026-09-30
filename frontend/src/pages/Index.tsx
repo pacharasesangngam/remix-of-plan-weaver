@@ -4,7 +4,7 @@ import { setRoomWallHeight } from "@/lib/roomWallHeight";
 import { isCalibrationDimension, preservesConfirmedDimensions, rebindConfirmedDimensions, type ConfirmedDimension } from "@/lib/confirmedDimensions";
 import { proposeWallBody, proposeWallEndpoint, proposeWallLength, type LengthRequest, type GeometrySnapshot } from "@/lib/wallLengthEdit";
 import { useState, useCallback, useEffect, useReducer, useMemo } from "react";
-import { ChevronLeft, Loader2, Moon, Sun } from "lucide-react";
+import { ChevronLeft, Download, Loader2, Moon, Sun } from "lucide-react";
 import { useTheme } from "next-themes";
 import Sidebar from "@/components/Sidebar";
 import RightPanel from "@/components/RightPanel";
@@ -336,9 +336,9 @@ const Index = () => {
   return (
     <ProjectActionContext.Provider value={actions}><ProjectInputActions>
       {showSplash && <SplashScreen onComplete={() => setShowSplash(false)} />}
-      <div className="h-screen flex flex-col bg-background overflow-hidden">
-        <header className="shrink-0 border-b border-border bg-card/50 backdrop-blur-sm">
-          <div className="px-4 py-3 flex flex-wrap gap-3 items-center justify-between">
+      <div className="flex h-[100dvh] flex-col overflow-hidden bg-background">
+        <header className="relative z-30 shrink-0 border-b border-border/60 bg-background/75 shadow-sm backdrop-blur-2xl supports-[backdrop-filter]:bg-background/60">
+          <div className="flex flex-wrap items-center justify-between gap-3 px-4 pb-3 pt-[calc(env(safe-area-inset-top)+0.75rem)] md:px-6">
             <div className="flex items-center gap-3">
               {generated && !showStart && (
                 <button
@@ -356,18 +356,18 @@ const Index = () => {
                 </button>
               </h1>
             </div>
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-1.5 rounded-full border border-border/60 bg-background/55 p-1 shadow-sm backdrop-blur-xl sm:gap-2">
             
             {/* Temporarily hidden: Furniture Layout action. Implementation stays intact in FurniturePlanner + placingFurniture below.
             {!showStart && workflow === "upload" && detected && <button disabled={detecting} className="rounded-xl border px-3 py-2 text-xs hover:bg-accent disabled:opacity-50" onClick={() => { dispatch({ type: "cancel" }); setGenerated(false); setPlacingFurniture(value => !value); }}>{placingFurniture ? "กลับไปตรวจแปลน" : "จัดวางเฟอร์นิเจอร์"}</button>} */}
-            {!showStart && !detecting && (detected || workflow === "draw") && <button className="rounded-xl border px-3 py-2 text-xs hover:bg-accent" onClick={() => downloadProjectJson(projectData)}>Download Project</button>}
+            {!showStart && !detecting && (detected || workflow === "draw") && <button aria-label="Download Project" title="Download Project" className="inline-flex h-9 items-center gap-2 rounded-full px-3 text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-foreground" onClick={() => downloadProjectJson(projectData)}><Download className="h-4 w-4 sm:hidden" /><span className="hidden sm:inline">Download Project</span></button>}
             <button
               onClick={() => setTheme(theme === "dark" ? "light" : "dark")}
-              className="inline-flex items-center gap-2 rounded-xl border border-border bg-card px-3 py-2 text-xs text-muted-foreground transition-colors hover:text-foreground"
+              className="inline-flex h-9 items-center gap-2 rounded-full px-3 text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
               aria-label="Toggle theme"
             >
-              {mounted && theme === "dark" ? <Sun className="w-3.5 h-3.5" /> : <Moon className="w-3.5 h-3.5" />}
-              {mounted && theme === "dark" ? "Light" : "Dark"}
+              {mounted && theme === "dark" ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
+              <span className="hidden sm:inline">{mounted && theme === "dark" ? "Light" : "Dark"}</span>
             </button>
             <LogoutButton />
             </div>

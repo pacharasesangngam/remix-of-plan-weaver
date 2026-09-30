@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { ChevronDown, ChevronUp } from "lucide-react";
 import { Button } from "./ui/button";
 import FurnitureSizeEditor from "./FurnitureSizeEditor";
 import FurnitureRotationHandle from "./FurnitureRotationHandle";
@@ -24,6 +25,7 @@ export default function FurniturePlanner({ project, imageUrl, onEdit, onBack, on
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [preview, setPreview] = useState<FurnitureItem | null>(null);
   const [message, setMessage] = useState("");
+  const [mobileToolsOpen, setMobileToolsOpen] = useState(false);
   const svg = useRef<SVGSVGElement>(null);
   const [view, setView] = useState({ x: 0, y: 0 });
   const [isPanning, setIsPanning] = useState(false);
@@ -64,9 +66,15 @@ export default function FurniturePlanner({ project, imageUrl, onEdit, onBack, on
     setMessage("");
     onEdit(p => ({ ...p, furniture: (p.furniture ?? []).map(f => f.id === item.id ? fitFurniture(item, planW, planH) : f) }), { label });
   };
-  return <section className="flex min-w-0 flex-1 flex-col overflow-auto md:flex-row" aria-label="จัดวางเฟอร์นิเจอร์">
-    <aside className="w-full shrink-0 space-y-3 overflow-y-auto border-r bg-card p-4 md:w-64">
-      <h2 className="font-semibold">จัดวางเฟอร์นิเจอร์</h2>
+  return <section className="relative flex min-h-0 min-w-0 flex-1 overflow-hidden md:flex-row" aria-label="จัดวางเฟอร์นิเจอร์">
+    <aside className={`z-20 w-full shrink-0 space-y-3 overflow-y-auto border-r bg-card p-4 md:relative md:w-64 max-md:absolute max-md:inset-x-0 max-md:bottom-0 max-md:max-h-[min(50dvh,440px)] max-md:rounded-t-[28px] max-md:border max-md:border-b-0 max-md:bg-background/85 max-md:p-3 max-md:shadow-[0_-16px_48px_hsl(var(--foreground)/0.12)] max-md:backdrop-blur-2xl ${mobileToolsOpen ? "" : "max-md:max-h-16 max-md:overflow-hidden"}`}>
+      <div className="flex items-center justify-between gap-3">
+        <h2 className="font-semibold">จัดวางเฟอร์นิเจอร์</h2>
+        <button type="button" aria-expanded={mobileToolsOpen} onClick={() => setMobileToolsOpen(open => !open)} className="inline-flex h-9 shrink-0 items-center gap-1.5 rounded-full border border-border/70 bg-background/70 px-3 text-xs font-medium text-muted-foreground md:hidden">
+          เครื่องมือ{mobileToolsOpen ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronUp className="h-3.5 w-3.5" />}
+        </button>
+      </div>
+      <div className={`space-y-3 ${mobileToolsOpen ? "max-md:block" : "max-md:hidden"} md:block`}>
       <Button variant="outline" onClick={onBack}>กลับไปตรวจแปลน</Button>
       {!calibrated ? <p role="alert" className="text-sm text-amber-600">กรุณากลับไปตั้งสเกลด้วย Calibrate Scale ก่อนวางเฟอร์นิเจอร์ เพื่อให้ขนาดจริงถูกต้อง</p> : <p className="text-xs text-muted-foreground">เลือกชนิดแล้วคลิกบนแปลนเพื่อวาง ลากเพื่อย้าย · Esc ยกเลิก</p>}
       {FURNITURE_CATALOG.map(option => <Button key={option.kind} variant={kind === option.kind ? "default" : "outline"} className="h-auto w-full justify-between py-3" disabled={!calibrated} aria-pressed={kind === option.kind} onClick={() => { cancel(); setKind(option.kind); setSelectedId(null); setMessage(""); }}>
@@ -81,9 +89,10 @@ export default function FurniturePlanner({ project, imageUrl, onEdit, onBack, on
       </div>}
       <div className="flex gap-2"><Button variant="outline" disabled={!canUndo} onClick={() => { cancel(); onUndo(); }}>Undo</Button><Button variant="outline" disabled={!canRedo} onClick={() => { cancel(); onRedo(); }}>Redo</Button></div>
       <Button className="w-full" disabled={!calibrated} onClick={onGenerate}>ดู 3D</Button>
+      </div>
     </aside>
-    <div className="relative flex min-h-80 min-w-0 flex-1 items-center justify-center bg-muted/30 p-4">
-      {calibrated && <svg ref={svg} aria-label="แปลนสำหรับวางเฟอร์นิเจอร์" className="h-full min-h-80 w-full touch-none" viewBox={`${view.x} ${view.y} ${planW * 100} ${planH * 100}`} style={{ cursor: isPanning ? "grabbing" : kind ? "crosshair" : "grab" }}
+    <div className="relative flex min-h-80 min-w-0 flex-1 items-center justify-center bg-muted/30 p-4 max-md:min-h-0">
+      {calibrated && <svg ref={svg} aria-label="แปลนสำหรับวางเฟอร์นิเจอร์" className="h-full min-h-80 w-full touch-none max-md:min-h-0" viewBox={`${view.x} ${view.y} ${planW * 100} ${planH * 100}`} style={{ cursor: isPanning ? "grabbing" : kind ? "crosshair" : "grab" }}
         onContextMenu={event => event.preventDefault()}
         onPointerDownCapture={event => { if (event.button === 2) beginPan(event); }}
         onPointerDown={event => {

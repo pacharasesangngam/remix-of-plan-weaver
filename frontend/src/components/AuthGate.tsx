@@ -183,9 +183,9 @@ export function LogoutButton() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   if (!auth?.session?.user) return null;
-  return <><button type="button" disabled={busy} onClick={async () => {
+  return <><button type="button" aria-label={busy ? "Signing out" : "Sign out"} disabled={busy} onClick={async () => {
     setBusy(true); setError("");
     try { await auth.logout(); } catch { setError("Logout failed. Please try again."); } finally { setBusy(false); }
-  }} className="inline-flex items-center gap-2 rounded-xl border border-border bg-card px-3 py-2 text-xs text-muted-foreground hover:text-foreground disabled:opacity-50"><LogOut className="h-3.5 w-3.5" />{busy ? "Signing out…" : "Logout"}</button>
+  }} className="inline-flex h-9 items-center gap-2 rounded-full px-3 text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:opacity-50"><LogOut className="h-4 w-4" /><span className="hidden sm:inline">{busy ? "Signing out…" : "Logout"}</span></button>
     {error && <span role="alert" className="text-xs text-destructive">{error}</span>}</>;
 }

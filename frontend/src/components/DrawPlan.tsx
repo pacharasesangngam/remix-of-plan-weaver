@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { MousePointer2, Pencil, Square, DoorOpen, AppWindow, Hand, RotateCcw, RotateCw, Trash2, Plus, Minus, Maximize, Box } from "lucide-react";
+import { MousePointer2, Pencil, Square, DoorOpen, AppWindow, Hand, RotateCcw, RotateCw, Trash2, Plus, Minus, Maximize, Box, ChevronDown, ChevronUp } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import WallDimension from "./WallDimension";
@@ -35,6 +35,7 @@ export default function DrawPlan({ project, onEdit, onGenerate, onUndo, onRedo, 
   const [height, setHeight] = useState("2.8");
   const [openingWidth, setOpeningWidth] = useState("0.9");
   const [message, setMessage] = useState("");
+  const [mobileOptionsOpen, setMobileOptionsOpen] = useState(false);
   const svg = useRef<SVGSVGElement>(null);
   const pan = useRef<{ x: number; y: number; vx: number; vy: number; scaleX: number; scaleY: number; pointerId: number } | null>(null);
   const [isPanning, setIsPanning] = useState(false);
@@ -171,11 +172,16 @@ export default function DrawPlan({ project, onEdit, onGenerate, onUndo, onRedo, 
   const tools = [{ id: "select", label: "เลือก", Icon: MousePointer2 }, { id: "room", label: "วาดห้อง", Icon: Square }, { id: "wall", label: "วาดผนัง", Icon: Pencil }, { id: "door", label: "ประตู", Icon: DoorOpen }, { id: "window", label: "หน้าต่าง", Icon: AppWindow }, { id: "pan", label: "เลื่อนแปลน", Icon: Hand }] as const;
   const preview = start && cursor ? { x: Math.min(start.x, cursor.x), y: Math.min(start.y, cursor.y), w: Math.abs(cursor.x - start.x), h: Math.abs(cursor.y - start.y) } : null;
   const textStyle = { paintOrder: "stroke" as const, stroke: "white", strokeWidth: 3, fill: "#334155" };
-  return <div className="flex min-h-0 min-w-0 flex-1 flex-col md:flex-row">
-    <aside className="z-10 max-h-[38vh] w-full shrink-0 overflow-y-auto border-b bg-card p-4 md:max-h-none md:w-64 md:border-b-0 md:border-r">
-      <h2 className="text-lg font-semibold">สร้างแปลน</h2><p className="mb-4 mt-1 text-xs text-muted-foreground">ชั้น 1 · หน่วยเมตร · กริด 0.25 m</p>
-      <div className="grid grid-cols-3 gap-2 md:grid-cols-2">{tools.map(({ id, label, Icon }) => <button key={id} onClick={() => switchTool(id)} aria-pressed={tool === id} className={`flex flex-col items-center gap-2 rounded-xl border p-3 text-xs transition ${tool === id ? "border-emerald-500 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400" : "hover:bg-accent"}`}><Icon className="h-5 w-5" />{label}</button>)}</div>
-      <div className="mt-4 space-y-3">
+  return <div className="relative flex min-h-0 min-w-0 flex-1 flex-col md:flex-row">
+    <aside className="z-20 max-h-[38vh] w-full shrink-0 overflow-y-auto border-b bg-card p-4 md:relative md:max-h-none md:w-64 md:border-b-0 md:border-r max-md:absolute max-md:inset-x-0 max-md:bottom-0 max-md:max-h-[min(48dvh,420px)] max-md:rounded-t-[28px] max-md:border max-md:border-b-0 max-md:bg-background/85 max-md:p-3 max-md:shadow-[0_-16px_48px_hsl(var(--foreground)/0.12)] max-md:backdrop-blur-2xl">
+      <div className="mb-3 flex items-center justify-between gap-3 md:block">
+        <div><h2 className="text-base font-semibold md:text-lg">สร้างแปลน</h2><p className="mt-0.5 text-[10px] text-muted-foreground md:mb-4 md:mt-1 md:text-xs">ชั้น 1 · หน่วยเมตร · กริด 0.25 m</p></div>
+        <button type="button" aria-expanded={mobileOptionsOpen} onClick={() => setMobileOptionsOpen(open => !open)} className="inline-flex h-9 shrink-0 items-center gap-1.5 rounded-full border border-border/70 bg-background/70 px-3 text-xs font-medium text-muted-foreground md:hidden">
+          {mobileOptionsOpen ? "ตัวเลือก" : "ตั้งค่า"}{mobileOptionsOpen ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronUp className="h-3.5 w-3.5" />}
+        </button>
+      </div>
+      <div className="grid grid-cols-6 gap-1.5 md:grid-cols-2 md:gap-2">{tools.map(({ id, label, Icon }) => <button key={id} onClick={() => switchTool(id)} aria-pressed={tool === id} className={`flex flex-col items-center gap-1.5 rounded-xl border px-1 py-2 text-[10px] transition md:gap-2 md:p-3 md:text-xs ${tool === id ? "border-emerald-500 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400" : "hover:bg-accent"}`}><Icon className="h-4 w-4 md:h-5 md:w-5" />{label}</button>)}</div>
+      <div className={`mt-3 space-y-3 md:mt-4 ${mobileOptionsOpen ? "max-md:block" : "max-md:hidden"} md:block`}>
         <div className="space-y-2 rounded-xl border p-3"><p className="text-xs text-muted-foreground">ลูกกลิ้ง: ซูมเข้า–ออกตามตำแหน่งเมาส์ · เครื่องมือมือ: เลื่อนแปลน</p>
           <Button variant="outline" className="w-full" disabled={!!start || !!movePreview || planW >= 1000 || planH >= 1000} onClick={() => { onEdit(expandDrawingSheet, { label: "expand drawing sheet" }); setView(v => ({ x: v.x / 2, y: v.y / 2, size: v.size / 2 })); }}>ขยายพื้นที่วาด 2 เท่า</Button>
           <p className="text-xs text-muted-foreground">ขนาดวัตถุจริงคงเดิม · Undo ได้</p>
@@ -198,7 +204,7 @@ export default function DrawPlan({ project, onEdit, onGenerate, onUndo, onRedo, 
           {selectedRoom && <p className="text-xs text-muted-foreground">ลบพร้อมผนังและช่องเปิดของห้องนี้ · Undo ได้</p>}</div>}
       </div>
     </aside>
-    <div className="relative min-h-[360px] min-w-0 flex-1 overflow-hidden bg-white">
+    <div className="relative min-h-0 min-w-0 flex-1 overflow-hidden bg-white max-md:min-h-[360px]">
       <div className="absolute left-4 right-4 top-4 z-10 flex items-center justify-between gap-2 pointer-events-none"><span className="rounded-full border bg-white/95 px-4 py-2 text-xs text-slate-600">2D · พื้นที่ {planW} × {planH} m</span><Button className="pointer-events-auto rounded-full bg-emerald-600 text-white hover:bg-emerald-700" disabled={!!start || (!walls.length && !rooms.length)} onClick={onGenerate}><Box className="mr-2 h-4 w-4" />ดู 3D</Button></div>
       <svg ref={svg} role="img" aria-label="พื้นที่วาดแปลน 2D"
         className={`h-full min-h-[360px] w-full touch-none ${movePreview || isPanning ? "cursor-grabbing" : tool === "pan" || tool === "select" ? "cursor-grab" : "cursor-crosshair"}`}
@@ -235,8 +241,8 @@ export default function DrawPlan({ project, onEdit, onGenerate, onUndo, onRedo, 
         <PlanDimensions project={movePreview ?? project} uiScale={view.size / viewportHeight} />
       </svg>
       {message && <p role="status" className="absolute bottom-20 left-4 right-4 rounded-xl border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900">{message}</p>}
-      <div className="absolute bottom-4 left-4 flex gap-1 rounded-full border bg-white p-1 text-slate-600 shadow-sm"><Button variant="ghost" size="icon" aria-label="Undo" disabled={!canUndo} onClick={onUndo}><RotateCcw className="h-4 w-4" /></Button><Button variant="ghost" size="icon" aria-label="Redo" disabled={!canRedo} onClick={onRedo}><RotateCw className="h-4 w-4" /></Button><span className="self-center px-3 text-xs">{rooms.length} ห้อง · {walls.length} ผนัง</span></div>
-      <div className="absolute bottom-4 right-4 flex gap-1 rounded-full border bg-white p-1 text-slate-600 shadow-sm"><Button variant="ghost" size="icon" aria-label="ซูมเข้า" onClick={() => zoom(0.8)}><Plus className="h-4 w-4" /></Button><Button variant="ghost" size="icon" aria-label="ซูมออก" onClick={() => zoom(1.25)}><Minus className="h-4 w-4" /></Button><Button variant="ghost" size="icon" aria-label="ดูเต็มแปลน" onClick={() => { const size = Math.max(1000, 1000 / aspect); setView({ x: (1000 - size * aspect) / 2, y: (1000 - size) / 2, size }); }}><Maximize className="h-4 w-4" /></Button></div>
+      <div className="absolute bottom-4 left-4 flex gap-1 rounded-full border bg-white/90 p-1 text-slate-600 shadow-lg backdrop-blur-xl max-md:bottom-[calc(env(safe-area-inset-bottom)+4.5rem)] max-md:left-2"><Button variant="ghost" size="icon" aria-label="Undo" disabled={!canUndo} onClick={onUndo}><RotateCcw className="h-4 w-4" /></Button><Button variant="ghost" size="icon" aria-label="Redo" disabled={!canRedo} onClick={onRedo}><RotateCw className="h-4 w-4" /></Button><span className="self-center px-2 text-[10px] sm:px-3 sm:text-xs">{rooms.length} ห้อง · {walls.length} ผนัง</span></div>
+      <div className="absolute bottom-4 right-4 flex gap-1 rounded-full border bg-white/90 p-1 text-slate-600 shadow-lg backdrop-blur-xl max-md:bottom-[calc(env(safe-area-inset-bottom)+4.5rem)] max-md:right-2"><Button variant="ghost" size="icon" aria-label="ซูมเข้า" onClick={() => zoom(0.8)}><Plus className="h-4 w-4" /></Button><Button variant="ghost" size="icon" aria-label="ซูมออก" onClick={() => zoom(1.25)}><Minus className="h-4 w-4" /></Button><Button variant="ghost" size="icon" aria-label="ดูเต็มแปลน" onClick={() => { const size = Math.max(1000, 1000 / aspect); setView({ x: (1000 - size * aspect) / 2, y: (1000 - size) / 2, size }); }}><Maximize className="h-4 w-4" /></Button></div>
     </div>
   </div>;
 }

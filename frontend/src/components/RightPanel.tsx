@@ -1868,7 +1868,11 @@ const RightPanel = ({
   const [buildMode, setBuildMode] = useState<BuildMode>("select");
   const [isAddMenuOpen, setIsAddMenuOpen] = useState(false);
   const [selection, setSelection] = useState<Selection>(null);
+  const [mobilePropertiesOpen, setMobilePropertiesOpen] = useState(false);
     const projectActions = useProjectActions();
+  useEffect(() => {
+    if (selection) setMobilePropertiesOpen(true);
+  }, [selection]);
   const [hoverTarget, setHoverTarget] = useState<Selection>(null);
   const [placementPreview, setPlacementPreview] = useState<PlacementPreview>(null);
   const [openingDraft, setOpeningDraft] = useState<OpeningDraft>(null);
@@ -2262,7 +2266,7 @@ const RightPanel = ({
             <Box className="h-4 w-4 shrink-0 text-primary" />
             <div className="min-w-0"><p className="text-sm font-semibold text-foreground">3D View</p><p className="text-[11px] text-muted-foreground">Explore and edit your space in 3D</p></div>
           </div>
-          <div className="flex items-center gap-3 whitespace-nowrap">
+          <div className="flex items-center gap-3 whitespace-nowrap max-md:flex-1 max-md:overflow-x-auto max-md:scrollbar-none">
             <button onClick={() => { setBuildMode("select"); setIsAddMenuOpen(false); }} className={`inline-flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-[11px] font-medium transition-colors ${buildMode === "select" ? "border-blue-600 bg-blue-600 text-white shadow-sm" : "border-border bg-background text-foreground hover:bg-accent"}`}><MousePointer2 className="h-3.5 w-3.5" />Select</button>
             <div ref={addMenuRef} className={`relative flex items-center gap-2 rounded-lg border px-3 py-1.5 transition-all duration-200 ${buildMode !== "select" ? "border-blue-500/60 bg-blue-500/10" : "border-border bg-card/80"}`}>
               {buildMode === "select" ? <>
@@ -2281,12 +2285,12 @@ const RightPanel = ({
               </>}
             </div>
             <button onClick={toggleWalkMode} className={`inline-flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-[11px] font-medium transition-colors ${walkMode ? "border-blue-600 bg-blue-600 text-white" : "border-border bg-background text-foreground hover:bg-accent"}`}><Move3D className="h-3.5 w-3.5" />{walkMode ? "Walk Mode On" : "Walk Mode"}</button>
-            <span className="mx-1 h-4 w-px bg-border" />
+            <span className="mx-1 h-4 w-px bg-border max-md:hidden" />
             <div className="flex overflow-hidden rounded-lg border border-border bg-card/80"><button onClick={onUndo} disabled={!canUndo} aria-label="Undo" title="Undo (Ctrl/Cmd + Z)" className="p-1.5 text-muted-foreground hover:bg-accent hover:text-foreground disabled:opacity-35"><RotateCcw className="h-3.5 w-3.5" /></button><button onClick={onRedo} disabled={!canRedo} aria-label="Redo" title="Redo (Ctrl/Cmd + Shift + Z)" className="border-l border-border p-1.5 text-muted-foreground hover:bg-accent hover:text-foreground disabled:opacity-35"><RotateCcw className="h-3.5 w-3.5 -scale-x-100" /></button></div>
           </div>
-          <button onClick={handleExportGlb} className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-background px-3 py-1.5 text-[11px] font-medium text-foreground transition-colors hover:bg-accent" title="Export a .glb file for Blender"><Download className="h-3.5 w-3.5" />Export GLB</button>
+          <button onClick={handleExportGlb} className="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-border bg-background px-3 py-1.5 text-[11px] font-medium text-foreground transition-colors hover:bg-accent max-md:px-2" title="Export a .glb file for Blender"><Download className="h-3.5 w-3.5" /><span className="max-md:hidden">Export GLB</span></button>
         </div>
-        <div className="flex min-h-0 min-w-0 flex-1">
+        <div className="relative flex min-h-0 min-w-0 flex-1">
           <div role="region" aria-label="3D canvas" className="relative min-h-0 min-w-0 flex-1 overflow-hidden">
           <Canvas
             camera={{
@@ -2528,7 +2532,12 @@ const RightPanel = ({
           </div>
 
           </div>
-          <aside aria-label="3D properties and decoration" className="relative flex min-h-0 w-[280px] shrink-0 flex-col overflow-hidden border-l border-border bg-card/30 text-xs">
+          <aside aria-label="3D properties and decoration" className={`relative flex min-h-0 w-[280px] shrink-0 flex-col overflow-hidden border-l border-border bg-card/30 text-xs max-md:absolute max-md:inset-x-0 max-md:bottom-0 max-md:z-30 max-md:w-full max-md:rounded-t-[28px] max-md:border max-md:border-b-0 max-md:bg-background/85 max-md:shadow-[0_-16px_48px_hsl(var(--foreground)/0.12)] max-md:backdrop-blur-2xl ${mobilePropertiesOpen ? "max-md:max-h-[min(52dvh,480px)]" : "max-md:h-14 max-md:max-h-14"}`}>
+            <button type="button" aria-expanded={mobilePropertiesOpen} onClick={() => setMobilePropertiesOpen(open => !open)} className="hidden h-14 shrink-0 items-center justify-between px-4 text-left font-medium max-md:flex">
+              <span>{selection ? "Selection & materials" : "3D tools & materials"}</span>
+              <ChevronDown className={`h-4 w-4 transition-transform ${mobilePropertiesOpen ? "rotate-180" : ""}`} />
+            </button>
+            <div className={`flex min-h-0 flex-1 flex-col ${mobilePropertiesOpen ? "" : "max-md:hidden"}`}>
             <div className="min-h-0 flex-1 space-y-3 overflow-y-auto overscroll-contain p-3 [&_input:not([type=color]):not([type=checkbox])]:h-8 [&_input:not([type=color]):not([type=checkbox])]:w-full [&_input:not([type=color]):not([type=checkbox])]:rounded-md [&_input:not([type=color]):not([type=checkbox])]:border [&_input:not([type=color]):not([type=checkbox])]:border-border [&_input:not([type=color]):not([type=checkbox])]:bg-background [&_input:not([type=color]):not([type=checkbox])]:px-2 [&_input]:text-xs [&_select]:h-8 [&_select]:rounded-md [&_select]:text-xs">
             {selection && <section aria-label="Properties" className="space-y-3">
               <div className="flex items-center justify-between gap-2" aria-live="polite">
@@ -2860,6 +2869,7 @@ const RightPanel = ({
             </div>
             </div>
           </details>
+            </div>
             </div>
           </aside>
           </div>
