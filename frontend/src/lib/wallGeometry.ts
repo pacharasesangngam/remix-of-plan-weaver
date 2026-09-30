@@ -1,5 +1,6 @@
 import type { DetectedWallSegment as Wall } from "@/types/detection";
 import type { NormalizedPoint as Point } from "@/types/floorplan";
+import { projectDragPoint } from "./wallLengthEdit";
 
 export type Endpoint = "start" | "end";
 export interface ScreenSize {
@@ -32,14 +33,21 @@ export const validWall = (wall: Wall) => [wall.x1, wall.y1, wall.x2, wall.y2].ev
 export const geometryChanged = (a: Wall, b: Wall) => a.x1 !== b.x1 || a.y1 !== b.y1 || a.x2 !== b.x2 || a.y2 !== b.y2;
 
 // Apply only the selected wall's geometry; snapping targets are never edited.
-export function editWallGeometry(walls: Wall[], updated: Wall, endpoint?: Endpoint): Wall[] | null {
+// A dragged endpoint is projected onto the wall's own axis, exactly as the
+// commit path does, so the live preview and the released result cannot disagree.
+// `exact` is for a resolved snap: landing on a specific endpoint or a T host is a
+// deliberate connection, and it outranks the axis projection (D2).
+export function editWallGeometry(walls: Wall[], updated: Wall, endpoint?: Endpoint, options?: { exact?: boolean }): Wall[] | null {
     const original = walls.find(wall => wall.id === updated.id);
     if (!original) return null;
+    const raw = endpoint ? endpointPoint(updated, endpoint) : { x: updated.x2, y: updated.y2 };
+    const point = endpoint && !options?.exact ? projectDragPoint(original, raw) : raw;
+    const start = endpoint === "start" ? point : { x: updated.x1, y: updated.y1 };
     const next = endpoint === "start"
-        ? { ...original, x1: updated.x1, y1: updated.y1 }
+        ? { ...original, x1: start.x, y1: start.y }
         : endpoint === "end"
-            ? { ...original, x2: updated.x2, y2: updated.y2 }
-            : { ...original, x1: updated.x1, y1: updated.y1, x2: updated.x2, y2: updated.y2 };
+            ? { ...original, x2: point.x, y2: point.y }
+            : { ...original, x1: updated.x1, y1: updated.y1, x2: point.x, y2: point.y };
     if (!validWall(next)) return null;
     return walls.map(wall => wall.id === original.id && geometryChanged(wall, next) ? next : wall);
 }

@@ -2,7 +2,7 @@
   "$schema": "https://railway.com/railway.schema.json",
   "build": {
     "builder": "RAILPACK",
-    "buildCommand": "cd backend && python -m pip install --upgrade pip setuptools wheel && python -m pip install -r requirements.txt",
+    "buildCommand": "apt-get update && apt-get install -y --no-install-recommends libgl1 libglib2.0-0 && cd backend && python -m pip install --upgrade pip setuptools wheel && python -m pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu && python -m pip install -r requirements.txt",
     "watchPatterns": [
       "/backend/**"
     ]

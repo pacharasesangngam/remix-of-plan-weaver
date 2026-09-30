@@ -6,7 +6,8 @@ export interface DimensionEndpoint extends NormalizedPoint {
   /** Interior references follow the actual junction, not an arbitrary point on a host. */
   junctionWallIds?: string[];
 }
-export interface ConfirmedDimension { start: DimensionEndpoint; end: DimensionEndpoint; lengthM: number; kind?: "length" }
+export interface ConfirmedDimension { start: DimensionEndpoint; end: DimensionEndpoint; lengthM: number; kind?: "length"; source?: "calibration" | "dimension" }
+export const isCalibrationDimension = (dimension: ConfirmedDimension) => dimension.source === "calibration";
 export const endpointPosition = (wall: Wall, endpoint: "start" | "end"): NormalizedPoint => endpoint === "start"
   ? { x: wall.x1, y: wall.y1 } : { x: wall.x2, y: wall.y2 };
 export function confirmCalibration(points: NormalizedPoint[], walls: Wall[], lengthM: number): ConfirmedDimension[] {
@@ -19,7 +20,7 @@ export function confirmCalibration(points: NormalizedPoint[], walls: Wall[], len
     return null;
   });
   return endpoints.every(Boolean) && (points[0].x !== points[1].x || points[0].y !== points[1].y)
-    ? [{ start: endpoints[0]!, end: endpoints[1]!, lengthM }] : [];
+    ? [{ start: endpoints[0]!, end: endpoints[1]!, lengthM, source: "calibration" as const }] : [];
 }
 export function preservesConfirmedDimensions(walls: Wall[], dimensions: ConfirmedDimension[] = [], pw: number, ph: number): boolean {
   return dimensions.every(d => {
@@ -37,8 +38,8 @@ export function preservesConfirmedDimensions(walls: Wall[], dimensions: Confirme
       };
       return onWall(w) && (ref.junctionWallIds ?? []).every(id => onWall(walls.find(w => w.id === id))) ? ref : null;
     });
-    return points.every((p, i) => p && Math.hypot((p.x - [d.start, d.end][i].x) * pw, (p.y - [d.start, d.end][i].y) * ph) < 1e-6)
-      && Math.abs(Math.hypot((points[1]!.x - points[0]!.x) * pw, (points[1]!.y - points[0]!.y) * ph) - d.lengthM) < 1e-5;
+    const keepsAnchors = d.source === "calibration" || points.every((p, i) => p && Math.hypot((p.x - [d.start, d.end][i].x) * pw, (p.y - [d.start, d.end][i].y) * ph) < 1e-6);
+    return keepsAnchors && Math.abs(Math.hypot((points[1]!.x - points[0]!.x) * pw, (points[1]!.y - points[0]!.y) * ph) - d.lengthM) < 1e-5;
   });
 }
 export function parseConfirmedDimensions(value: unknown, walls: Wall[], pw: number, ph: number): ConfirmedDimension[] {

@@ -229,8 +229,10 @@ it("commits propagated interior junctions and openings immediately as one Undo s
   expect(screen.queryByRole("alert")).toBeNull();
   const after = saved();
   expect(after.walls[0].x2).toBeCloseTo(0.48);
-  expect(after.walls[2].x1).toBeCloseTo(0.64);
-  expect(after.walls[3].x1).toBeCloseTo(0.645);
+  // The diagonal host translates rigidly by the same 0.02, so its interior
+  // T-nodes ride along to 0.63 instead of being pulled part of the way.
+  expect(after.walls[2].x1).toBeCloseTo(0.63);
+  expect(after.walls[3].x1).toBeCloseTo(0.63);
   expect(after.windows[0].bbox.x).not.toBe(before.windows[0].bbox.x);
   expect(after.meta).toEqual(before.meta);
   fireEvent.click(screen.getByTitle("Undo (Ctrl/Cmd + Z)"));
@@ -238,7 +240,7 @@ it("commits propagated interior junctions and openings immediately as one Undo s
   expect(screen.getByTitle("Undo (Ctrl/Cmd + Z)")).toBeDisabled();
 });
 
-it("edits a diagonal from the existing length field and keeps the connected endpoint shared", () => {
+it("edits a diagonal from the existing length field and never bends the walls it meets", () => {
   render(<Index />);
   fireEvent.click(screen.getByText("Import test plan"));
   fireEvent.click(screen.getByText("Back to Review"));
@@ -254,8 +256,10 @@ it("edits a diagonal from the existing length field and keeps the connected endp
   const dx = (d.x2 - d.x1) * saved.meta.planWidth, dy = (d.y2 - d.y1) * saved.meta.planHeight;
   expect(Math.hypot(dx, dy)).toBeCloseTo(4);
   expect(dx / dy).toBeCloseTo(2);
-  expect(v.x2).toBe(d.x2);
-  expect(v.y2).toBe(d.y2);
+  // D1: the vertical wall may not be dragged sideways to chase the shorter
+  // diagonal, so it stays vertical and exactly where it was. The junction the
+  // two used to share is simply gone.
+  expect(v).toEqual(project.walls[1]);
   expect(saved.meta.scale).toBe(project.meta.scale);
 });
 

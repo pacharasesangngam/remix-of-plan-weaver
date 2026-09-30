@@ -35,7 +35,9 @@ export interface TopologyFace { polygon: Point[]; holes: Point[][]; wallIds: str
 export interface TopologyLoop { polygon: Point[]; area: number; wallIds: string[]; nodeIds: number[] }
 export interface WallTopology { nodes: TopologyNode[]; edges: TopologyEdge[]; faces: TopologyFace[] }
 
-/** Boundary measurements refer to the planar graph, never to a room's bounding box. */
+/** Boundary measurements refer to the planar graph, never to a room's bounding box.
+ * The returned spans are the same logical segments the wall editor offers, so a
+ * room boundary edit and a segment edit resolve to one shared piece of geometry. */
 export function roomBoundarySpans(room: Room, topology: WallTopology) {
   const rings = [room.wallPolygon ?? room.polygon ?? [], ...(room.holes ?? [])];
   const onSide = (p: Point, a: Point, b: Point) => {
@@ -44,12 +46,133 @@ export function roomBoundarySpans(room: Room, topology: WallTopology) {
     return len > TOPOLOGY_EPS && t >= -TOPOLOGY_EPS && t <= 1 + TOPOLOGY_EPS
       && Math.abs(dx * (p.y - a.y) - dy * (p.x - a.x)) <= TOPOLOGY_EPS * len;
   };
-  return topology.edges.flatMap(edge => {
+  return topology.edges.flatMap((edge, edgeId) => {
     const start = topology.nodes[edge.a], end = topology.nodes[edge.b];
     const boundary = rings.some(ring => ring.some((a, i) => onSide(start, a, ring[(i + 1) % ring.length]) && onSide(end, a, ring[(i + 1) % ring.length])));
-    return boundary ? [{ wallId: edge.wallIds[0], start: { x: start.x, y: start.y }, end: { x: end.x, y: end.y } }] : [];
+    return boundary ? [{ wallId: edge.wallIds[0], segmentKey: segmentKey(edge.wallIds[0], start, end), edgeId, nodeA: edge.a, nodeB: edge.b,
+      start: { x: start.x, y: start.y }, end: { x: end.x, y: end.y } }] : [];
   });
 }
+
+/** One piece of a physical wall between two adjacent junctions. Selecting or
+ * measuring a segment never splits the stored wall, so 3D, thickness, materials
+ * and openings keep coming from the one continuous physical wall. */
+export interface LogicalSegment extends Point {
+  key: string;
+  wallId: string;
+  /** Position along the wall, 0-based, ordered from the wall's start endpoint. */
+  index: number;
+  count: number;
+  nodeA: number;
+  nodeB: number;
+  edgeId: number;
+  x1: number;
+  y1: number;
+  x2: number;
+  y2: number;
+}
+export interface WallSegmentation {
+  topology: WallTopology;
+  segments: LogicalSegment[];
+  byWall: Map<string, LogicalSegment[]>;
+  byEdge: Map<number, LogicalSegment[]>;
+  /** Segment id -> segment, so a stored reference resolves without a rebuild. */
+  byKey: Map<string, LogicalSegment>;
+  /** Junction node id -> the segments that end there, in every wall. */
+  byNode: Map<number, LogicalSegment[]>;
+}
+/** The segments of one physical wall, ordered from its start endpoint. */
+export const chainFor = (segmentation: WallSegmentation, wallId: string): LogicalSegment[] =>
+  segmentation.byWall.get(wallId) ?? [];
+/** A junction's identity is the endpoints that meet there, never an array index, so it
+ * survives a rebuild and a reorder of the stored walls. A crossing with no stored
+ * endpoint has no such identity and falls back to its own coordinate. */
+export function junctionKey(node: TopologyNode): string {
+  return node.endpoints.length
+    ? [...node.endpoints].map(endpoint => `${endpoint.wallId}:${endpoint.end}`).sort().join("|")
+    : `crossing:${node.x.toFixed(9)},${node.y.toFixed(9)}`;
+}
+/** Segment identity follows its two junctions, so it is stable across any rebuild. */
+export const segmentKey = (wallId: string, a: TopologyNode, b: TopologyNode) =>
+  `${wallId}@${[junctionKey(a), junctionKey(b)].sort().join("~")}`;
+/** Split every physical wall at its endpoints, shared junctions, T-junctions and
+ * real intersections. This is the single junction/segment topology used for wall
+ * editing, room boundaries, room derivation and dimension propagation. The topology
+ * is built once per revision and passed in by every other consumer. */
+export function segmentWalls(walls: Wall[], topology = buildWallTopology(walls)): WallSegmentation {
+  const segments: LogicalSegment[] = [], byWall = new Map<string, LogicalSegment[]>(), byEdge = new Map<number, LogicalSegment[]>();
+  const byKey = new Map<string, LogicalSegment>(), byNode = new Map<number, LogicalSegment[]>();
+  for (const wall of walls) {
+    const a = { x: wall.x1, y: wall.y1 }, b = { x: wall.x2, y: wall.y2 };
+    const dx = b.x - a.x, dy = b.y - a.y, len2 = dx * dx + dy * dy;
+    if (!(len2 > TOPOLOGY_EPS * TOPOLOGY_EPS)) continue;
+    // Every node lying on the wall is a cut point; ordering them along the wall
+    // recovers the chain regardless of which pair happened to be built first.
+    const cuts = topology.nodes.map((node, id) => ({ id, t: ((node.x - a.x) * dx + (node.y - a.y) * dy) / len2 }))
+      .filter(cut => cut.t >= -1e-9 && cut.t <= 1 + 1e-9
+        && Math.abs(dx * (topology.nodes[cut.id].y - a.y) - dy * (topology.nodes[cut.id].x - a.x)) <= 1e-7 * Math.sqrt(len2))
+      .sort((p, q) => p.t - q.t);
+    const chain: LogicalSegment[] = [];
+    for (let i = 1; i < cuts.length; i++) {
+      const nodeA = cuts[i - 1].id, nodeB = cuts[i].id;
+      if (nodeA === nodeB) continue;
+      const edgeId = topology.nodes[nodeA].edges.find(edge => {
+        const other = topology.edges[edge].a === nodeA ? topology.edges[edge].b : topology.edges[edge].a;
+        return other === nodeB && topology.edges[edge].wallIds.includes(wall.id);
+      });
+      if (edgeId === undefined) continue;
+      const start = topology.nodes[nodeA], end = topology.nodes[nodeB];
+      const segment: LogicalSegment = { key: segmentKey(wall.id, start, end), wallId: wall.id, index: chain.length,
+        count: 0, nodeA, nodeB, edgeId, x: start.x, y: start.y, x1: start.x, y1: start.y, x2: end.x, y2: end.y };
+      chain.push(segment);
+    }
+    for (const segment of chain) segment.count = chain.length;
+    if (!chain.length) continue;
+    byWall.set(wall.id, chain);
+    segments.push(...chain);
+    for (const segment of chain) {
+      byEdge.set(segment.edgeId, [...(byEdge.get(segment.edgeId) ?? []), segment]);
+      byKey.set(segment.key, segment);
+      for (const nodeId of [segment.nodeA, segment.nodeB])
+        byNode.set(nodeId, [...(byNode.get(nodeId) ?? []), segment]);
+    }
+  }
+  return { topology, segments, byWall, byEdge, byKey, byNode };
+}
+
+/** One revision of the shared topology. Every consumer reads these maps instead of
+ * building its own graph, so wall editing, room boundaries, room derivation and
+ * dimension propagation can never disagree about which junction or segment exists. */
+export interface WallGraph {
+  /** The exact wall array this graph was built from; a graph is never reused for another. */
+  walls: Wall[];
+  topology: WallTopology;
+  segmentation: WallSegmentation;
+  /** Junction node id -> stable junction key, and back. */
+  junctionIds: Map<number, string>;
+  junctionNodes: Map<string, number>;
+}
+export function buildWallGraph(walls: Wall[]): WallGraph {
+  const topology = buildWallTopology(walls);
+  const segmentation = segmentWalls(walls, topology);
+  const junctionIds = new Map<number, string>(), junctionNodes = new Map<string, number>();
+  topology.nodes.forEach((node, id) => {
+    const key = junctionKey(node);
+    junctionIds.set(id, key);
+    if (!junctionNodes.has(key)) junctionNodes.set(key, id);
+  });
+  return { walls, topology, segmentation, junctionIds, junctionNodes };
+}
+/** A graph is only trusted for the exact wall array it was built from. */
+export const resolveWallGraph = (walls: Wall[], graph?: WallGraph): WallGraph =>
+  graph && graph.walls === walls ? graph : buildWallGraph(walls);
+export interface WallRevision extends WallGraph {
+  rooms: Room[];
+}
+export function buildRevision(walls: Wall[], previousRooms: Room[] = [], height = 2.8): WallRevision {
+  return { ...buildWallGraph(walls), rooms: deriveRooms(walls, previousRooms, height) };
+}
+
 
 /** Planar segment graph shared by all wall sources. Stored walls are never split or mutated. */
 export function buildWallTopology(walls: Wall[]): WallTopology {
@@ -80,8 +203,13 @@ export function buildWallTopology(walls: Wall[]): WallTopology {
     if (i < 0) { i = nodes.length; nodes.push({ ...p, endpoints: [], edges: [] }); }
     return i;
   };
+  // A cut at a stored endpoint reuses that exact coordinate instead of re-deriving it, so
+  // every wall that shares the junction writes bitwise identical values. Without this, the
+  // same corner can differ by one ulp between two walls and the junction drifts apart.
+  const cutPoint = (s: typeof segments[number], t: number) => t <= 0 ? s.a : t >= 1 ? s.b
+    : { x: s.a.x + (s.b.x - s.a.x) * t, y: s.a.y + (s.b.y - s.a.y) * t };
   for (const s of segments) {
-    const ids = s.cuts.sort((a, b) => a - b).map(t => node({ x: s.a.x + (s.b.x - s.a.x) * t, y: s.a.y + (s.b.y - s.a.y) * t }))
+    const ids = s.cuts.sort((a, b) => a - b).map(t => node(cutPoint(s, t)))
       .filter((n, i, all) => !i || n !== all[i - 1]);
     nodes[ids[0]].endpoints.push({ wallId: s.wall.id, end: "start" });
     nodes[ids.at(-1)!].endpoints.push({ wallId: s.wall.id, end: "end" });

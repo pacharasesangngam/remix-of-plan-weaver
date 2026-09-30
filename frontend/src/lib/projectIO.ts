@@ -73,7 +73,8 @@ export const createFloorPlanProject = ({
   app: "remix-of-plan-weaver",
   version: 1,
   meta: {
-    ...(confirmedDimensions?.length ? { confirmedDimensions } : {}),
+    ...(confirmedDimensions?.filter(dimension => dimension.source !== "dimension").length
+      ? { confirmedDimensions: confirmedDimensions.filter(dimension => dimension.source !== "dimension") } : {}),
     calibrationStatus: savedCalibrationStatus({ calibrationStatus, editorMode, scale, planWidth, planHeight }),
     ...(editorMode ? { editorMode } : {}),
     unit,

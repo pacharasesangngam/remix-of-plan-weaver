@@ -40,7 +40,7 @@ function setup() {
   return { ...view, svg, selectRoom, selectWall, topDimension, beginBoundary, read, committed };
 }
 
-it("keeps the default clean and highlights exactly the selected room's partial wall", () => {
+it("keeps the default clean and displays the selected room's partial wall", () => {
   const view = setup();
   expect(view.svg.querySelectorAll('[data-plan-dimension]')).toHaveLength(0);
   expect(view.svg.textContent).toContain("33.00 m²");
@@ -51,32 +51,22 @@ it("keeps the default clean and highlights exactly the selected room's partial w
   expect(boundary).toHaveAttribute("stroke", "#7c3aed");
   expect(view.topDimension().querySelectorAll("ellipse")).toHaveLength(0);
   expect(view.topDimension().querySelector("rect")).toBeNull();
-  const label = within(view.topDimension() as HTMLElement).getByRole("button");
-  expect(label.querySelector("text")).toHaveTextContent(/^5.50$/);
-  fireEvent.mouseEnter(label);
-  const highlight = view.topDimension().querySelector('[data-dimension-highlight]')!;
-  expect(highlight.querySelector("line")).toHaveAttribute("x1", "0");
-  expect(highlight.querySelector("line")).toHaveAttribute("x2", "0.275");
-  expect(highlight.querySelectorAll("ellipse")).toHaveLength(0);
-  fireEvent.mouseLeave(label);
+  expect(view.topDimension().querySelector("text")).toHaveTextContent(/^5.50$/);
+  expect(view.topDimension().querySelector('[role="button"]')).toBeNull();
   expect(view.topDimension().querySelector('[data-dimension-highlight]')).toBeNull();
   const span = view.topDimension().querySelector('[data-boundary-hit-target]')!;
   fireEvent.mouseEnter(span);
   expect(view.topDimension().querySelectorAll("ellipse")).toHaveLength(0);
-  fireEvent.click(view.getAllByRole("button", { name: /Edit boundary length 5\.50 m/ })[0]);
-  expect(view.getAllByRole("spinbutton", { name: "Boundary length (m)" })[0]).toHaveValue(5.5);
+  expect(view.svg.querySelector('[data-dimension-label] [role="button"]')).toBeNull();
+  expect(view.getAllByRole("button", { name: /Edit boundary length 5\.50 m/ }).length).toBeGreaterThan(0);
   expect(view.read().walls).toHaveLength(5);
 });
 
-it("cancels with Escape, commits Enter/blur once, shares sidebar edits and restores geometry/area/constraints with undo", () => {
+it("edits from the sidebar and restores geometry/area/constraints with undo", () => {
   const view = setup();
-  view.selectRoom(); view.beginBoundary();
-  const input = () => view.getAllByRole("spinbutton", { name: "Boundary length (m)" })[0];
-  fireEvent.change(input(), { target: { value: "5.7" } });
-  fireEvent.keyDown(input(), { key: "Escape" });
-  expect(view.committed).not.toHaveBeenCalled();
-  expect(view.read().walls[4].x1).toBe(0.275);
+  view.selectRoom();
   view.beginBoundary();
+  const input = () => view.getAllByRole("spinbutton", { name: "Boundary length (m)" })[0];
   fireEvent.change(input(), { target: { value: "5.7" } });
   fireEvent.keyDown(input(), { key: "Enter" });
   expect(view.committed).toHaveBeenCalledTimes(1);
@@ -103,16 +93,24 @@ it("cancels with Escape, commits Enter/blur once, shares sidebar edits and resto
 
 it("edits the entire continuous wall from the canvas and sidebar without changing calibration", () => {
   const view = setup(); view.selectWall();
-  expect(within(view.topDimension() as HTMLElement).getByRole("button")).toHaveTextContent("13.20");
-  fireEvent.click(within(view.topDimension() as HTMLElement).getByRole("button"));
-  const input = view.getByRole("spinbutton", { name: "Canvas wall length (m)" });
-  fireEvent.change(input, { target: { value: "14" } }); fireEvent.blur(input);
-  expect(view.read().walls[0].x2 * 20).toBeCloseTo(14);
-  expect(view.getByRole("spinbutton", { name: "Wall length (m)" })).toHaveValue(14);
+  expect(view.topDimension().querySelector("text")).toHaveTextContent("13.20");
+  expect(view.topDimension().querySelector('[role="button"]')).toBeNull();
+  expect(view.queryByRole("spinbutton", { name: "Canvas wall length (m)" })).toBeNull();
   const sidebar = view.getByRole("spinbutton", { name: "Wall length (m)" });
   fireEvent.change(sidebar, { target: { value: "13.5" } }); fireEvent.keyDown(sidebar, { key: "Enter" }); fireEvent.blur(sidebar);
-  expect(view.committed).toHaveBeenCalledTimes(2);
+  expect(view.committed).toHaveBeenCalledTimes(1);
   expect(view.read()).toMatchObject({ scale: 1, planW: 20, planH: 20 });
   expect(view.read().confirmedDimensions).toHaveLength(1);
   expect(view.read().walls).toHaveLength(5);
+});
+
+it("keeps one selected-wall read-only dimension representation", () => {
+  const view = setup();
+  view.selectWall();
+  const dimension = view.topDimension();
+  expect(dimension.querySelectorAll('[data-measurement-endpoint]')).toHaveLength(0);
+  fireEvent.mouseEnter(dimension.querySelector('[data-dimension-label]')!);
+  expect(view.svg.querySelectorAll('[data-plan-dimension]')).toHaveLength(1);
+  expect(view.svg.querySelectorAll('[data-dimension-highlight]')).toHaveLength(0);
+  expect(view.svg.querySelectorAll('[data-dimension-label]')).toHaveLength(1);
 });

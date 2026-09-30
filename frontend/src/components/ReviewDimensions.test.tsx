@@ -10,8 +10,7 @@ it("keeps horizontal and vertical room labels centered on their span at differen
     { id: "horizontal", wallId: "wall", boundary: true, length: 7.75, start: { x: 0.1, y: 0.2 }, end: { x: 0.8, y: 0.2 } },
     { id: "vertical", wallId: "side", boundary: true, length: 3, start: { x: 0.8, y: 0.2 }, end: { x: 0.8, y: 0.6 } },
   ];
-  const overlay = (width: number, height: number) => <svg><ReviewDimensions dimensions={dimensions} width={width} height={height}
-    draft={null} error={null} onDraft={vi.fn()} onCommit={vi.fn()} onCancel={vi.fn()} /></svg>;
+  const overlay = (width: number, height: number) => <svg><ReviewDimensions dimensions={dimensions} width={width} height={height} /></svg>;
   const view = render(overlay(1000, 500));
   const labels = () => view.container.querySelectorAll('[data-dimension-label]');
   expect(labels()[0]).toHaveAttribute("transform", "translate(0.45 0.2) scale(0.001 0.002)");

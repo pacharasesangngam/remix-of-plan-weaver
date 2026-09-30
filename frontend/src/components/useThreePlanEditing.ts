@@ -14,7 +14,7 @@ type Snapshot = { walls: Wall[]; doors: DetectedDoor[]; windows: DetectedWindow[
 type Capture = { setPointerCapture: (id: number) => void; releasePointerCapture: (id: number) => void; hasPointerCapture?: (id: number) => boolean };
 type Drag = {
   pointerId: number; capture?: Capture; base: Snapshot; origin: Point; plane: THREE.Plane; height: number;
-  clientY: number; moved: boolean; latest: Snapshot;
+  clientY: number; moved: boolean; latest: Snapshot; exact: boolean;
 } & ({ kind: "wall"; original: Wall; mode: WallMode; blocked: Record<Endpoint, Set<string>>; reverseBlocked: Set<string> }
   | { kind: OpeningKind; original: Opening; mode: Endpoint | "move"; originT: number });
 
@@ -24,7 +24,7 @@ export function useThreePlanEditing({ walls, doors, windows, pw, ph, wallHeight,
   onWallCommit, onOpeningCommit }: {
   walls: Wall[]; doors: DetectedDoor[]; windows: DetectedWindow[]; pw: number; ph: number; wallHeight: number;
   enabled: boolean; sizeAt: (height: number) => ScreenSize;
-  onWallCommit?: (walls: Wall[]) => void;
+  onWallCommit?: (walls: Wall[], options?: { exact?: boolean }) => void;
   onOpeningCommit?: (kind: OpeningKind, original: Opening, updated: Opening) => void;
 }) {
   const drag = useRef<Drag | null>(null);
@@ -61,7 +61,7 @@ export function useThreePlanEditing({ walls, doors, windows, pw, ph, wallHeight,
     capture?.setPointerCapture(event.pointerId);
     const height = event.point.y;
     return { pointerId: event.pointerId, capture, base, latest: base, origin: normalized(event.point), height,
-      plane: new THREE.Plane(new THREE.Vector3(0, 1, 0), -height), clientY: event.clientY, moved: false };
+      plane: new THREE.Plane(new THREE.Vector3(0, 1, 0), -height), clientY: event.clientY, moved: false, exact: false };
   };
   const beginWall = (wall: Wall, mode: WallMode, event: Pointer) => {
     if (!onWallCommit) return;
@@ -104,14 +104,20 @@ export function useThreePlanEditing({ walls, doors, windows, pw, ph, wallHeight,
       if (current.mode === "height") updated.wallHeight = Math.max(1, Math.min(10, (wall.wallHeight ?? wallHeight) - (event.clientY - current.clientY) * 0.025));
       else if (current.mode === "move") {
         const dx = point.x - current.origin.x, dy = point.y - current.origin.y;
-        updated = snapWallTranslation({ ...wall, x1: wall.x1 + dx, y1: wall.y1 + dy, x2: wall.x2 + dx, y2: wall.y2 + dy },
-          walls, size, current.blocked, current.reverseBlocked).wall;
+        const snapped = snapWallTranslation({ ...wall, x1: wall.x1 + dx, y1: wall.y1 + dy, x2: wall.x2 + dx, y2: wall.y2 + dy },
+          walls, size, current.blocked, current.reverseBlocked);
+        updated = snapped.wall;
+        current.exact = snapped.targets.length > 0;
       } else {
         const snap = findWallSnap(point, wallSnapTargets(point, walls, new Set([wall.id]), size), size, current.blocked[current.mode]);
         const end = snap ?? point;
+        // A resolved snap is a deliberate connection and outranks the axis
+        // projection the loose pointer gets, in the preview and in the commit.
+        current.exact = !!snap;
         updated = { ...wall, ...(current.mode === "start" ? { x1: end.x, y1: end.y } : { x2: end.x, y2: end.y }) };
       }
-      const nextWalls = current.mode === "height" ? walls.map(w => w.id === wall.id ? updated : w) : editWallGeometry(walls, updated, current.mode === "move" ? undefined : current.mode);
+      const nextWalls = current.mode === "height" ? walls.map(w => w.id === wall.id ? updated : w)
+        : editWallGeometry(walls, updated, current.mode === "move" ? undefined : current.mode, { exact: current.exact });
       current.latest = nextWalls ? syncOpeningRecords({ ...current.base, walls: nextWalls }, current.base) : current.base;
     } else {
       const g = openingGeometry(current.original, current.kind, walls, pw, ph, wallHeight)!;
@@ -134,7 +140,7 @@ export function useThreePlanEditing({ walls, doors, windows, pw, ph, wallHeight,
     event.stopPropagation(); drag.current = null; setPreview(null); setActive(null); release(current);
     if (!current.moved) return;
     if (current.kind === "wall") {
-      if (current.latest.walls !== current.base.walls) onWallCommit?.(current.latest.walls);
+      if (current.latest.walls !== current.base.walls) onWallCommit?.(current.latest.walls, { exact: current.exact });
     } else {
       const opening = (current.kind === "door" ? current.latest.doors : current.latest.windows).find(o => o.id === current.original.id)!;
       if (JSON.stringify(opening) !== JSON.stringify(current.original)) onOpeningCommit?.(current.kind, current.original, opening);

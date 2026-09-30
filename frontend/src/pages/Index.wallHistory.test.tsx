@@ -117,7 +117,12 @@ it("commits only the edited wall as one action and synchronizes undo, redo, JSON
     expect(screen.getByText("Undo")).toBeDisabled();
     fireEvent.click(screen.getByText("Commit drag"));
     const after = JSON.parse(screen.getByTestId("json").textContent!);
-    expect(after[0]).toMatchObject({ x2: 0.6, y2: 0.3 });
+    // Wall "a" is horizontal, so D1 keeps the endpoint on its own axis: the
+    // dragged x lands, the dragged y is projected away.
+    expect(after[0].x2).toBeCloseTo(0.6, 8);
+    expect(after[0].y2).toBeCloseTo(0.2, 8);
+    // A direct drag moves exactly one endpoint. Wall "b" used to share that
+    // corner, so it is left where it is and the two are simply no longer joined.
     expect(after[1]).toEqual(project.walls[1]);
     expect(screen.getByTestId("2d").textContent).toBe(JSON.stringify(after));
     fireEvent.click(screen.getByText("Undo"));
@@ -150,7 +155,8 @@ it("keeps an attached opening's size when its host wall is resized", () => {
     fireEvent.click(screen.getByText("Commit drag"));
     const resized = JSON.parse(screen.getByTestId("2d").textContent!) as DetectedWallSegment[];
     const after = JSON.parse(screen.getByTestId("2d-openings").textContent!)[0] as DetectedDoor;
-    expect(resized[0]).toMatchObject({ x2: 0.6, y2: 0.3 });
+    expect(resized[0].x2).toBeCloseTo(0.6, 8);
+    expect(resized[0].y2).toBeCloseTo(0.2, 8);
     expect(after.wallId).toBe("a");
     // A proportional wall scale would have grown the 2 m door to ~2.55 m.
     expect(width(after, resized)).toBeCloseTo(2, 8);

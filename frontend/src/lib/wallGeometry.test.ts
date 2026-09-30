@@ -8,17 +8,21 @@ const connected: Wall = { ...host, id: "connected", x1: 0.9, y1: 0.5, x2: 0.9, y
 const unrelated: Wall = { ...host, id: "unrelated", x1: 0.2, y1: 0.1, x2: 0.8, y2: 0.1 };
 
 describe("independent wall geometry", () => {
-    it("changes only the selected endpoint, retaining all adjacent walls by identity", () => {
+    it("projects the edited endpoint onto its own axis, retaining all adjacent walls by identity", () => {
         const before = [host, branch, connected, unrelated];
         const after = editWallGeometry(before, { ...host, x1: 99, y1: 99, x2: 0.8, y2: 0.6 }, "end")!;
-        expect(after[0]).toEqual({ ...host, x2: 0.8, y2: 0.6 });
+        // The host is horizontal, so the commit-time axis projection (D2) drops
+        // the off-axis 0.6 exactly as the live preview already showed.
+        expect(after[0]).toEqual({ ...host, x2: 0.8, y2: 0.5 });
         after.slice(1).forEach((wall, index) => expect(wall).toBe(before[index + 1]));
         expect(before[0]).toBe(host);
     });
-    it("freely detaches a T-junction endpoint in both axes without editing its host", () => {
+    it("detaches a T-junction endpoint along its own axis without editing its host", () => {
         const after = editWallGeometry([host, branch], { ...branch, x1: 0.6, y1: 0.6 }, "start")!;
+        // The branch is vertical, so it can leave the host across the axis but
+        // cannot walk along it; that would mean turning it diagonal (D1).
         expect(after[0]).toBe(host);
-        expect(after[1]).toEqual({ ...branch, x1: 0.6, y1: 0.6 });
+        expect(after[1]).toEqual({ ...branch, x1: 0.5, y1: 0.6 });
     });
     it("preserves adjacent walls during whole-wall movement", () => {
         const after = editWallGeometry([host, branch, connected], { ...host, y1: 0.6, y2: 0.6 })!;
@@ -34,7 +38,9 @@ describe("independent wall geometry", () => {
         const after = editWallGeometry(before, { ...host, x1: 0.95, y1: 0.7 }, "start")!;
         const restored = JSON.parse(JSON.stringify(after)) as Wall[];
         const edited = editWallGeometry(restored, { ...restored[0], y2: 0.8 }, "end")!;
-        expect(edited[0]).toEqual({ ...host, x1: 0.95, y1: 0.7, y2: 0.8 });
+        // Both edits are projected back onto the host's own horizontal axis, so
+        // the round-tripped wall is still exactly horizontal.
+        expect(edited[0]).toEqual({ ...host, x1: 0.95, y1: 0.5, y2: 0.5 });
         expect(edited[1]).toEqual(branch);
         expect(before[0]).toBe(host);
     });

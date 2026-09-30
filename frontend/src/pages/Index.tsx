@@ -1,8 +1,8 @@
 import { withDefaultWallHeight } from "@/lib/wallMetrics";
 import { rehostOpening, type OpeningKind } from "@/lib/openingModel";
 import { setRoomWallHeight } from "@/lib/roomWallHeight";
-import { preservesConfirmedDimensions, rebindConfirmedDimensions, type ConfirmedDimension } from "@/lib/confirmedDimensions";
-import { proposeWallLength, type LengthRequest, type GeometrySnapshot } from "@/lib/wallLengthEdit";
+import { isCalibrationDimension, preservesConfirmedDimensions, rebindConfirmedDimensions, type ConfirmedDimension } from "@/lib/confirmedDimensions";
+import { proposeWallBody, proposeWallEndpoint, proposeWallLength, type LengthRequest, type GeometrySnapshot } from "@/lib/wallLengthEdit";
 import { useState, useCallback, useEffect, useReducer, useMemo } from "react";
 import { ChevronLeft, Loader2, Moon, Sun } from "lucide-react";
 import { useTheme } from "next-themes";
@@ -182,25 +182,57 @@ const Index = () => {
     editProject(p => ({ ...p, rooms: p.rooms.map(r => r.id === id ? { ...r, ...patch } : r) }), { label: "room material change", threeOnly: true });
   }, [editProject]);
   const handleWallLengthCommit = useCallback((request: LengthRequest, base: GeometrySnapshot, width: number, height: number) => {
-    editProject(p => {
-      if (!hasCalibration(p.calibrationStatus, p.scale, p.planW, p.planH) || p.planW !== width || p.planH !== height
-        || p.walls !== base.walls || p.doors !== base.doors || p.windows !== base.windows || p.rooms !== base.rooms
-        || p.confirmedDimensions !== base.confirmedDimensions) return p;
-      const candidate = proposeWallLength(p, request, p.planW, p.planH);
-      return candidate.ok ? { ...p, ...candidate.geometry } : p;
-    }, { label: "wall length change" });
-  }, [editProject]);
-  const handleWallGeometryCommit = useCallback((updatedWalls: DetectedWallSegment[]) => {
-    editProject(p => {
-      if (updatedWalls.length !== p.walls.length || updatedWalls.some((wall, index) => wall.id !== p.walls[index].id || (geometryChanged(p.walls[index], wall) && !validWall(wall)))) return p;
-      if (!preservesConfirmedDimensions(updatedWalls, p.confirmedDimensions, p.planW, p.planH)) return p;
-      return { ...p, walls: updatedWalls };
-    }, { label: "wall geometry change" });
-  }, [editProject]);
+    // Evaluated eagerly so a refused length can say why. Dropping the reason
+    // made every rejection look identical to "the field did nothing".
+    const p = editorHistory.present;
+    if (!hasCalibration(p.calibrationStatus, p.scale, p.planW, p.planH) || p.planW !== width || p.planH !== height
+      || p.walls !== base.walls || p.doors !== base.doors || p.windows !== base.windows || p.rooms !== base.rooms
+      || p.confirmedDimensions !== base.confirmedDimensions) return;
+    const candidate = proposeWallLength(p, request, p.planW, p.planH);
+    if ("reason" in candidate) {
+      toast({ description: candidate.reason });
+      return;
+    }
+    editProject(current => current.walls === p.walls ? { ...current, ...candidate.geometry } : current, { label: "wall length change" });
+  }, [editProject, editorHistory.present]);
+  const handleWallGeometryCommit = useCallback((updatedWalls: DetectedWallSegment[], options?: { exact?: boolean }) => {
+    // Evaluated eagerly so a rejection can be reported. Returning the previous
+    // project made every refusal look identical to "the drag did nothing".
+    const p = editorHistory.present;
+    const reject = (description: string) => toast({ description });
+    if (updatedWalls.length !== p.walls.length || updatedWalls.some((wall, index) => wall.id !== p.walls[index].id)) {
+      reject("That wall change no longer matches the plan, so nothing was moved.");
+      return;
+    }
+    if (updatedWalls.some((wall, index) => geometryChanged(p.walls[index], wall) && !validWall(wall))) {
+      reject("That would collapse a wall, so nothing was moved.");
+      return;
+    }
+    const endpointCandidate = proposeWallEndpoint(p, updatedWalls, p.planW, p.planH, options);
+    if (endpointCandidate) {
+      if ("reason" in endpointCandidate) {
+        reject(endpointCandidate.reason);
+      } else {
+        editProject(current => current.walls === p.walls ? { ...current, ...endpointCandidate.geometry } : current, { label: "wall geometry change" });
+      }
+      return;
+    }
+    const bodyCandidate = proposeWallBody(p, updatedWalls, p.planW, p.planH);
+    if (bodyCandidate) {
+      if ("reason" in bodyCandidate) reject(bodyCandidate.reason);
+      else editProject(current => current.walls === p.walls ? { ...current, ...bodyCandidate.geometry } : current, { label: "wall body change" });
+      return;
+    }
+    if (!preservesConfirmedDimensions(updatedWalls, p.confirmedDimensions?.filter(isCalibrationDimension), p.planW, p.planH)) {
+      reject("That would stretch a confirmed calibration span. Try editing the other end or the overall span.");
+      return;
+    }
+    editProject(current => current.walls === p.walls ? { ...current, walls: updatedWalls } : current, { label: "wall geometry change" });
+  }, [editProject, editorHistory.present]);
   const handleWallUpdate = useCallback((id: string, field: keyof DetectedWallSegment, value: number | string) => {
     editProject(p => {
       const walls = p.walls.map(item => item.id === id ? { ...item, [field]: value } : item);
-      return preservesConfirmedDimensions(walls, p.confirmedDimensions, p.planW, p.planH) ? { ...p, walls } : p;
+      return preservesConfirmedDimensions(walls, p.confirmedDimensions?.filter(isCalibrationDimension), p.planW, p.planH) ? { ...p, walls } : p;
     }, fieldInfo("wall", field));
   }, [editProject]);
   const handleWallAdd = useCallback((item: DetectedWallSegment) => {

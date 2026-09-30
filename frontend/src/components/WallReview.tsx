@@ -56,7 +56,7 @@ interface WallReviewProps {
     onWallAdd?: (wall: DetectedWallSegment) => void;
     onWallDelete?: (id: string) => void;
     onWallLengthCommit?: (request: LengthRequest, base: GeometrySnapshot, width: number, height: number) => void;
-    onWallGeometryCommit?: (walls: DetectedWallSegment[]) => void;
+    onWallGeometryCommit?: (walls: DetectedWallSegment[], options?: { exact?: boolean }) => void;
     onDoorAdd?: (door: DetectedDoor) => void;
     onOpeningRehost?: (kind: OpeningKind, id: string, wallId: string, center: CalibPoint) => void;
     onDoorUpdate?: (id: string, field: keyof DetectedDoor, value: DetectedDoor[keyof DetectedDoor]) => void;
@@ -274,7 +274,7 @@ const WallReview = ({
         const draft = lengthDraftRef.current;
         if (!draft || !calibrated) return;
         const target = Number(draft.value);
-        const options = { span: draft.span, confirm: true };
+        const options = { span: draft.span, segmentKey: draft.segmentKey, confirm: true, automatic: true };
         const anchor = chooseLengthAnchor(sourceGeometry, draft.wallId, target, planDimensions.width, planDimensions.height, options);
         const request = { wallId: draft.wallId, length: target, anchor, ...options };
         const candidate = proposeWallLength(sourceGeometry, request, planDimensions.width, planDimensions.height);
@@ -1147,7 +1147,7 @@ const WallReview = ({
             updated = snapped.wall;
             connectionTargets = snapped.targets;
         }
-        const previewWalls = snapTarget || connectionTargets.length ? editWallGeometry(drag.baseWalls, updated, drag.endpoint) : unsnapped;
+        const previewWalls = snapTarget || connectionTargets.length ? editWallGeometry(drag.baseWalls, updated, drag.endpoint, { exact: true }) : unsnapped;
         if (!previewWalls) return;
         const preview = previewWalls.find(wall => wall.id === drag.wall.id)!;
         endpointDragRef.current = { ...drag, preview, previewWalls, snapTarget, connectionTargets,
@@ -1156,7 +1156,9 @@ const WallReview = ({
     };
     const finishEndpointDrag = (event: React.PointerEvent<SVGSVGElement>) => {
         // Pointer-up can carry a newer position than the last move event.
-        if (event.type === "pointerup" && endpointDragRef.current?.previewWalls !== endpointDragRef.current?.baseWalls) moveEndpointDrag(event);
+        const currentPreview = endpointDragRef.current;
+        const hasEndpointSnapPreview = !!currentPreview?.endpoint && !!currentPreview.snapTarget;
+        if (event.type === "pointerup" && currentPreview?.previewWalls !== currentPreview?.baseWalls && !hasEndpointSnapPreview) moveEndpointDrag(event);
         const drag = endpointDragRef.current;
         if (!drag || drag.pointerId !== event.pointerId) return;
         event.preventDefault();
@@ -1164,7 +1166,7 @@ const WallReview = ({
         endpointDragRef.current = null;
         if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
         if (event.type !== "pointercancel" && event.type !== "lostpointercapture") {
-            if (drag.previewWalls.some((wall, index) => geometryChanged(drag.baseWalls[index], wall))) onWallGeometryCommit?.(drag.previewWalls);
+            if (drag.previewWalls.some((wall, index) => geometryChanged(drag.baseWalls[index], wall))) onWallGeometryCommit?.(drag.previewWalls, { exact: !!drag.snapTarget });
         }
         setEndpointDrag(null);
         selectWall(drag.wall.id);
@@ -1709,7 +1711,7 @@ const WallReview = ({
                                             <title>Wall measurement: stored start to end</title>
                                             <line data-measurement-span x1={wall.x1} y1={wall.y1} x2={wall.x2} y2={wall.y2}
                                                 stroke="#2563eb" strokeWidth={1.5} vectorEffect="non-scaling-stroke" strokeDasharray="4 3" />
-                                            {[{ x: wall.x1, y: wall.y1 }, { x: wall.x2, y: wall.y2 }].map((point, index) => {
+                                            {inCalibMode && [{ x: wall.x1, y: wall.y1 }, { x: wall.x2, y: wall.y2 }].map((point, index) => {
                                                 if (!inCalibMode && hasDragConnectionAt(point)) return null;
                                                 const hovered = inCalibMode && calibrationEndpoint?.x === point.x && calibrationEndpoint?.y === point.y;
                                                 const chosen = calibPts.some(p => p.x === point.x && p.y === point.y);
@@ -1854,8 +1856,7 @@ const WallReview = ({
                                         </g>;
                                     })()}
                                     {!inPointerMode && !openingDrawMode && (selectedRoom ? layers.has("rooms") : layers.has("walls")) && <ReviewDimensions dimensions={canvasDimensions}
-                                        width={imgSize.w * viewZoom} height={imgSize.h * viewZoom} draft={lengthDraft}
-                                        onDraft={draft => { setLengthDraft(draft); setLengthError(null); }} onCommit={commitLength} onCancel={cancelLength} error={lengthError} />}
+                                        width={imgSize.w * viewZoom} height={imgSize.h * viewZoom} />}
                                     </g>
                                     {openingDrawMode && <rect
                                         data-opening-pointer-overlay
@@ -2041,7 +2042,7 @@ const WallReview = ({
                                                     onChange={e => { setLengthDraft({ ...lengthDraft, value: e.target.value }); setLengthError(null); }}
                                                     onBlur={commitLength} onKeyDown={e => { if (e.key === "Enter") { e.preventDefault(); commitLength(); } if (e.key === "Escape") { e.preventDefault(); cancelLength(); } }}
                                                     className="h-8 w-full rounded-xl border-2 border-primary/70 bg-background px-3 font-mono text-xs text-foreground shadow-sm outline-none focus:border-primary focus:ring-2 focus:ring-primary/20" /> :
-                                                    <button key={dimension.id} type="button" aria-label={`Edit boundary length ${dimension.length.toFixed(2)} m`} onClick={e => { e.stopPropagation(); setLengthDraft({ id: dimension.id, wallId: dimension.wallId, span: { start: dimension.start, end: dimension.end }, value: dimension.length.toFixed(2) }); setLengthError(null); }}
+                                                    <button key={dimension.id} type="button" aria-label={`Edit boundary length ${dimension.length.toFixed(2)} m`} onClick={e => { e.stopPropagation(); setLengthDraft({ id: dimension.id, wallId: dimension.wallId, segmentKey: dimension.segmentKey, span: { start: dimension.start, end: dimension.end }, value: dimension.length.toFixed(2) }); setLengthError(null); }}
                                                         className="block w-full py-1 text-left text-xs font-mono text-muted-foreground hover:bg-accent/60 hover:text-foreground">
                                                         {dimension.length.toFixed(2)} m
                                                     </button>;

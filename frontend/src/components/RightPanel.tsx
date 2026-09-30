@@ -63,7 +63,7 @@ interface RightPanelProps {
   onRoomPatch?: (id: string, patch: Partial<Room>) => void;
   onRoomDelete?: (id: string) => void;
   onWallUpdate?: (id: string, field: keyof DetectedWallSegment, value: number | string) => void;
-  onWallGeometryCommit?: (walls: DetectedWallSegment[]) => void;
+  onWallGeometryCommit?: (walls: DetectedWallSegment[], options?: { exact?: boolean }) => void;
   onOpeningRehost?: (kind: OpeningKind, id: string, wallId: string, point: NormalizedPoint) => void;
   onWallAdd?: (wall: DetectedWallSegment) => void;
   onWallDelete?: (id: string) => void;
@@ -1543,7 +1543,7 @@ export function Scene({
   onPlacementHover: (preview: PlacementPreview) => void;
   onWallAdd?: (wall: DetectedWallSegment) => void;
   onToolComplete: () => void;
-  onWallGeometryCommit?: (walls: DetectedWallSegment[]) => void;
+  onWallGeometryCommit?: (walls: DetectedWallSegment[], options?: { exact?: boolean }) => void;
   onOpeningCommit?: (kind: OpeningKind, original: Opening, updated: Opening) => void;
   onWalkExit: () => void;
 }) {

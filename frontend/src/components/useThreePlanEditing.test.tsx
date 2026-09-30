@@ -49,7 +49,9 @@ it.each([1, 2])("snaps a whole wall rigidly to an endpoint and commits only on r
   expect(result.current.feedback).toContainEqual(expect.objectContaining({ kind: "endpoint", x: host.x1, y: host.y1 }));
   expect(props.onWallCommit).not.toHaveBeenCalled();
   act(() => result.current.events.onPointerUp(event(0.649, 0.201)));
-  expect(props.onWallCommit).toHaveBeenCalledExactlyOnceWith(expect.arrayContaining([preview]));
+  // A resolved snap is committed exactly, so the commit and the preview cannot
+  // disagree about where the wall landed.
+  expect(props.onWallCommit).toHaveBeenCalledExactlyOnceWith(expect.arrayContaining([preview]), { exact: true });
   expect(target.releasePointerCapture).toHaveBeenCalledWith(1);
 });
 
