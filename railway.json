@@ -2,8 +2,9 @@
   "$schema": "https://railway.com/railway.schema.json",
   "build": {
     "builder": "RAILPACK",
-    "buildCommand": "set -e; apt-get update; apt-get install -y --no-install-recommends libgl1 libglib2.0-0; PY=\"$(command -v python3 || command -v python)\"; \"$PY\" -m venv /app/venv; PY=/app/venv/bin/python; echo \"building with $PY -> $($PY --version 2>&1)\"; cd backend; \"$PY\" -m pip install --upgrade pip setuptools wheel; \"$PY\" -m pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu; \"$PY\" -m pip install -r requirements.txt",
+    "buildCommand": "set -e; PY=\"$(command -v python3 || command -v python)\"; \"$PY\" -m venv /app/venv; PY=/app/venv/bin/python; echo \"building with $PY -> $($PY --version 2>&1)\"; cd backend; \"$PY\" -m pip install --upgrade pip setuptools wheel; \"$PY\" -m pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu; \"$PY\" -m pip install -r requirements.txt",
     "watchPatterns": [
+      "/railpack.json",
       "/backend/**"
     ]
   },
