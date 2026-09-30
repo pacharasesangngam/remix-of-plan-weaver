@@ -2,13 +2,13 @@
   "$schema": "https://railway.com/railway.schema.json",
   "build": {
     "builder": "RAILPACK",
-    "buildCommand": "apt-get update && apt-get install -y --no-install-recommends libgl1 libglib2.0-0 && cd backend && python -m pip install --upgrade pip setuptools wheel && python -m pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu && python -m pip install -r requirements.txt",
+    "buildCommand": "set -e; apt-get update; apt-get install -y --no-install-recommends libgl1 libglib2.0-0; PY=\"$(command -v python3 || command -v python)\"; echo \"building with $PY -> $($PY --version 2>&1)\"; cd backend; \"$PY\" -m pip install --upgrade pip setuptools wheel; \"$PY\" -m pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu; \"$PY\" -m pip install -r requirements.txt",
     "watchPatterns": [
       "/backend/**"
     ]
   },
   "deploy": {
-    "startCommand": "cd backend && python -m uvicorn main:app --host 0.0.0.0 --port $PORT",
+    "startCommand": "cd backend && \"$(command -v python3 || command -v python)\" -m uvicorn main:app --host 0.0.0.0 --port $PORT",
     "healthcheckPath": "/health",
     "healthcheckTimeout": 300,
     "restartPolicyType": "ON_FAILURE",
