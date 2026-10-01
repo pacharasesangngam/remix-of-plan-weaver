@@ -4,7 +4,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { API_BASE_URL, apiFetch, SESSION_EXPIRED, setCsrfToken } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { LogOut, PencilRuler } from "lucide-react";
+import { LogOut } from "lucide-react";
 
 interface Session {
   user: { name: string; email?: string; provider: string } | null;
@@ -145,27 +145,27 @@ function Login() {
     if (!googleError) return;
     navigate({ pathname: location.pathname, hash: location.hash }, { replace: true });
   }, [googleError, location.hash, location.pathname, navigate]);
-  return <main className="flex min-h-screen items-center justify-center bg-background bg-[radial-gradient(ellipse_at_top,hsl(var(--primary)/0.08),transparent_65%)] p-6">
-    <section className="w-full max-w-md rounded-2xl border border-border bg-card p-8 shadow-sm">
-      {/* <div className="mb-6 flex items-center gap-3"><span className="rounded-xl bg-primary/10 p-3 text-primary"><PencilRuler className="h-6 w-6" /></span><span className="font-semibold tracking-tight">Sign in</span></div> */}
-      <h1 className="text-2xl font-semibold tracking-tight pb-5 text-center">Sign in</h1>
+  return <main className="flex min-h-[100dvh] items-center justify-center bg-[#dcefeb] p-4 sm:p-8">
+    <div className="flex min-h-[calc(100dvh-2rem)] w-full max-w-[390px] items-center justify-center bg-[#fbfcfe] px-5 py-10 sm:min-h-[min(100dvh-4rem,820px)] sm:px-6">
+    <section className="w-full max-w-[340px] rounded-2xl border border-[#dce4ee] bg-white p-6 shadow-[0_1px_2px_rgba(15,23,42,0.05)] sm:p-[30px]">
+      <h1 className="mb-5 text-center text-[22px] font-semibold tracking-tight text-slate-950">Sign in</h1>
       {auth.session?.internalEnabled && <form className="space-y-4" onSubmit={async e => {
         e.preventDefault(); setBusy(true); setError("");
         try { await auth.login(username, password); } catch (error) { setError(error instanceof Error ? error.message : "Unable to sign in."); }
         finally { setPassword(""); setBusy(false); }
       }}>
-        <label className="block text-sm font-medium">Username<Input autoComplete="username" value={username} maxLength={200} required disabled={busy} onChange={e => setUsername(e.target.value)} className="mt-2" /></label>
-        <label className="block text-sm font-medium">Password<Input type="password" autoComplete="current-password" value={password} maxLength={1024} required disabled={busy} onChange={e => setPassword(e.target.value)} className="mt-2" /></label>
-        <Button type="submit" disabled={busy} className="w-full">{busy ? "Signing in…" : "Sign in"}</Button>
+        <label className="block text-[13px] font-medium text-slate-900">Username<Input autoComplete="username" value={username} maxLength={200} required disabled={busy} onChange={e => setUsername(e.target.value)} className="mt-2 h-[38px] rounded-lg border-[#dce4ee] bg-[#fbfcfe] px-3 focus-visible:ring-primary/30" /></label>
+        <label className="block text-[13px] font-medium text-slate-900">Password<Input type="password" autoComplete="current-password" value={password} maxLength={1024} required disabled={busy} onChange={e => setPassword(e.target.value)} className="mt-2 h-[38px] rounded-lg border-[#dce4ee] bg-[#fbfcfe] px-3 focus-visible:ring-primary/30" /></label>
+        <Button type="submit" disabled={busy} className="h-[38px] w-full rounded-lg bg-[#0878f9] text-[13px] font-semibold text-white hover:bg-[#0067e8]">{busy ? "Signing in…" : "Sign in"}</Button>
       </form>}
-      <div className="mt-4 flex items-center gap-6 text-xs font-medium text-muted-foreground">
-        <div className="h-px flex-1 bg-border" /><span>or</span><div className="h-px flex-1 bg-border" />
-      </div>
-      {auth.session?.googleEnabled && <Button variant="outline" disabled={busy} className="mt-4 w-full" onClick={() => { window.location.assign(`${API_BASE_URL}/auth/google`); }}><svg aria-hidden="true" className="mr-2 h-4 w-4" viewBox="0 0 24 24"><path fill="#4285F4" d="M21.35 12.27c0-.71-.06-1.4-.18-2.05H12v3.88h5.24a4.48 4.48 0 0 1-1.94 2.94v2.45h3.14c1.84-1.69 2.91-4.18 2.91-7.22Z"/><path fill="#34A853" d="M12 21.75c2.63 0 4.84-.87 6.45-2.36l-3.14-2.45c-.87.58-1.98.92-3.31.92-2.54 0-4.69-1.72-5.46-4.03H3.3v2.53A9.75 9.75 0 0 0 12 21.75Z"/><path fill="#FBBC05" d="M6.54 13.83A5.86 5.86 0 0 1 6.23 12c0-.64.11-1.26.31-1.83V7.64H3.3A9.75 9.75 0 0 0 2.25 12c0 1.57.38 3.06 1.05 4.36l3.24-2.53Z"/><path fill="#EA4335" d="M12 6.14c1.43 0 2.71.49 3.72 1.45l2.79-2.79C16.84 3.13 14.63 2.25 12 2.25A9.75 9.75 0 0 0 3.3 7.64l3.24 2.53c.77-2.31 2.92-4.03 5.46-4.03Z"/></svg>Continue with Google</Button>}
+      {auth.session?.internalEnabled && auth.session?.googleEnabled && <div className="my-4 flex items-center gap-4 text-xs font-medium text-muted-foreground">
+        <div className="h-px flex-1 bg-[#dce4ee]" /><span>or</span><div className="h-px flex-1 bg-[#dce4ee]" />
+      </div>}
+      {auth.session?.googleEnabled && <Button variant="outline" disabled={busy} className="h-[38px] w-full rounded-lg border-[#dce4ee] bg-[#fbfcfe] text-[13px] font-medium text-slate-900 hover:bg-slate-50" onClick={() => { window.location.assign(`${API_BASE_URL}/auth/google`); }}><svg aria-hidden="true" className="mr-2 h-4 w-4" viewBox="0 0 24 24"><path fill="#4285F4" d="M21.35 12.27c0-.71-.06-1.4-.18-2.05H12v3.88h5.24a4.48 4.48 0 0 1-1.94 2.94v2.45h3.14c1.84-1.69 2.91-4.18 2.91-7.22Z"/><path fill="#34A853" d="M12 21.75c2.63 0 4.84-.87 6.45-2.36l-3.14-2.45c-.87.58-1.98.92-3.31.92-2.54 0-4.69-1.72-5.46-4.03H3.3v2.53A9.75 9.75 0 0 0 12 21.75Z"/><path fill="#FBBC05" d="M6.54 13.83A5.86 5.86 0 0 1 6.23 12c0-.64.11-1.26.31-1.83V7.64H3.3A9.75 9.75 0 0 0 2.25 12c0 1.57.38 3.06 1.05 4.36l3.24-2.53Z"/><path fill="#EA4335" d="M12 6.14c1.43 0 2.71.49 3.72 1.45l2.79-2.79C16.84 3.13 14.63 2.25 12 2.25A9.75 9.75 0 0 0 3.3 7.64l3.24 2.53c.77-2.31 2.92-4.03 5.46-4.03Z"/></svg>Continue with Google</Button>}
       {(error || auth.error || googleError) && <p role="alert" className="mt-4 text-sm text-destructive">{error || auth.error || googleError}</p>}
-      {auth.session && !auth.session.internalEnabled && !auth.session.googleEnabled && <p role="alert" className="text-sm text-muted-foreground">Sign-in is not configured. Contact your administrator.</p>}
-      {/* <p className="mt-6 text-xs text-muted-foreground">Access is limited to approved accounts. Contact your administrator for access.</p> */}
+      {auth.session && !auth.session.internalEnabled && !auth.session.googleEnabled && <p role="alert" className="mt-4 rounded-lg border border-[#dce4ee] bg-[#fbfcfe] p-3 text-sm text-muted-foreground">Sign-in is not configured. Contact your administrator.</p>}
     </section>
+    </div>
   </main>;
 }
 
