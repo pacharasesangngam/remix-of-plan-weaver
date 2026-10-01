@@ -1,8 +1,8 @@
-# Plan Weaver
+# Sketch to Spec
 
 ## 1. Overview
 
-Plan Weaver converts floor-plan images or PDFs into an editable 2D plan and an interactive 3D model. Users can also start from measurements and draw a plan manually.
+Sketch to Spec converts floor-plan images or PDFs into an editable 2D plan and an interactive 3D model. Users can also start from measurements and draw a plan manually.
 
 The application has a React frontend and a FastAPI backend. Authentication is required for the workspace and API; there are no built-in default credentials.
 
@@ -36,10 +36,9 @@ flowchart LR
 
 | Item | Details |
 | --- | --- |
-| Detection model | Ultralytics YOLO; `backend/best_v2.pt` is the default model loaded by the API. |
-| Other model artifacts | `backend/best_v4.pt`, `backend/best_v10.pt`, and `backend/dataset_detect.pt` are also present. |
+| Detection model | Ultralytics YOLOv8s; `backend/best_v2.pt` is the default model loaded by the API. |
 | Detection targets | Rooms, walls, doors, and windows. |
-| Training dataset | The source dataset and training metadata are not included or described in the current repository. |
+| Training dataset | Using Cubicasa5k datasets but they are not included in the current repository. |
 | Input processing | OpenCV preprocessing; PDF input is rasterized with PyMuPDF before inference. |
 
 ## 5. Tech Stack
