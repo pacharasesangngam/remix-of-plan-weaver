@@ -21,11 +21,12 @@ export default function WallDimension({ from, to, planW, planH, uiScale = 1, off
   if (angle > 90) angle -= 180;
   if (angle <= -90) angle += 180;
   const metres = Math.hypot((to.x - from.x) * planW, (to.y - from.y) * planH);
+  const labelWidth = Math.max(60, (metres.toFixed(2).length + 2) * 7 + 16);
   return <g pointerEvents="none" aria-label={`${label} ${metres.toFixed(2)} เมตร`}>
     <defs><marker id={marker} viewBox="0 0 6 6" refX="3" refY="3" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M 0 0 L 6 3 L 0 6 Z" fill="#111827" /></marker></defs>
     {showExtensions && <path d={`M ${from.x * 1000 + nx * 7 * uiScale} ${from.y * 1000 + ny * 7 * uiScale} L ${a.x + nx * 4 * uiScale} ${a.y + ny * 4 * uiScale} M ${to.x * 1000 + nx * 7 * uiScale} ${to.y * 1000 + ny * 7 * uiScale} L ${b.x + nx * 4 * uiScale} ${b.y + ny * 4 * uiScale}`} stroke="#94a3b8" strokeWidth={0.7 * uiScale} fill="none" />}
     <line x1={a.x} y1={a.y} x2={b.x} y2={b.y} stroke="#111827" strokeWidth={uiScale} markerStart={`url(#${marker})`} markerEnd={`url(#${marker})`} />
     {labelOffset > 0 && <line x1={center.x} y1={center.y} x2={mid.x} y2={mid.y} stroke="#94a3b8" strokeWidth={0.7 * uiScale} />}
-    <g transform={`translate(${mid.x} ${mid.y}) rotate(${angle})`}><rect x={-30 * uiScale} y={-8 * uiScale} width={60 * uiScale} height={16 * uiScale} fill="white" rx={2 * uiScale} /><text textAnchor="middle" dominantBaseline="central" fontSize={12 * uiScale} fill="#111827">{metres.toFixed(2)} m</text></g>
+    <g transform={`translate(${mid.x} ${mid.y}) rotate(${angle})`}><rect x={-labelWidth / 2 * uiScale} y={-10 * uiScale} width={labelWidth * uiScale} height={20 * uiScale} fill="white" rx={6 * uiScale} /><text textAnchor="middle" dominantBaseline="central" fontSize={12 * uiScale} fontWeight={500} style={{ fontVariantNumeric: "tabular-nums" }} fill="#111827">{metres.toFixed(2)} m</text></g>
   </g>;
 }

@@ -1,7 +1,7 @@
 import type { ProjectState } from "@/lib/projectHistory";
 import WallDimension from "./WallDimension";
 
-export default function PlanDimensions({ project, uiScale }: { project: ProjectState; uiScale: number }) {
+export default function PlanDimensions({ project, uiScale, detailed = true }: { project: ProjectState; uiScale: number; detailed?: boolean }) {
   const points = [...project.walls.flatMap(w => [{ x: w.x1, y: w.y1 }, { x: w.x2, y: w.y2 }]),
     ...project.rooms.flatMap(r => r.wallPolygon ?? r.polygon ?? (r.bbox ? [{ x: r.bbox.x, y: r.bbox.y }, { x: r.bbox.x + r.bbox.w, y: r.bbox.y + r.bbox.h }] : []))];
   if (!points.length) return null;
@@ -25,30 +25,31 @@ export default function PlanDimensions({ project, uiScale }: { project: ProjectS
   const leftRooms = bounds.filter(b => Math.abs(b.left - leftEdge) < 1e-7);
   const rightRooms = bounds.filter(b => Math.abs(b.right - rightEdge) < 1e-7);
   const edgeCuts = (rooms: typeof bounds) => rooms.length ? unique(rooms.flatMap(b => [b.top, b.bottom])) : [top, bottom];
-  const chain = (cuts: number[], spans: { start: number; end: number }[]) => {
+  const chain = (cuts: number[], spans: { start: number; end: number }[], metresPerUnit: number) => {
     const occupied: number[] = [];
     return cuts.slice(1).map((end, i) => ({ start: cuts[i], end }))
       .filter(({ start, end }) => !spans.length || spans.some(span => (start + end) / 2 > span.start - 1e-7 && (start + end) / 2 < span.end + 1e-7))
       .map(({ start, end }) => {
       const middle = (start + end) * 500 / uiScale;
+      const labelWidth = Math.max(60, (((end - start) * metresPerUnit).toFixed(2).length + 2) * 7 + 16);
       let lane = 0;
-      while (occupied[lane] !== undefined && middle - occupied[lane] < 70) lane++;
-      occupied[lane] = middle;
-      return { start, end, lift: lane * 20 };
+      while (occupied[lane] !== undefined && middle - labelWidth / 2 < occupied[lane] + 10) lane++;
+      occupied[lane] = middle + labelWidth / 2;
+      return { start, end, lift: lane * 26 };
     });
   };
-  const horizontal = chain(cutsX, bounds.map(b => ({ start: b.left, end: b.right })));
-  const vertical = chain(edgeCuts(rightRooms), rightRooms.map(b => ({ start: b.top, end: b.bottom })));
-  const verticalLeft = chain(edgeCuts(leftRooms), leftRooms.map(b => ({ start: b.top, end: b.bottom })));
-  const horizontalTotalOffset = 46 + Math.max(0, ...horizontal.map(s => s.lift));
-  const verticalTotalOffset = 46 + Math.max(0, ...vertical.map(s => s.lift));
+  const horizontal = chain(cutsX, bounds.map(b => ({ start: b.left, end: b.right })), project.planW);
+  const vertical = chain(edgeCuts(rightRooms), rightRooms.map(b => ({ start: b.top, end: b.bottom })), project.planH);
+  const verticalLeft = chain(edgeCuts(leftRooms), leftRooms.map(b => ({ start: b.top, end: b.bottom })), project.planH);
+  const horizontalTotalOffset = detailed ? 60 + Math.max(0, ...horizontal.map(s => s.lift)) : 32;
+  const verticalTotalOffset = detailed ? 60 + Math.max(0, ...vertical.map(s => s.lift)) : 32;
   return <g aria-label="ขนาดรวมแปลน (วัดตามแนวแกนผนัง)" pointerEvents="none">
-    {horizontal.map(s => <g key={`x-${s.start}`}>
+    {detailed && horizontal.map(s => <g key={`x-${s.start}`}>
       <WallDimension {...props} from={{ x: s.start, y: top }} to={{ x: s.end, y: top }} offsetPixels={28} labelOffset={s.lift} label="ระยะแนวนอนด้านบน" />
       <WallDimension {...props} from={{ x: s.start, y: bottom }} to={{ x: s.end, y: bottom }} offsetPixels={-28} labelOffset={s.lift} label="ระยะแนวนอนด้านล่าง" />
     </g>)}
-    {vertical.map(s => <WallDimension key={`y-${s.start}`} {...props} from={{ x: right, y: s.start }} to={{ x: right, y: s.end }} offsetPixels={-28} labelOffset={s.lift} label="ระยะแนวตั้งด้านขวา" />)}
-    {verticalLeft.map(s => <WallDimension key={`left-${s.start}`} {...props} from={{ x: left, y: s.start }} to={{ x: left, y: s.end }} offsetPixels={28} labelOffset={s.lift} label="ระยะแนวตั้งด้านซ้าย" />)}
+    {detailed && vertical.map(s => <WallDimension key={`y-${s.start}`} {...props} from={{ x: right, y: s.start }} to={{ x: right, y: s.end }} offsetPixels={-28} labelOffset={s.lift} label="ระยะแนวตั้งด้านขวา" />)}
+    {detailed && verticalLeft.map(s => <WallDimension key={`left-${s.start}`} {...props} from={{ x: left, y: s.start }} to={{ x: left, y: s.end }} offsetPixels={28} labelOffset={s.lift} label="ระยะแนวตั้งด้านซ้าย" />)}
     <WallDimension {...props} from={{ x: left, y: bottom }} to={{ x: right, y: bottom }} offsetPixels={-horizontalTotalOffset} label="ความกว้างรวม" />
     <WallDimension {...props} from={{ x: right, y: top }} to={{ x: right, y: bottom }} offsetPixels={-verticalTotalOffset} label="ความลึกรวม" />
   </g>;

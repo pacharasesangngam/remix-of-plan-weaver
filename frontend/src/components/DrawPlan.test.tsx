@@ -11,6 +11,38 @@ beforeEach(() => {
 });
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
 
+it("keeps dimensions in one layer and allows a clean canvas without changing geometry", () => {
+  render(<Editor />);
+  const canvas = screen.getByRole("img", { name: "พื้นที่วาดแปลน 2D" });
+  fireEvent.pointerDown(canvas, { clientX: 100, clientY: 100, button: 0 });
+  fireEvent.pointerDown(canvas, { clientX: 300, clientY: 400, button: 0 });
+  const before = screen.getByTestId("project").textContent;
+  expect(screen.getByLabelText("ความกว้างรวม 6.00 เมตร")).toBeInTheDocument();
+  expect(screen.queryByLabelText(/ระยะแนวนอนด้านบน/)).not.toBeInTheDocument();
+  expect(canvas.querySelectorAll("text")).toHaveLength(4); // name, room size, two totals
+  fireEvent.click(screen.getByRole("button", { name: "รายละเอียด" }));
+  expect(screen.getByLabelText("ระยะแนวนอนด้านบน 6.00 เมตร")).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "ซ่อน" }));
+  expect(screen.queryByLabelText(/ความกว้างรวม/)).not.toBeInTheDocument();
+  expect(screen.getByTestId("project").textContent).toBe(before);
+});
+
+it("fits drawn geometry with a margin and hides room labels when zoomed too far out", () => {
+  render(<Editor />);
+  const canvas = screen.getByRole("img", { name: "พื้นที่วาดแปลน 2D" });
+  fireEvent.pointerDown(canvas, { clientX: 100, clientY: 100, button: 0 });
+  fireEvent.pointerDown(canvas, { clientX: 300, clientY: 300, button: 0 });
+  fireEvent.click(screen.getByRole("button", { name: "ดูเต็มแปลน" }));
+  const [x, y, width, height] = canvas.getAttribute("viewBox")!.split(" ").map(Number);
+  expect(x).toBeLessThan(100);
+  expect(y).toBeLessThan(100);
+  expect(x + width).toBeGreaterThan(300);
+  expect(y + height).toBeGreaterThan(300);
+  expect(width).toBeLessThan(1000);
+  for (let i = 0; i < 20; i++) fireEvent.click(screen.getByRole("button", { name: "ซูมออก" }));
+  expect(canvas.querySelectorAll("text")).toHaveLength(2); // only totals remain readable
+});
+
 function Editor({ withFurniture = false }: { withFurniture?: boolean }) {
   const [history, dispatch] = useReducer(projectHistoryReducer, initialHistory({ ...emptyProject(), planW: 30, planH: 30, scale: 0.03, furniture: withFurniture ? [{ id: "sofa", kind: "sofa", x: 0.2, y: 0.2, width: 2.1, depth: 0.9, height: 0.85, rotation: 0, color: "#888888" }] : [] }));
   return <><DrawPlan project={history.present} onEdit={(update, info) => dispatch({ type: "edit", update, info })}
