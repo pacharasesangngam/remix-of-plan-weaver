@@ -1,3 +1,4 @@
+import { notify, notificationText as nt } from "@/lib/notify";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
@@ -120,7 +121,7 @@ const Sidebar = ({
       const raw = await file.text();
       onProjectImport(parseFloorPlanProject(JSON.parse(raw)));
     } catch (err) {
-      window.alert(err instanceof Error ? err.message : "Could not import project file.");
+      notify("destructive", nt("Could not import project", "?????????????????????"), nt("Choose a valid project JSON saved from Sketch to Spec.", "?????????????????????? JSON ???????????? Sketch to Spec"));
     }
   };
 

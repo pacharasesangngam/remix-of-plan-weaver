@@ -5,8 +5,48 @@ import { MemoryRouter, useLocation } from "react-router-dom";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { AuthGate, AuthProvider, LogoutButton } from "./AuthGate";
 import { apiFetch, setCsrfToken } from "@/lib/api";
+import { notify } from "@/lib/notify";
 
-afterEach(() => { cleanup(); vi.useRealTimers(); vi.unstubAllGlobals(); setCsrfToken(null); });
+vi.mock("@/lib/notify", () => ({ notify: vi.fn(), notifyAuthError: vi.fn(), notificationText: (en: string) => en }));
+
+afterEach(() => { cleanup(); vi.useRealTimers(); vi.unstubAllGlobals(); vi.clearAllMocks(); setCsrfToken(null); });
+
+it("only announces login success after the session is verified, and does not repeat on focus", async () => {
+  setup();
+  await screen.findByLabelText("Username");
+  fireEvent.change(screen.getByLabelText("Username"), { target: { value: "Internal" } });
+  fireEvent.change(screen.getByLabelText("Password"), { target: { value: "test-value" } });
+  fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
+  await screen.findByRole("heading", { name: "Splash Screen" });
+  expect(notify).toHaveBeenCalledWith("success", "Signed in successfully", expect.any(String));
+  fireEvent.focus(window);
+  await act(async () => {});
+  expect(notify).toHaveBeenCalledTimes(1);
+});
+
+it("does not announce success when login returns OK but session verification fails", async () => {
+  const view = setup();
+  await screen.findByLabelText("Username");
+  view.fetcher.mockImplementationOnce(async () => Response.json({ ok: true }));
+  view.fetcher.mockImplementationOnce(async () => Response.json({}, { status: 500 }));
+  fireEvent.change(screen.getByLabelText("Username"), { target: { value: "Internal" } });
+  fireEvent.change(screen.getByLabelText("Password"), { target: { value: "test-value" } });
+  fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
+  await screen.findByRole("alert");
+  expect(notify).not.toHaveBeenCalled();
+  expect(view.mounted).not.toHaveBeenCalled();
+});
+
+it("announces a verified Google return once and consumes the return marker", async () => {
+  sessionStorage.setItem("google-sign-in-started", String(Date.now()));
+  setup(true);
+  await screen.findByRole("heading", { name: "Splash Screen" });
+  expect(notify).toHaveBeenCalledWith("success", "Signed in successfully", expect.any(String));
+  expect(sessionStorage.getItem("google-sign-in-started")).toBeNull();
+  fireEvent.focus(window);
+  await act(async () => {});
+  expect(notify).toHaveBeenCalledTimes(1);
+});
 
 function setup(initiallySignedIn = false, initialPath = "/", stallSession = false) {
   let signedIn = initiallySignedIn;

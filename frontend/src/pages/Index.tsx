@@ -1,3 +1,5 @@
+import { notify, notificationText as nt } from "@/lib/notify";
+import LanguageSwitcher, { type Language } from "@/components/LanguageSwitcher";
 import { withDefaultWallHeight } from "@/lib/wallMetrics";
 import { rehostOpening, type OpeningKind } from "@/lib/openingModel";
 import { setRoomWallHeight } from "@/lib/roomWallHeight";
@@ -28,6 +30,14 @@ import type { DetectedWallSegment, DetectedDoor, DetectedWindow } from "@/types/
 import type { Room, FloorPlanData, AppMode, DimensionUnit } from "@/types/floorplan";
 
 const Index = () => {
+  const [language, setLanguage] = useState<Language>(() => {
+    try { return (localStorage.getItem("app-language") ?? localStorage.getItem("login-language")) === "th" ? "th" : "en"; }
+    catch { return "en"; }
+  });
+  const changeLanguage = (next: Language) => {
+    setLanguage(next);
+    try { localStorage.setItem("app-language", next); } catch { /* Optional preference. */ }
+  };
   const { theme, setTheme } = useTheme();
   const [mounted, setMounted]           = useState(false);
   const [showSplash, setShowSplash]   = useState(true);
@@ -158,6 +168,7 @@ const Index = () => {
       setGenerated(false);
     } catch (err: unknown) {
       setDetectError(err instanceof Error ? err.message : String(err));
+      notify("destructive", nt("Could not process this plan", "วิเคราะห์แปลนไม่สำเร็จ"), nt("Check the file and your connection, then try again.", "กรุณาตรวจสอบไฟล์และการเชื่อมต่อ แล้วลองอีกครั้ง"));
     } finally {
       setDetecting(false);
     }
@@ -356,7 +367,8 @@ const Index = () => {
                 </button>
               </h1>
             </div>
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2">
+            <LanguageSwitcher language={language} onChange={changeLanguage} />
             
             {/* Temporarily hidden: Furniture Layout action. Implementation stays intact in FurniturePlanner + placingFurniture below.
             {!showStart && workflow === "upload" && detected && <button disabled={detecting} className="rounded-xl border px-3 py-2 text-xs hover:bg-accent disabled:opacity-50" onClick={() => { dispatch({ type: "cancel" }); setGenerated(false); setPlacingFurniture(value => !value); }}>{placingFurniture ? "กลับไปตรวจแปลน" : "จัดวางเฟอร์นิเจอร์"}</button>} */}
@@ -374,7 +386,7 @@ const Index = () => {
           </div>
         </header>
 
-        {showStart ? <StartScreen onChoose={chooseWorkflow} onImport={project => {
+        {showStart ? <StartScreen language={language} onChoose={chooseWorkflow} onImport={project => {
           if (workflow && (imageUrl || rooms.length || walls.length) && !window.confirm("เปิดโปรเจกต์นี้แทนงานปัจจุบัน? กรุณาบันทึกงานเดิมก่อน")) return;
           handleProjectImport(project);
         }} /> : <div className="flex-1 flex min-h-0">
