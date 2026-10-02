@@ -1,4 +1,4 @@
-﻿.login-page {
+.login-page {
   position: relative;
   isolation: isolate;
   display: flex;
@@ -134,9 +134,16 @@
   .login-submit:hover:not(:disabled) .login-submit-arrow { opacity: 1; transform: translateX(0); }
   .login-glass .login-google:hover:not(:disabled) { transform: translateY(-2px); }
 }
-.login-glass .login-submit:active:not(:disabled) {
+.login-glass .login-submit:is(:active, [data-pressed="true"]):not(:disabled) {
   transform: translateY(0) scale(.985);
   box-shadow: 0 2px 6px #202b3c20, inset 0 2px 4px #11182733;
+}
+@media (hover: none), (pointer: coarse) {
+  .login-glass .login-submit { touch-action: manipulation; -webkit-tap-highlight-color: transparent; }
+  .login-submit:is(:active, [data-pressed="true"]):not(:disabled)::after { opacity: 1; transition-duration: 80ms; }
+  .login-glass .login-submit:is(:active, [data-pressed="true"]):not(:disabled) {
+    box-shadow: 0 4px 18px #5365df40, inset 0 1px 1px #ffffff66;
+  }
 }
 .login-submit:focus-visible .login-submit-arrow { opacity: 1; transform: translateX(0); }
 @keyframes login-shine {
