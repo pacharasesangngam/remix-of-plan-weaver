@@ -1,10 +1,12 @@
+import { notify, notificationText as nt } from "@/lib/notify";
+import LanguageSwitcher, { type Language } from "@/components/LanguageSwitcher";
 import { withDefaultWallHeight } from "@/lib/wallMetrics";
 import { rehostOpening, type OpeningKind } from "@/lib/openingModel";
 import { setRoomWallHeight } from "@/lib/roomWallHeight";
 import { isCalibrationDimension, preservesConfirmedDimensions, rebindConfirmedDimensions, type ConfirmedDimension } from "@/lib/confirmedDimensions";
 import { proposeWallBody, proposeWallEndpoint, proposeWallLength, type LengthRequest, type GeometrySnapshot } from "@/lib/wallLengthEdit";
 import { useState, useCallback, useEffect, useReducer, useMemo } from "react";
-import { ChevronLeft, Download, Loader2, Moon, Sun } from "lucide-react";
+import { ChevronLeft, Loader2, Moon, Sun } from "lucide-react";
 import { useTheme } from "next-themes";
 import Sidebar from "@/components/Sidebar";
 import RightPanel from "@/components/RightPanel";
@@ -28,6 +30,14 @@ import type { DetectedWallSegment, DetectedDoor, DetectedWindow } from "@/types/
 import type { Room, FloorPlanData, AppMode, DimensionUnit } from "@/types/floorplan";
 
 const Index = () => {
+  const [language, setLanguage] = useState<Language>(() => {
+    try { return (localStorage.getItem("app-language") ?? localStorage.getItem("login-language")) === "th" ? "th" : "en"; }
+    catch { return "en"; }
+  });
+  const changeLanguage = (next: Language) => {
+    setLanguage(next);
+    try { localStorage.setItem("app-language", next); } catch { /* Optional preference. */ }
+  };
   const { theme, setTheme } = useTheme();
   const [mounted, setMounted]           = useState(false);
   const [showSplash, setShowSplash]   = useState(true);
@@ -158,6 +168,7 @@ const Index = () => {
       setGenerated(false);
     } catch (err: unknown) {
       setDetectError(err instanceof Error ? err.message : String(err));
+      notify("destructive", nt("Could not process this plan", "วิเคราะห์แปลนไม่สำเร็จ"), nt("Check the file and your connection, then try again.", "กรุณาตรวจสอบไฟล์และการเชื่อมต่อ แล้วลองอีกครั้ง"));
     } finally {
       setDetecting(false);
     }
@@ -336,9 +347,9 @@ const Index = () => {
   return (
     <ProjectActionContext.Provider value={actions}><ProjectInputActions>
       {showSplash && <SplashScreen onComplete={() => setShowSplash(false)} />}
-      <div className="flex h-[100dvh] flex-col overflow-hidden bg-background">
-        <header className="relative z-30 shrink-0 border-b border-border/60 bg-background/75 shadow-sm backdrop-blur-2xl supports-[backdrop-filter]:bg-background/60">
-          <div className="flex flex-wrap items-center justify-between gap-3 px-4 pb-3 pt-[calc(env(safe-area-inset-top)+0.75rem)] md:px-6">
+      <div className="h-screen flex flex-col bg-background overflow-hidden">
+        <header className="shrink-0 border-b border-border bg-card/50 backdrop-blur-sm">
+          <div className="px-4 py-3 flex flex-wrap gap-3 items-center justify-between">
             <div className="flex items-center gap-3">
               {generated && !showStart && (
                 <button
@@ -346,7 +357,7 @@ const Index = () => {
                   className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors group mr-1"
                 >
                   <ChevronLeft className="w-3.5 h-3.5 group-hover:-translate-x-0.5 transition-transform" />
-                  {workflow === "draw" ? "กลับไปวาด 2D" : "Back to Review"}
+                  {workflow === "draw" ? "Back to Review" : "Back to Review"}
                 </button>
               )}
               <h1 className="text-sm font-semibold text-foreground tracking-tight font-sans">
@@ -356,25 +367,26 @@ const Index = () => {
                 </button>
               </h1>
             </div>
-            <div className="flex items-center gap-1.5 rounded-full border border-border/60 bg-background/55 p-1 shadow-sm backdrop-blur-xl sm:gap-2">
+            <div className="flex flex-wrap items-center gap-2">
+            <LanguageSwitcher language={language} onChange={changeLanguage} />
             
             {/* Temporarily hidden: Furniture Layout action. Implementation stays intact in FurniturePlanner + placingFurniture below.
             {!showStart && workflow === "upload" && detected && <button disabled={detecting} className="rounded-xl border px-3 py-2 text-xs hover:bg-accent disabled:opacity-50" onClick={() => { dispatch({ type: "cancel" }); setGenerated(false); setPlacingFurniture(value => !value); }}>{placingFurniture ? "กลับไปตรวจแปลน" : "จัดวางเฟอร์นิเจอร์"}</button>} */}
-            {!showStart && !detecting && (detected || workflow === "draw") && <button aria-label="Download Project" title="Download Project" className="inline-flex h-9 items-center gap-2 rounded-full px-3 text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-foreground" onClick={() => downloadProjectJson(projectData)}><Download className="h-4 w-4 sm:hidden" /><span className="hidden sm:inline">Download Project</span></button>}
+            {!showStart && !detecting && (detected || workflow === "draw") && <button className="rounded-xl border px-3 py-2 text-xs hover:bg-accent" onClick={() => downloadProjectJson(projectData)}>Download Project</button>}
             <button
               onClick={() => setTheme(theme === "dark" ? "light" : "dark")}
-              className="inline-flex h-9 items-center gap-2 rounded-full px-3 text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+              className="inline-flex items-center gap-2 rounded-xl border border-border bg-card px-3 py-2 text-xs text-muted-foreground transition-colors hover:text-foreground"
               aria-label="Toggle theme"
             >
-              {mounted && theme === "dark" ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
-              <span className="hidden sm:inline">{mounted && theme === "dark" ? "Light" : "Dark"}</span>
+              {mounted && theme === "dark" ? <Sun className="w-3.5 h-3.5" /> : <Moon className="w-3.5 h-3.5" />}
+              {mounted && theme === "dark" ? "Light" : "Dark"}
             </button>
             <LogoutButton />
             </div>
           </div>
         </header>
 
-        {showStart ? <StartScreen onChoose={chooseWorkflow} onImport={project => {
+        {showStart ? <StartScreen language={language} onChoose={chooseWorkflow} onImport={project => {
           if (workflow && (imageUrl || rooms.length || walls.length) && !window.confirm("เปิดโปรเจกต์นี้แทนงานปัจจุบัน? กรุณาบันทึกงานเดิมก่อน")) return;
           handleProjectImport(project);
         }} /> : <div className="flex-1 flex min-h-0">
