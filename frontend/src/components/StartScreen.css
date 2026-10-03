@@ -4,7 +4,7 @@
     radial-gradient(ellipse at 88% 80%, hsl(258 80% 76% / .48), transparent 58%),
     radial-gradient(ellipse at 95% 5%, hsl(20 90% 84% / .5), transparent 48%),
     hsl(var(--background));
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-family: "Prompt", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
 }
 .start-eyebrow {
   display: inline-flex; align-items: center; gap: 8px;
@@ -39,13 +39,6 @@
 .start-paper { fill: hsl(var(--card) / .22); stroke: hsl(0 0% 100% / .7); }
 .start-plan-sheet { transform-origin: center; transform: rotate(-5deg); transition: transform 600ms cubic-bezier(.22,1,.36,1); }
 .start-preview-draw .start-plan-sheet { transform: rotate(4deg); }
-.start-preview-badge {
-  position: absolute; right: 10px; bottom: 6px; display: inline-flex; align-items: center; gap: 6px;
-  border: 1px solid hsl(var(--card) / .9); border-radius: 10px; padding: 7px 10px;
-  background: hsl(var(--card) / .28); backdrop-filter: blur(10px); box-shadow: 0 4px 14px hsl(var(--choice-color) / .07);
-  font-size: 10px; font-weight: 500;
-}
-.start-preview-badge svg { width: 14px; height: 14px; }
 .start-tag { font-size: 11px; line-height: 1.6; color: hsl(var(--muted-foreground)); }
 .start-choice-arrow { display: grid; place-items: center; width: 38px; height: 38px; border-radius: 50%; background: hsl(var(--card) / .75); color: hsl(var(--choice-color)); transition: background 300ms, transform 300ms; flex-shrink: 0; }
 .start-import { border-radius: 24px; }
@@ -67,7 +60,6 @@
 .dark .start-choice[data-mode="draw"] { --choice-color: 260 80% 78%; }
 @media (max-width: 767px) {
   .start-preview svg { height: 125px; }
-  .start-preview-badge svg { height: 14px; }
   .start-preview { margin-bottom: 14px; }
 }
 @media (prefers-reduced-motion: reduce) {

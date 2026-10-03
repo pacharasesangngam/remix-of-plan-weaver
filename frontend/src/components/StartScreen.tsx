@@ -1,12 +1,12 @@
 import { notify } from "@/lib/notify";
-import { ArrowRight, Box, FolderOpen, Pencil, Sparkles, Upload } from "lucide-react";
+import { ArrowRight, Box, FolderOpen, Pencil, Upload } from "lucide-react";
 import { useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { parseFloorPlanProject, type FloorPlanProject } from "@/lib/projectIO";
 import "./StartScreen.css";
 import { type Language } from "./LanguageSwitcher";
 
-function PlanPreview({ drawing, language }: { drawing: boolean; language: Language }) {
+function PlanPreview({ drawing }: { drawing: boolean }) {
   return <span className={`start-preview ${drawing ? "start-preview-draw" : "start-preview-upload"}`} aria-hidden="true">
     <svg viewBox="0 0 360 180" fill="none">
       <g className="start-plan-sheet">
@@ -19,7 +19,6 @@ function PlanPreview({ drawing, language }: { drawing: boolean; language: Langua
         {drawing ? <g><path d="M104 28H256 M104 24V32 M256 24V32" stroke="currentColor" strokeOpacity=".5" /><path d="M256 100V140H194" stroke="currentColor" strokeWidth="3" strokeDasharray="5 5" /><circle cx="256" cy="140" r="5" fill="currentColor" stroke="white" strokeWidth="2" /></g> : <path className="start-scan" d="M94 82H266" stroke="currentColor" strokeWidth="2" strokeOpacity=".5" />}
       </g>
     </svg>
-    <span className="start-preview-badge">{drawing ? <Pencil size={14} /> : <Sparkles size={14} />}{drawing ? (language === "th" ? "ออกแบบด้วยตัวคุณ" : "Made by you") : (language === "th" ? "ให้ AI ช่วยออกแบบ" : "Powered by AI")}</span>
   </span>;
 }
 
@@ -42,7 +41,7 @@ export default function StartScreen({ onChoose, onImport, language = "en" }: { l
           <button key={mode} type="button" onClick={() => onChoose(mode)}
             className="start-choice group" data-mode={mode}>
             <span className="flex items-center justify-between px-6 pt-6 sm:px-7"><span className="start-choice-icon"><Icon size={21} strokeWidth={1.7} aria-hidden="true" /></span><span className="text-xs font-medium text-muted-foreground">{mode === "upload" ? t("FROM A FLOOR PLAN", "เริ่มจากแปลนที่มี") : t("FROM A BLANK CANVAS", "ออกแบบด้วยตัวเอง")}</span></span>
-            <PlanPreview drawing={mode === "draw"} language={language} />
+            <PlanPreview drawing={mode === "draw"} />
             <span className="block min-w-0 px-6 pb-6 sm:px-7 sm:pb-7">
               <span className="block text-xl font-semibold tracking-tight">{title}</span>
               <span className="mt-2 block min-h-12 text-sm leading-6 text-muted-foreground">{detail}</span>

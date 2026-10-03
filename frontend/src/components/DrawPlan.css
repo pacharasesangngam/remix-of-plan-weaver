@@ -1,6 +1,6 @@
 .draw-workspace {
   background: hsl(var(--secondary));
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-family: "Prompt", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
 }
 
 .draw-inspector {

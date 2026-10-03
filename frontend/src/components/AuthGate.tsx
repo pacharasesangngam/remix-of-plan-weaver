@@ -181,7 +181,7 @@ function Login() {
     </header>
     <div className="login-content">
       <section className="login-glass" aria-labelledby="login-title">
-        <div className="mb-8 text-center"><div className="login-app-icon"><PencilRuler className="h-8 w-8" strokeWidth={1.6} /></div><p className="mb-2 mt-6 text-xs font-semibold uppercase tracking-[0.18em] text-blue-700">Your creative space</p><h1 id="login-title" className="text-[32px] font-semibold tracking-tight">Sign in</h1><p className="mt-3 text-sm leading-6 text-slate-600">Welcome back to Sketch to Spec.<br />Bring your next great idea to life.</p></div>
+        <div className="mb-8 text-center"><div className="login-app-icon"><PencilRuler className="h-8 w-8" strokeWidth={1.6} /></div><h1 id="login-title" className="text-[32px] font-semibold tracking-tight">Sign in</h1></div>
       {auth.session?.internalEnabled && <form className="space-y-5" onSubmit={async e => {
         e.preventDefault(); setBusy(true); setError(""); lastReportedError.current = "";
         try { await auth.login(username, password); } catch (error) { setError(error instanceof TypeError ? "Unable to reach the sign-in service. Please retry." : error instanceof Error ? error.message : "Unable to sign in."); }
