@@ -84,7 +84,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       } catch { /* OAuth still works without optional feedback storage. */ }
       if (next.user && (pendingLoginNotice.current || googleCompleted)) {
         pendingLoginNotice.current = false;
-        notify("success", nt("Signed in successfully", "เข้าสู่ระบบสำเร็จ"), nt("Welcome back. Your workspace is ready.", "ยินดีต้อนรับกลับ พร้อมเริ่มออกแบบแล้ว"));
+        notify("success", nt("Signed in successfully", "เข้าสู่ระบบสำเร็จ"), nt("Your workspace is ready.", "ยินดีต้อนรับกลับ พร้อมเริ่มออกแบบแล้ว"));
       }
       if (!next.user) pendingLoginNotice.current = false;
       if (!next.user) queries.clear();

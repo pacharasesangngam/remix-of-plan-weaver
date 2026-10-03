@@ -28,7 +28,6 @@ export default function StartScreen({ onChoose, onImport, language = "en" }: { l
   const t = (en: string, th: string) => language === "th" ? th : en;
   return <main lang={language} className="start-workspace min-h-0 flex-1 overflow-y-auto px-5 py-6 sm:px-8 sm:py-8">
     <div className="relative mx-auto w-full max-w-[960px]">
-      <div className="mb-5 flex items-center justify-center gap-4"><span className="start-eyebrow"><Box size={14} strokeWidth={1.6} aria-hidden="true" />{t("YOUR WORKSPACE", "พื้นที่ทำงานของคุณ")}</span></div>
       <div className="mb-8 text-center sm:mb-10">
         <h2 className="mt-5 text-3xl font-semibold tracking-tight sm:text-[42px] sm:leading-tight">{t("Start a new project", "เริ่มต้นโปรเจกต์ใหม่")}</h2>
         <p className="mx-auto mt-3 max-w-md text-sm leading-6 text-muted-foreground sm:text-base">{t("Every great space starts with an idea.", "ทุกพื้นที่ดี ๆ เริ่มต้นจากไอเดียของคุณ")}<br />{t("Choose how you’d like to bring yours to life.", "เลือกวิธีที่ใช่ แล้วเริ่มออกแบบไปด้วยกัน")}</p>
